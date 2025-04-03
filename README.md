@@ -10,3 +10,7 @@ Coffee Code is a code editor written in C using SDL (Actually in progress...)
 -> 3.- Create a new folder and put the `x86_64-w64-mingw32` folder in the new folder 
 
 -> 4.- Run this with Mingw32: `mingw32-make`
+
+### At the moment you run the code:
+
+- Its to important you have `SDL3.dll`file in the same folder as the .exe.
