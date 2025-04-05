@@ -7,4 +7,4 @@ CFLAGS = -I C:/SDL3/include -L C:/SDL3/lib -lSDL3
 
 MAIN:
 	$(CC) main.c -o $(TARGET) $(CFLAGS)
-	@echo "Build complete."
+	@echo Build complete.
