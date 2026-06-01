@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ide C)
+project(CoffeeCode C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -73,20 +73,20 @@ endif()
 # ── Executable ───────────────────────────────────────────────────────────────
 file(GLOB SOURCES "src/*.c")
 
-add_executable(ide ${SOURCES})
+add_executable(CoffeeCode ${SOURCES})
 
 # SDL3_ttf creates SDL3_ttf::SDL3_ttf (alias to whichever variant was built)
-target_link_libraries(ide PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
+target_link_libraries(CoffeeCode PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
 
 # ── Platform ─────────────────────────────────────────────────────────────────
 if(WIN32)
-    set_target_properties(ide PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_options(ide PRIVATE /ENTRY:mainCRTStartup)
-    target_link_libraries(ide PRIVATE winmm imm32 version setupapi)
+    set_target_properties(CoffeeCode PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(CoffeeCode PRIVATE /ENTRY:mainCRTStartup)
+    target_link_libraries(CoffeeCode PRIVATE winmm imm32 version setupapi)
 endif()
 
 if(UNIX AND NOT APPLE)
-    target_link_libraries(ide PRIVATE m dl pthread)
+    target_link_libraries(CoffeeCode PRIVATE m dl pthread)
 endif()
 
 # ── Fuente embebida en el binario (font_data.h generado en configure time) ──
@@ -94,8 +94,8 @@ endif()
 
 # ── Compile flags ────────────────────────────────────────────────────────────
 if(MSVC)
-    target_compile_options(ide PRIVATE /W3 /utf-8)
-    target_compile_definitions(ide PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(CoffeeCode PRIVATE /W3 /utf-8)
+    target_compile_definitions(CoffeeCode PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(ide PRIVATE -Wall -Wextra -O2)
+    target_compile_options(CoffeeCode PRIVATE -Wall -Wextra -O2)
 endif()
