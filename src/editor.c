@@ -1,0 +1,163 @@
+#include "editor.h"
+#include "render.h"
+#include "input.h"
+#include <string.h>
+#include <stdio.h>
+
+/* ── editor_pos_from_line_col ───────────────────────────────────────────── */
+size_t editor_pos_from_line_col(Editor *e, int line, int col) {
+    size_t len = buf_length(&e->buf);
+    int cur_line = 0, cur_col = 0;
+    for (size_t i = 0; i <= len; i++) {
+        if (cur_line == line && cur_col == col) return i;
+        if (i == len) break;
+        char c = buf_char_at(&e->buf, i);
+        if (c == '\n') {
+            if (cur_line == line) return i; /* col fuera de rango → fin de línea */
+            cur_line++;
+            cur_col = 0;
+        } else {
+            cur_col++;
+        }
+    }
+    return len;
+}
+
+/* ── editor_sync_cursor ─────────────────────────────────────────────────── */
+void editor_sync_cursor(Editor *e) {
+    size_t pos = buf_cursor_pos(&e->buf);
+    int line, col;
+    buf_line_col(&e->buf, pos, &line, &col);
+    e->cursor_line = line;
+    e->cursor_col  = col;
+}
+
+/* ── editor_ensure_visible ──────────────────────────────────────────────── */
+void editor_ensure_visible(Editor *e) {
+    int vis_lines = (e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT) / LINE_HEIGHT;
+    int vis_cols  = (e->win_w - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
+
+    /* scroll vertical */
+    if (e->cursor_line < e->scroll_line)
+        e->scroll_line = e->cursor_line;
+    if (e->cursor_line >= e->scroll_line + vis_lines)
+        e->scroll_line = e->cursor_line - vis_lines + 1;
+
+    /* scroll horizontal */
+    if (e->cursor_col < e->scroll_col)
+        e->scroll_col = e->cursor_col;
+    if (e->cursor_col >= e->scroll_col + vis_cols)
+        e->scroll_col = e->cursor_col - vis_cols + 1;
+
+    if (e->scroll_line < 0) e->scroll_line = 0;
+    if (e->scroll_col  < 0) e->scroll_col  = 0;
+}
+
+/* ── editor_update_lexer ────────────────────────────────────────────────── */
+void editor_update_lexer(Editor *e, int from_line) {
+    int total = buf_line_count(&e->buf);
+    lexer_cache_resize(&e->lex, total);
+    lexer_cache_dirty(&e->lex, from_line);
+}
+
+/* ── editor_init ────────────────────────────────────────────────────────── */
+int editor_init(Editor *e, const char *filepath) {
+    memset(e, 0, sizeof(*e));
+    e->running      = 1;
+    e->needs_redraw = 1;
+    e->menu_hovered = -1;
+
+    /* SDL */
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return 0;
+    }
+
+    e->win_w = 1200;
+    e->win_h = 800;
+    e->window = SDL_CreateWindow("SDL3 IDE",
+                                  e->win_w, e->win_h,
+                                  SDL_WINDOW_RESIZABLE);
+    if (!e->window) {
+        fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+        return 0;
+    }
+
+    e->renderer = SDL_CreateRenderer(e->window, NULL);
+    if (!e->renderer) {
+        fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
+        return 0;
+    }
+    SDL_SetRenderVSync(e->renderer, 1);
+
+    /* Activa la entrada de texto (SDL3: está desactivada por defecto) */
+    SDL_StartTextInput(e->window);
+
+    /* SDL_ttf */
+    if (!TTF_Init()) {
+        fprintf(stderr, "TTF_Init: %s\n", SDL_GetError());
+        return 0;
+    }
+
+    e->font = TTF_OpenFont("font.ttf", FONT_SIZE);
+    if (!e->font) {
+        fprintf(stderr, "TTF_OpenFont: %s\n", SDL_GetError());
+        fprintf(stderr, "Asegúrate de que font.ttf está junto al ejecutable.\n");
+        return 0;
+    }
+
+    /* Calcular ancho de carácter monoespaciado */
+    {
+        int w = 0, h = 0;
+        TTF_GetStringSize(e->font, "M", 1, &w, &h);
+        e->char_w = w > 0 ? w : FONT_SIZE / 2;
+    }
+
+    /* Buffer */
+    if (!buf_init(&e->buf)) return 0;
+
+    if (filepath && filepath[0]) {
+        strncpy(e->filepath, filepath, sizeof(e->filepath) - 1);
+        buf_load_file(&e->buf, filepath);
+        SDL_SetWindowTitle(e->window, filepath);
+    }
+
+    /* Lexer */
+    int total = buf_line_count(&e->buf);
+    if (!lexer_cache_init(&e->lex, total > 0 ? total : 1)) return 0;
+
+    editor_sync_cursor(e);
+    return 1;
+}
+
+/* ── editor_free ────────────────────────────────────────────────────────── */
+void editor_free(Editor *e) {
+    buf_free(&e->buf);
+    lexer_cache_free(&e->lex);
+    if (e->font)     TTF_CloseFont(e->font);
+    if (e->renderer) SDL_StopTextInput(e->window);
+    if (e->renderer) SDL_DestroyRenderer(e->renderer);
+    if (e->window)   SDL_DestroyWindow(e->window);
+    TTF_Quit();
+    SDL_Quit();
+}
+
+/* ── editor_run ─────────────────────────────────────────────────────────── */
+void editor_run(Editor *e) {
+    SDL_Event ev;
+
+    while (e->running) {
+        /* espera eventos (ahorra CPU) */
+        if (SDL_WaitEventTimeout(&ev, 16)) {
+            input_handle_event(e, &ev);
+            /* vacía la cola de eventos del mismo frame */
+            while (SDL_PollEvent(&ev))
+                input_handle_event(e, &ev);
+        }
+
+        if (e->needs_redraw) {
+            render_frame(e);
+            e->needs_redraw = 0;
+        }
+    }
+}
