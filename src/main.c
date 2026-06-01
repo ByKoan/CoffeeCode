@@ -1,15 +1,14 @@
 #include "editor.h"
 #include <stdio.h>
+#include <stdlib.h>
 
-/* SDL_MAIN_HANDLED debe definirse ANTES de cualquier include de SDL
-   para evitar que SDL3 redefina main() como SDL_main en Windows.
-   Lo ponemos aquí, que es la única unidad que incluye SDL_main.h */
 #ifndef SDL_MAIN_HANDLED
 #define SDL_MAIN_HANDLED
 #endif
 #include <SDL3/SDL_main.h>
 
-/* Log a fichero para diagnosticar fallos silenciosos en WIN32_EXECUTABLE */
+/* ── Log a fichero: solo activo en builds Debug ─────────────────────────── */
+#ifdef _DEBUG
 static FILE *g_log = NULL;
 static void log_init(void) {
     g_log = fopen("coffeecode_log.txt", "w");
@@ -17,9 +16,13 @@ static void log_init(void) {
 }
 static void log_msg(const char *msg) {
     if (g_log) { fprintf(g_log, "%s\n", msg); fflush(g_log); }
-    fprintf(stderr, "%s\n", msg);
 }
-static void log_close(void) { if (g_log) fclose(g_log); }
+static void log_close(void) { if (g_log) { fclose(g_log); g_log = NULL; } }
+#else
+static void log_init(void)            {}
+static void log_msg(const char *msg)  { (void)msg; }
+static void log_close(void)           {}
+#endif
 
 int main(int argc, char *argv[]) {
     log_init();

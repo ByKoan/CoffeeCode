@@ -66,6 +66,8 @@ target_link_libraries(ide PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
 
 # ── Platform ─────────────────────────────────────────────────────────────────
 if(WIN32)
+    set_target_properties(ide PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(ide PRIVATE /ENTRY:mainCRTStartup)
     target_link_libraries(ide PRIVATE winmm imm32 version setupapi)
 endif()
 

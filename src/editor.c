@@ -69,7 +69,9 @@ int editor_init(Editor *e, const char *filepath) {
     e->menu_hovered = -1;
 
     /* SDL */
+#ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_Init\n");
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 0;
@@ -77,7 +79,9 @@ int editor_init(Editor *e, const char *filepath) {
 
     e->win_w = 1200;
     e->win_h = 800;
+#ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_CreateWindow\n");
+#endif
     e->window = SDL_CreateWindow("SDL3 IDE",
                                   e->win_w, e->win_h,
                                   SDL_WINDOW_RESIZABLE);
@@ -86,7 +90,9 @@ int editor_init(Editor *e, const char *filepath) {
         return 0;
     }
 
+#ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_CreateRenderer\n");
+#endif
     e->renderer = SDL_CreateRenderer(e->window, NULL);
     if (!e->renderer) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
@@ -98,13 +104,17 @@ int editor_init(Editor *e, const char *filepath) {
     SDL_StartTextInput(e->window);
 
     /* SDL_ttf */
+#ifdef _DEBUG
     fprintf(stderr, "STEP: TTF_Init\n");
+#endif
     if (!TTF_Init()) {
         fprintf(stderr, "TTF_Init: %s\n", SDL_GetError());
         return 0;
     }
 
+#ifdef _DEBUG
     fprintf(stderr, "STEP: TTF_OpenFont\n");
+#endif
     e->font = TTF_OpenFont("font.ttf", FONT_SIZE);
     if (!e->font) {
         fprintf(stderr, "TTF_OpenFont: %s\n", SDL_GetError());
@@ -119,7 +129,9 @@ int editor_init(Editor *e, const char *filepath) {
         e->char_w = w > 0 ? w : FONT_SIZE / 2;
     }
 
+#ifdef _DEBUG
     fprintf(stderr, "STEP: buf_init\n");
+#endif
     /* Buffer */
     if (!buf_init(&e->buf)) return 0;
 
@@ -132,13 +144,17 @@ int editor_init(Editor *e, const char *filepath) {
         SDL_SetWindowTitle(e->window, filepath);
     }
 
+#ifdef _DEBUG
     fprintf(stderr, "STEP: lexer_cache_init\n");
+#endif
     /* Lexer */
     int total = buf_line_count(&e->buf);
     if (!lexer_cache_init(&e->lex, total > 0 ? total : 1)) return 0;
 
     editor_sync_cursor(e);
+#ifdef _DEBUG
     fprintf(stderr, "STEP: editor_init OK\n");
+#endif
     return 1;
 }
 
