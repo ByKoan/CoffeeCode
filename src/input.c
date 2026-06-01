@@ -227,7 +227,7 @@ static void new_file(Editor *e) {
     int total = buf_line_count(&e->buf);
     lexer_cache_free(&e->lex);
     lexer_cache_init(&e->lex, total > 0 ? total : 1);
-    SDL_SetWindowTitle(e->window, "SDL3 IDE");
+    SDL_SetWindowTitle(e->window, "CoffeeCode");
     e->needs_redraw = 1;
 }
 

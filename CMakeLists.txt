@@ -56,6 +56,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(SDL3_ttf)
 
+# ── Generar font_data.h embebiendo assets/font.ttf ───────────────────────────
+set(FONT_TTF "${CMAKE_SOURCE_DIR}/assets/font.ttf")
+set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/src/font_data.h")
+
+if(NOT EXISTS "${FONT_DATA_H}")
+    message(STATUS "Generando font_data.h desde font.ttf...")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            -DFONT_TTF=${FONT_TTF}
+            -DFONT_DATA_H=${FONT_DATA_H}
+            -P "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
+    )
+endif()
+
 # ── Executable ───────────────────────────────────────────────────────────────
 file(GLOB SOURCES "src/*.c")
 
@@ -75,13 +89,8 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(ide PRIVATE m dl pthread)
 endif()
 
-# ── Copy font next to executable ─────────────────────────────────────────────
-add_custom_command(TARGET ide POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/assets/font.ttf"
-        "$<TARGET_FILE_DIR:ide>/font.ttf"
-    COMMENT "Copiando font.ttf..."
-)
+# ── Fuente embebida en el binario (font_data.h generado en configure time) ──
+# No se necesita copiar font.ttf junto al ejecutable.
 
 # ── Compile flags ────────────────────────────────────────────────────────────
 if(MSVC)

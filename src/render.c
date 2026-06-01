@@ -497,7 +497,7 @@ void render_frame(Editor *e) {
         SDL_RenderFillRect(r, &sb);
 
         char status[256];
-        snprintf(status, sizeof(status), "  %s%s  |  Ln %d, Col %d  |  SDL3 IDE",
+        snprintf(status, sizeof(status), "  %s%s  |  Ln %d, Col %d  |  CoffeeCode",
                  e->filepath[0] ? e->filepath : "sin título",
                  e->modified ? " *" : "",
                  e->cursor_line + 1, e->cursor_col + 1);

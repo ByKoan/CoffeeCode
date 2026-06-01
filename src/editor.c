@@ -1,6 +1,7 @@
 #include "editor.h"
 #include "render.h"
 #include "input.h"
+#include "font_data.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -82,7 +83,7 @@ int editor_init(Editor *e, const char *filepath) {
 #ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_CreateWindow\n");
 #endif
-    e->window = SDL_CreateWindow("SDL3 IDE",
+    e->window = SDL_CreateWindow("CoffeeCode",
                                   e->win_w, e->win_h,
                                   SDL_WINDOW_RESIZABLE);
     if (!e->window) {
@@ -115,11 +116,17 @@ int editor_init(Editor *e, const char *filepath) {
 #ifdef _DEBUG
     fprintf(stderr, "STEP: TTF_OpenFont\n");
 #endif
-    e->font = TTF_OpenFont("font.ttf", FONT_SIZE);
-    if (!e->font) {
-        fprintf(stderr, "TTF_OpenFont: %s\n", SDL_GetError());
-        fprintf(stderr, "Asegúrate de que font.ttf está junto al ejecutable.\n");
-        return 0;
+    {
+        SDL_IOStream *io = SDL_IOFromConstMem(g_font_data, (Sint64)g_font_size);
+        if (!io) {
+            fprintf(stderr, "SDL_IOFromConstMem: %s\\n", SDL_GetError());
+            return 0;
+        }
+        e->font = TTF_OpenFontIO(io, 1, FONT_SIZE);
+        if (!e->font) {
+            fprintf(stderr, "TTF_OpenFontIO: %s\\n", SDL_GetError());
+            return 0;
+        }
     }
 
     /* Calcular ancho de carácter monoespaciado */
