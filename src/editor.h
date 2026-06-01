@@ -1,6 +1,14 @@
 #pragma once
+
+/* Debe definirse antes de cualquier include de SDL para que SDL3
+   no redefina main() en Windows */
+#ifndef SDL_MAIN_HANDLED
+#define SDL_MAIN_HANDLED
+#endif
+
 #include "buffer.h"
 #include "lexer.h"
+#include "filetree.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
@@ -44,6 +52,9 @@ typedef struct {
     /* navbar / menú archivo */
     int           menu_open;     /* 1 = desplegable visible */
     int           menu_hovered;  /* índice del item bajo el cursor, -1 = ninguno */
+
+    /* explorador de carpetas lateral */
+    FileTree      ftree;
 
     /* estado */
     int           running;

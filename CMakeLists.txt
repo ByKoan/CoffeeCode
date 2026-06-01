@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ide C)
+project(CoffeeCode C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -56,40 +56,46 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(SDL3_ttf)
 
+# ── Generar font_data.h embebiendo assets/font.ttf ───────────────────────────
+set(FONT_TTF "${CMAKE_SOURCE_DIR}/assets/font.ttf")
+set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/src/font_data.h")
+
+if(NOT EXISTS "${FONT_DATA_H}")
+    message(STATUS "Generando font_data.h desde font.ttf...")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            -DFONT_TTF=${FONT_TTF}
+            -DFONT_DATA_H=${FONT_DATA_H}
+            -P "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
+    )
+endif()
+
 # ── Executable ───────────────────────────────────────────────────────────────
 file(GLOB SOURCES "src/*.c")
 
-add_executable(ide ${SOURCES})
+add_executable(CoffeeCode ${SOURCES})
 
 # SDL3_ttf creates SDL3_ttf::SDL3_ttf (alias to whichever variant was built)
-target_link_libraries(ide PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
+target_link_libraries(CoffeeCode PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
 
 # ── Platform ─────────────────────────────────────────────────────────────────
 if(WIN32)
-    # WIN32_EXECUTABLE suppresses the console window (uses SUBSYSTEM:WINDOWS).
-    # With SDL_MAIN_HANDLED our entry point is plain main(), not WinMain(), so
-    # we must tell the linker explicitly — otherwise it looks for WinMain and fails.
-    set_target_properties(ide PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_options(ide PRIVATE /ENTRY:mainCRTStartup)
-    target_link_libraries(ide PRIVATE winmm imm32 version setupapi)
+    set_target_properties(CoffeeCode PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(CoffeeCode PRIVATE /ENTRY:mainCRTStartup)
+    target_link_libraries(CoffeeCode PRIVATE winmm imm32 version setupapi)
 endif()
 
 if(UNIX AND NOT APPLE)
-    target_link_libraries(ide PRIVATE m dl pthread)
+    target_link_libraries(CoffeeCode PRIVATE m dl pthread)
 endif()
 
-# ── Copy font next to executable ─────────────────────────────────────────────
-add_custom_command(TARGET ide POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/assets/font.ttf"
-        "$<TARGET_FILE_DIR:ide>/font.ttf"
-    COMMENT "Copiando font.ttf..."
-)
+# ── Fuente embebida en el binario (font_data.h generado en configure time) ──
+# No se necesita copiar font.ttf junto al ejecutable.
 
 # ── Compile flags ────────────────────────────────────────────────────────────
 if(MSVC)
-    target_compile_options(ide PRIVATE /W3 /utf-8)
-    target_compile_definitions(ide PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(CoffeeCode PRIVATE /W3 /utf-8)
+    target_compile_definitions(CoffeeCode PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(ide PRIVATE -Wall -Wextra -O2)
+    target_compile_options(CoffeeCode PRIVATE -Wall -Wextra -O2)
 endif()
