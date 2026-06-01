@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <ctype.h>
 
 /* ── Geometría del menú (debe coincidir con render.c) ────────────────────── */
 #define MENU_ITEM_H   26
@@ -114,7 +116,7 @@ static void handle_ftree_hover(Editor *e, int mx, int my) {
     int panel_y  = NAVBAR_HEIGHT;
     int header_h = 26;
     int content_y = panel_y + header_h;
-    if (my < content_y) { 
+    if (my < content_y) {
         if (ft->hovered != -1) { ft->hovered = -1; e->needs_redraw = 1; }
         return;
     }
@@ -146,9 +148,47 @@ static void move_cursor(Editor *e, int line, int col) {
     editor_ensure_visible(e);
     e->needs_redraw = 1;
 }
-static void move_line_up(Editor *e)   { move_cursor(e, e->cursor_line - 1, e->cursor_col); }
-static void move_line_down(Editor *e) { move_cursor(e, e->cursor_line + 1, e->cursor_col); }
-static void move_col_left(Editor *e) {
+
+/* ── NUEVO: move_cursor con selección Shift ──────────────────────────────── */
+static void move_cursor_select(Editor *e, int line, int col, int selecting) {
+    if (selecting) {
+        if (!e->sel_active) {
+            /* ancla en posición actual */
+            e->sel_active      = 1;
+            e->sel_anchor_line = e->cursor_line;
+            e->sel_anchor_col  = e->cursor_col;
+        }
+    } else {
+        editor_sel_clear(e);
+    }
+    move_cursor(e, line, col);
+}
+
+static void move_line_up(Editor *e, int sel)   { move_cursor_select(e, e->cursor_line - 1, e->cursor_col, sel); }
+static void move_line_down(Editor *e, int sel) { move_cursor_select(e, e->cursor_line + 1, e->cursor_col, sel); }
+
+static void move_col_left(Editor *e, int sel) {
+    if (sel) {
+        if (!e->sel_active) {
+            e->sel_active      = 1;
+            e->sel_anchor_line = e->cursor_line;
+            e->sel_anchor_col  = e->cursor_col;
+        }
+    } else {
+        /* si había selección, saltar al inicio de la misma */
+        if (e->sel_active) {
+            size_t from, to;
+            if (editor_sel_range(e, &from, &to)) {
+                editor_sel_clear(e);
+                buf_move_to(&e->buf, from);
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+                e->needs_redraw = 1;
+                return;
+            }
+            editor_sel_clear(e);
+        }
+    }
     if (e->cursor_col > 0) {
         move_cursor(e, e->cursor_line, e->cursor_col - 1);
     } else if (e->cursor_line > 0) {
@@ -158,7 +198,29 @@ static void move_col_left(Editor *e) {
         move_cursor(e, prev, lc);
     }
 }
-static void move_col_right(Editor *e) {
+
+static void move_col_right(Editor *e, int sel) {
+    if (sel) {
+        if (!e->sel_active) {
+            e->sel_active      = 1;
+            e->sel_anchor_line = e->cursor_line;
+            e->sel_anchor_col  = e->cursor_col;
+        }
+    } else {
+        /* si había selección, saltar al final */
+        if (e->sel_active) {
+            size_t from, to;
+            if (editor_sel_range(e, &from, &to)) {
+                editor_sel_clear(e);
+                buf_move_to(&e->buf, to);
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+                e->needs_redraw = 1;
+                return;
+            }
+            editor_sel_clear(e);
+        }
+    }
     size_t pos = buf_cursor_pos(&e->buf);
     size_t len = buf_length(&e->buf);
     if (pos < len) {
@@ -168,14 +230,97 @@ static void move_col_right(Editor *e) {
         e->needs_redraw = 1;
     }
 }
-static void move_home(Editor *e) { move_cursor(e, e->cursor_line, 0); }
-static void move_end(Editor *e) {
+
+static void move_home(Editor *e, int sel) {
+    move_cursor_select(e, e->cursor_line, 0, sel);
+}
+
+static void move_end(Editor *e, int sel) {
     size_t pos = editor_pos_from_line_col(e, e->cursor_line, 0);
     size_t end = buf_line_end(&e->buf, pos);
-    move_cursor(e, e->cursor_line, (int)(end - pos));
+    int col = (int)(end - pos);
+    move_cursor_select(e, e->cursor_line, col, sel);
+}
+
+/* ── NUEVO: salto de palabra (Ctrl+Left / Ctrl+Right) ───────────────────── */
+static void move_word_left(Editor *e, int sel) {
+    if (sel && !e->sel_active) {
+        e->sel_active      = 1;
+        e->sel_anchor_line = e->cursor_line;
+        e->sel_anchor_col  = e->cursor_col;
+    } else if (!sel) {
+        editor_sel_clear(e);
+    }
+    size_t pos = buf_cursor_pos(&e->buf);
+    if (pos == 0) return;
+    pos--;
+    /* salta espacios/no-word */
+    while (pos > 0 && !isalnum((unsigned char)buf_char_at(&e->buf, pos)) &&
+           buf_char_at(&e->buf, pos) != '_')
+        pos--;
+    /* salta la palabra */
+    while (pos > 0 && (isalnum((unsigned char)buf_char_at(&e->buf, pos - 1)) ||
+                       buf_char_at(&e->buf, pos - 1) == '_'))
+        pos--;
+    buf_move_to(&e->buf, pos);
+    editor_sync_cursor(e);
+    editor_ensure_visible(e);
+    e->needs_redraw = 1;
+}
+
+static void move_word_right(Editor *e, int sel) {
+    if (sel && !e->sel_active) {
+        e->sel_active      = 1;
+        e->sel_anchor_line = e->cursor_line;
+        e->sel_anchor_col  = e->cursor_col;
+    } else if (!sel) {
+        editor_sel_clear(e);
+    }
+    size_t pos = buf_cursor_pos(&e->buf);
+    size_t len = buf_length(&e->buf);
+    /* salta la palabra actual */
+    while (pos < len && (isalnum((unsigned char)buf_char_at(&e->buf, pos)) ||
+                         buf_char_at(&e->buf, pos) == '_'))
+        pos++;
+    /* salta espacios/no-word */
+    while (pos < len && !isalnum((unsigned char)buf_char_at(&e->buf, pos)) &&
+           buf_char_at(&e->buf, pos) != '_')
+        pos++;
+    buf_move_to(&e->buf, pos);
+    editor_sync_cursor(e);
+    editor_ensure_visible(e);
+    e->needs_redraw = 1;
+}
+
+/* ── operaciones de edición ─────────────────────────────────────────────── */
+
+/* Borra la selección activa y la registra en undo. Devuelve 1 si borró algo */
+static int delete_selection(Editor *e) {
+    size_t from, to;
+    if (!editor_sel_range(e, &from, &to)) return 0;
+
+    size_t len = to - from;
+    char *tmp = malloc(len + 1);
+    if (tmp) {
+        buf_get_text(&e->buf, from, to, tmp);
+        editor_undo_push_delete(e, from, tmp, len);
+        free(tmp);
+    }
+    buf_delete_range(&e->buf, from, to);
+    buf_move_to(&e->buf, from);
+    editor_sel_clear(e);
+    editor_sync_cursor(e);
+    editor_update_lexer(e, e->cursor_line);
+    editor_ensure_visible(e);
+    e->modified = 1;
+    e->needs_redraw = 1;
+    return 1;
 }
 
 static void insert_newline(Editor *e) {
+    delete_selection(e);
+    size_t pos = buf_cursor_pos(&e->buf);
+    editor_undo_push_insert(e, pos, "\n", 1);
     buf_insert(&e->buf, '\n');
     editor_sync_cursor(e);
     size_t prev_start = editor_pos_from_line_col(e, e->cursor_line - 1, 0);
@@ -192,25 +337,42 @@ static void insert_newline(Editor *e) {
     editor_ensure_visible(e);
     e->modified = 1; e->needs_redraw = 1;
 }
+
 static void insert_tab(Editor *e) {
+    delete_selection(e);
     int spaces = TAB_SIZE - (e->cursor_col % TAB_SIZE);
+    size_t pos = buf_cursor_pos(&e->buf);
+    char tmp[TAB_SIZE + 1];
+    for (int i = 0; i < spaces; i++) tmp[i] = ' ';
+    tmp[spaces] = '\0';
+    editor_undo_push_insert(e, pos, tmp, spaces);
     for (int i = 0; i < spaces; i++) buf_insert(&e->buf, ' ');
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line);
     editor_ensure_visible(e);
     e->modified = 1; e->needs_redraw = 1;
 }
+
 static void do_backspace(Editor *e) {
+    if (e->sel_active) { delete_selection(e); return; }
     if (buf_cursor_pos(&e->buf) == 0) return;
     int prev_line = e->cursor_line;
+    size_t pos = buf_cursor_pos(&e->buf) - 1;
+    char c = buf_char_at(&e->buf, pos);
+    editor_undo_push_delete(e, pos, &c, 1);
     buf_delete_before(&e->buf);
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line < prev_line ? e->cursor_line : prev_line);
     editor_ensure_visible(e);
     e->modified = 1; e->needs_redraw = 1;
 }
+
 static void do_delete(Editor *e) {
+    if (e->sel_active) { delete_selection(e); return; }
     if (buf_cursor_pos(&e->buf) >= buf_length(&e->buf)) return;
+    size_t pos = buf_cursor_pos(&e->buf);
+    char c = buf_char_at(&e->buf, pos);
+    editor_undo_push_delete(e, pos, &c, 1);
     buf_delete_after(&e->buf);
     editor_update_lexer(e, e->cursor_line);
     e->modified = 1; e->needs_redraw = 1;
@@ -227,6 +389,7 @@ static void new_file(Editor *e) {
     int total = buf_line_count(&e->buf);
     lexer_cache_free(&e->lex);
     lexer_cache_init(&e->lex, total > 0 ? total : 1);
+    editor_sel_clear(e);
     SDL_SetWindowTitle(e->window, "CoffeeCode");
     e->needs_redraw = 1;
 }
@@ -250,7 +413,6 @@ static void SDLCALL file_dialog_cb(void *userdata,
     (void)filter;
     Editor *e = (Editor *)userdata;
     if (!filelist || !filelist[0]) {
-        /* cancelado */
         e->needs_redraw = 1;
         return;
     }
@@ -338,7 +500,228 @@ static void handle_text_click(Editor *e, int mx, int my) {
     int col  = e->scroll_col  + vis_col;
     int total = buf_line_count(&e->buf);
     if (line >= total) line = total - 1;
+    editor_sel_clear(e);
     move_cursor(e, line, col);
+}
+
+/* ── NUEVO: Ctrl+A — seleccionar todo ───────────────────────────────────── */
+static void select_all(Editor *e) {
+    e->sel_active      = 1;
+    e->sel_anchor_line = 0;
+    e->sel_anchor_col  = 0;
+    /* mover cursor al final del documento */
+    int last = buf_line_count(&e->buf) - 1;
+    size_t end_pos = buf_length(&e->buf);
+    buf_move_to(&e->buf, end_pos);
+    editor_sync_cursor(e);
+    (void)last;
+    e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Clipboard ────────────────────────────────────────────────────── */
+static void do_copy(Editor *e) {
+    size_t from, to;
+    if (!editor_sel_range(e, &from, &to)) return;
+    size_t len = to - from;
+    char *tmp = malloc(len + 1);
+    if (!tmp) return;
+    buf_get_text(&e->buf, from, to, tmp);
+    tmp[len] = '\0';
+    SDL_SetClipboardText(tmp);
+    free(tmp);
+}
+
+static void do_cut(Editor *e) {
+    do_copy(e);
+    delete_selection(e);
+}
+
+static void do_paste(Editor *e) {
+    if (!SDL_HasClipboardText()) return;
+    char *text = SDL_GetClipboardText();
+    if (!text) return;
+    size_t len = strlen(text);
+    if (len == 0) { SDL_free(text); return; }
+
+    delete_selection(e);  /* borra selección si la hay */
+
+    size_t pos = buf_cursor_pos(&e->buf);
+    editor_undo_push_insert(e, pos, text, len);
+    buf_insert_str(&e->buf, text, len);
+    SDL_free(text);
+    editor_sync_cursor(e);
+    editor_update_lexer(e, e->cursor_line);
+    editor_ensure_visible(e);
+    e->modified = 1; e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Ctrl+D — duplicar línea actual ───────────────────────────────── */
+static void duplicate_line(Editor *e) {
+    /* Obtener texto de la línea actual */
+    size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
+    size_t line_end   = buf_line_end(&e->buf, line_start);
+    size_t len        = line_end - line_start;
+
+    char *tmp = malloc(len + 2);
+    if (!tmp) return;
+    buf_get_text(&e->buf, line_start, line_end, tmp);
+    tmp[len]     = '\n';
+    tmp[len + 1] = '\0';
+
+    /* Insertar al final de la línea */
+    buf_move_to(&e->buf, line_end);
+    editor_undo_push_insert(e, line_end, tmp, len + 1);
+    buf_insert_str(&e->buf, tmp, len + 1);
+    free(tmp);
+
+    editor_sync_cursor(e);
+    editor_update_lexer(e, e->cursor_line);
+    editor_ensure_visible(e);
+    e->modified = 1; e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Ctrl+/ — comentar/descomentar línea ─────────────────────────── */
+static void toggle_line_comment(Editor *e) {
+    /* Detecta el comentario según la extensión del archivo */
+    const char *prefix = "// ";  /* default C/C++/JS */
+    const char *ext    = strrchr(e->filepath, '.');
+    if (ext) {
+        if (strcmp(ext, ".py") == 0 || strcmp(ext, ".sh") == 0 ||
+            strcmp(ext, ".rb") == 0 || strcmp(ext, ".yaml") == 0 ||
+            strcmp(ext, ".yml") == 0 || strcmp(ext, ".toml") == 0)
+            prefix = "# ";
+        else if (strcmp(ext, ".lua") == 0)
+            prefix = "-- ";
+        else if (strcmp(ext, ".sql") == 0)
+            prefix = "-- ";
+    }
+    size_t plen = strlen(prefix);
+
+    size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
+    size_t line_end   = buf_line_end(&e->buf, line_start);
+    size_t line_len   = line_end - line_start;
+
+    char *line_text = malloc(line_len + 1);
+    if (!line_text) return;
+    buf_get_text(&e->buf, line_start, line_end, line_text);
+    line_text[line_len] = '\0';
+
+    /* Omitir espacios iniciales para el check */
+    size_t indent = 0;
+    while (indent < line_len && (line_text[indent] == ' ' || line_text[indent] == '\t'))
+        indent++;
+
+    if (line_len - indent >= plen &&
+        strncmp(line_text + indent, prefix, plen) == 0) {
+        /* ya está comentado → quitar prefijo */
+        size_t del_pos = line_start + indent;
+        editor_undo_push_delete(e, del_pos, prefix, plen);
+        buf_delete_range(&e->buf, del_pos, del_pos + plen);
+        buf_move_to(&e->buf, del_pos);
+    } else {
+        /* sin comentar → añadir prefijo en la posición de sangría */
+        size_t ins_pos = line_start + indent;
+        editor_undo_push_insert(e, ins_pos, prefix, plen);
+        buf_move_to(&e->buf, ins_pos);
+        buf_insert_str(&e->buf, prefix, plen);
+        buf_move_to(&e->buf, ins_pos + plen);
+    }
+    free(line_text);
+
+    editor_sync_cursor(e);
+    editor_update_lexer(e, e->cursor_line);
+    editor_ensure_visible(e);
+    e->modified = 1; e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Ctrl+L — seleccionar línea completa ──────────────────────────── */
+static void select_line(Editor *e) {
+    size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
+    size_t line_end   = buf_line_end(&e->buf, line_start);
+    /* si no es la última línea, incluye el \n */
+    if (line_end < buf_length(&e->buf)) line_end++;
+
+    e->sel_active      = 1;
+    e->sel_anchor_line = e->cursor_line;
+    e->sel_anchor_col  = 0;
+    buf_move_to(&e->buf, line_end);
+    editor_sync_cursor(e);
+    editor_ensure_visible(e);
+    e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Ctrl+G — ir a línea ──────────────────────────────────────────── */
+/* Implementación simple: el número se teclea en la barra find reutilizada.
+   Se activa con un flag especial y se interpreta el texto como número de línea. */
+#define GOTO_MODE_PREFIX "Ir a línea: "
+
+/* ── NUEVO: Ctrl+F — barra de búsqueda ──────────────────────────────────── */
+
+/* Busca hacia adelante desde `start_pos` (exclusivo).
+   Devuelve la posición lógica del match o (size_t)-1 si no encontrado. */
+static size_t find_next(Editor *e, size_t start_pos) {
+    FindBar *f = &e->find;
+    if (f->query_len == 0) return (size_t)-1;
+    size_t len = buf_length(&e->buf);
+    size_t qlen = (size_t)f->query_len;
+    for (size_t i = start_pos; i + qlen <= len; i++) {
+        int match = 1;
+        for (size_t j = 0; j < qlen && match; j++) {
+            char bc = buf_char_at(&e->buf, i + j);
+            char qc = f->query[j];
+            /* búsqueda case-insensitive */
+            if (tolower((unsigned char)bc) != tolower((unsigned char)qc))
+                match = 0;
+        }
+        if (match) return i;
+    }
+    return (size_t)-1;
+}
+
+static void find_jump(Editor *e) {
+    if (e->find.query_len == 0) return;
+    size_t from = buf_cursor_pos(&e->buf) + 1;
+    size_t hit  = find_next(e, from);
+    if (hit == (size_t)-1) {
+        /* wrap around */
+        hit = find_next(e, 0);
+    }
+    if (hit == (size_t)-1) {
+        e->find.result_line = -1;
+        e->needs_redraw = 1;
+        return;
+    }
+    buf_move_to(&e->buf, hit);
+    editor_sync_cursor(e);
+    e->find.result_line = e->cursor_line;
+    e->find.result_col  = e->cursor_col;
+    /* seleccionar el match */
+    e->sel_active       = 1;
+    e->sel_anchor_line  = e->cursor_line;
+    e->sel_anchor_col   = e->cursor_col;
+    buf_move_to(&e->buf, hit + (size_t)e->find.query_len);
+    editor_sync_cursor(e);
+    editor_ensure_visible(e);
+    e->needs_redraw = 1;
+}
+
+static void open_find_bar(Editor *e) {
+    e->find.visible    = 1;
+    e->find.query[0]   = '\0';
+    e->find.query_len  = 0;
+    e->find.result_line = -1;
+    e->needs_redraw = 1;
+}
+
+static void close_find_bar(Editor *e) {
+    e->find.visible = 0;
+    e->needs_redraw = 1;
+}
+
+/* ── NUEVO: Ctrl+B — toggle panel lateral ───────────────────────────────── */
+static void toggle_sidebar(Editor *e) {
+    e->ftree.open = !e->ftree.open;
+    e->needs_redraw = 1;
 }
 
 /* ── dispatcher principal ────────────────────────────────────────────────── */
@@ -346,7 +729,6 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
     SDL_Keymod mods  = SDL_GetModState();
     int ctrl  = (mods & SDL_KMOD_CTRL)  != 0;
     int shift = (mods & SDL_KMOD_SHIFT) != 0;
-    (void)shift;
 
     switch (ev->type) {
 
@@ -362,11 +744,10 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
 
     case SDL_EVENT_MOUSE_WHEEL: {
         float mx2f = 0.0f, my2f = 0.0f;
-        SDL_GetMouseState(&mx2f, &my2f);  /* posición actual del ratón (SDL3: float) */
+        SDL_GetMouseState(&mx2f, &my2f);
         int mx2 = (int)mx2f;
         int left2 = get_left_offset(e);
         if (e->ftree.open && mx2 < left2) {
-            /* scroll en el panel lateral */
             e->ftree.scroll -= (int)(ev->wheel.y * 3);
             if (e->ftree.scroll < 0) e->ftree.scroll = 0;
             e->needs_redraw = 1;
@@ -388,10 +769,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->menu_hovered = menu_item_at(mx, my);
             if (e->menu_hovered != prev) e->needs_redraw = 1;
         }
-        /* Hover sobre el árbol lateral */
         if (e->ftree.open && mx < e->ftree.width && my >= NAVBAR_HEIGHT)
             handle_ftree_hover(e, mx, my);
-        /* Arrastrar borde para redimensionar */
         if (e->ftree.dragging_border) {
             int new_w = e->ftree.drag_start_w + (mx - e->ftree.drag_start_x);
             if (new_w < FTREE_MIN_WIDTH)  new_w = FTREE_MIN_WIDTH;
@@ -407,14 +786,12 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         int my = (int)ev->button.y;
         if (ev->button.button != SDL_BUTTON_LEFT) break;
 
-        /* ── clic en el menú abierto ── */
+        /* clic en el menú abierto */
         if (e->menu_open) {
             int item = menu_item_at(mx, my);
             if (item >= 0) {
                 menu_exec(e, item);
             } else {
-                /* clic fuera del menú → cerrar */
-                /* pero si clic en botón "Archivo" → toggle */
                 int in_btn = (mx >= BTN_FILE_X && mx < BTN_FILE_X + BTN_FILE_W
                               && my >= 0 && my < NAVBAR_HEIGHT);
                 e->menu_open    = in_btn ? 0 : 0;
@@ -424,7 +801,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             break;
         }
 
-        /* ── clic en botón "Archivo" ── */
+        /* clic en botón "Archivo" */
         if (my >= 0 && my < NAVBAR_HEIGHT &&
             mx >= BTN_FILE_X && mx < BTN_FILE_X + BTN_FILE_W) {
             e->menu_open    = 1;
@@ -433,9 +810,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             break;
         }
 
-        /* ── clic fuera de navbar y menú: area de texto o panel lateral ── */
+        /* clic fuera de navbar y menú */
         if (my >= NAVBAR_HEIGHT) {
-            /* cerrar menú si estaba abierto */
             if (e->menu_open) {
                 int menu_y = NAVBAR_HEIGHT;
                 int mh     = menu_total_h();
@@ -445,7 +821,6 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                     e->needs_redraw = 1;
                 }
             }
-            /* Determinar si el clic es en el panel lateral o en el editor */
             int left = get_left_offset(e);
             if (mx < left) {
                 handle_ftree_click(e, mx, my);
@@ -456,8 +831,21 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         break;
     }
 
+    /* ── NUEVO: entrada de texto — va a la barra de búsqueda si está visible */
     case SDL_EVENT_TEXT_INPUT:
-        if (e->menu_open) break;  /* no escribir mientras el menú está abierto */
+        if (e->menu_open) break;
+        if (e->find.visible) {
+            /* añadir caracteres a la query */
+            size_t tlen = strlen(ev->text.text);
+            for (size_t i = 0; i < tlen; i++) {
+                if (e->find.query_len < FIND_BAR_MAX - 1) {
+                    e->find.query[e->find.query_len++] = ev->text.text[i];
+                    e->find.query[e->find.query_len]   = '\0';
+                }
+            }
+            find_jump(e);
+            break;
+        }
         buf_insert_str(&e->buf, ev->text.text, strlen(ev->text.text));
         editor_sync_cursor(e);
         editor_update_lexer(e, e->cursor_line);
@@ -468,49 +856,117 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
     case SDL_EVENT_KEY_DOWN: {
         SDL_Keycode key = ev->key.key;
 
-        /* Escape cierra el menú */
-        if (key == SDLK_ESCAPE && e->menu_open) {
-            e->menu_open = 0; e->menu_hovered = -1; e->needs_redraw = 1;
+        /* Escape cierra barras / menú */
+        if (key == SDLK_ESCAPE) {
+            if (e->find.visible) { close_find_bar(e); break; }
+            if (e->menu_open)    { e->menu_open = 0; e->menu_hovered = -1; e->needs_redraw = 1; break; }
+            editor_sel_clear(e); e->needs_redraw = 1;
             break;
+        }
+
+        /* ── Barra de búsqueda activa: teclas especiales ── */
+        if (e->find.visible) {
+            if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                find_jump(e);
+                break;
+            }
+            if (key == SDLK_BACKSPACE && e->find.query_len > 0) {
+                e->find.query[--e->find.query_len] = '\0';
+                find_jump(e);
+                break;
+            }
+            /* Ctrl+F de nuevo = siguiente resultado */
+            if (ctrl && key == SDLK_F) { find_jump(e); break; }
+            break;  /* resto de teclas ignoradas mientras find está abierto */
         }
 
         if (ctrl) {
             switch (key) {
-            case SDLK_N: new_file(e);         break;
+            /* ── Archivo ── */
+            case SDLK_N: new_file(e);          break;
             case SDLK_O: open_file_dialog(e);  break;
             case SDLK_K: open_folder_dialog(e); break;
             case SDLK_S: save_file(e);         break;
-            case SDLK_Q: e->running = 0;      break;
-            case SDLK_HOME: move_cursor(e, 0, 0); break;
+            case SDLK_Q: e->running = 0;       break;
+
+            /* ── NUEVO: Edición ── */
+            case SDLK_Z: editor_undo(e);       break;
+            case SDLK_Y: editor_redo(e);       break;
+            case SDLK_A: select_all(e);        break;
+            case SDLK_C: do_copy(e);           break;
+            case SDLK_X: do_cut(e);            break;
+            case SDLK_V: do_paste(e);          break;
+            case SDLK_D: duplicate_line(e);    break;
+            case SDLK_SLASH: toggle_line_comment(e); break;
+            case SDLK_L: select_line(e);       break;
+
+            /* ── NUEVO: Navegación ── */
+            case SDLK_F: open_find_bar(e);     break;
+            case SDLK_B: toggle_sidebar(e);    break;
+            case SDLK_HOME: move_cursor_select(e, 0, 0, shift); break;
             case SDLK_END: {
                 int t = buf_line_count(&e->buf) - 1;
-                move_cursor(e, t, 0); move_end(e); break;
+                size_t ep = buf_line_end(&e->buf,
+                    editor_pos_from_line_col(e, t, 0));
+                size_t sp = editor_pos_from_line_col(e, t, 0);
+                move_cursor_select(e, t, (int)(ep - sp), shift);
+                break;
             }
+            /* ── NUEVO: salto de palabra ── */
+            case SDLK_LEFT:  move_word_left(e, shift);  break;
+            case SDLK_RIGHT: move_word_right(e, shift); break;
+            case SDLK_UP:    move_cursor_select(e, e->cursor_line - 5, e->cursor_col, shift); break;
+            case SDLK_DOWN:  move_cursor_select(e, e->cursor_line + 5, e->cursor_col, shift); break;
             default: break;
             }
         } else {
             if (e->menu_open) break;
             switch (key) {
-            case SDLK_UP:        move_line_up(e);    break;
-            case SDLK_DOWN:      move_line_down(e);  break;
-            case SDLK_LEFT:      move_col_left(e);   break;
-            case SDLK_RIGHT:     move_col_right(e);  break;
-            case SDLK_HOME:      move_home(e);       break;
-            case SDLK_END:       move_end(e);        break;
+            case SDLK_UP:        move_line_up(e, shift);   break;
+            case SDLK_DOWN:      move_line_down(e, shift);  break;
+            case SDLK_LEFT:      move_col_left(e, shift);   break;
+            case SDLK_RIGHT:     move_col_right(e, shift);  break;
+            case SDLK_HOME:      move_home(e, shift);       break;
+            case SDLK_END:       move_end(e, shift);        break;
             case SDLK_RETURN:
-            case SDLK_KP_ENTER:  insert_newline(e);  break;
-            case SDLK_TAB:       insert_tab(e);      break;
+            case SDLK_KP_ENTER:  insert_newline(e);         break;
+            case SDLK_TAB:
+                if (shift) {
+                    /* Shift+Tab: quitar sangría */
+                    size_t ls = editor_pos_from_line_col(e, e->cursor_line, 0);
+                    int removed = 0;
+                    for (int i = 0; i < TAB_SIZE; i++) {
+                        if (buf_char_at(&e->buf, ls) == ' ') {
+                            char c = ' ';
+                            editor_undo_push_delete(e, ls, &c, 1);
+                            buf_delete_range(&e->buf, ls, ls + 1);
+                            removed++;
+                        } else break;
+                    }
+                    if (removed) {
+                        buf_move_to(&e->buf, ls);
+                        editor_sync_cursor(e);
+                        editor_update_lexer(e, e->cursor_line);
+                        editor_ensure_visible(e);
+                        e->modified = 1; e->needs_redraw = 1;
+                    }
+                } else {
+                    insert_tab(e);
+                }
+                break;
             case SDLK_BACKSPACE: do_backspace(e);    break;
             case SDLK_DELETE:    do_delete(e);       break;
             case SDLK_PAGEUP: {
                 int text_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
                 int vis = text_h / LINE_HEIGHT;
-                move_cursor(e, e->cursor_line - vis, e->cursor_col); break;
+                move_cursor_select(e, e->cursor_line - vis, e->cursor_col, shift);
+                break;
             }
             case SDLK_PAGEDOWN: {
                 int text_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
                 int vis = text_h / LINE_HEIGHT;
-                move_cursor(e, e->cursor_line + vis, e->cursor_col); break;
+                move_cursor_select(e, e->cursor_line + vis, e->cursor_col, shift);
+                break;
             }
             default: break;
             }

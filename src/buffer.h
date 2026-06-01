@@ -32,6 +32,13 @@ void   buf_insert_str(Buffer *b, const char *s, size_t len);
 void   buf_delete_before(Buffer *b);                 /* backspace            */
 void   buf_delete_after (Buffer *b);                 /* supr                 */
 
+/* ── NUEVO: edición de rangos ───────────────────────────────────────────── */
+/* Elimina el rango lógico [from, to) y deja el cursor en `from`.            */
+void   buf_delete_range(Buffer *b, size_t from, size_t to);
+/* Copia el rango lógico [from, to) en `out` (sin NUL final).
+   Devuelve el número de bytes copiados. `out` debe tener >= (to-from) bytes. */
+size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out);
+
 /* movimiento del cursor (mueve el hueco) */
 void   buf_move_left (Buffer *b);
 void   buf_move_right(Buffer *b);

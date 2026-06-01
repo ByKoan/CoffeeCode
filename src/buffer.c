@@ -101,6 +101,31 @@ void buf_delete_after(Buffer *b) {
     b->gap_end++;
 }
 
+/* ── NUEVO: edición de rangos ───────────────────────────────────────────── */
+
+void buf_delete_range(Buffer *b, size_t from, size_t to) {
+    size_t len = buf_length(b);
+    if (from > len) from = len;
+    if (to   > len) to   = len;
+    if (from >= to) return;
+
+    /* Mover el hueco a `from`, luego extenderlo hasta `to` */
+    move_gap_to(b, from);
+    b->gap_end += (to - from);
+}
+
+size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out) {
+    size_t len = buf_length(b);
+    if (from > len) from = len;
+    if (to   > len) to   = len;
+    if (from >= to) return 0;
+
+    size_t n = to - from;
+    for (size_t i = 0; i < n; i++)
+        out[i] = buf_char_at(b, from + i);
+    return n;
+}
+
 /* ── movimiento ─────────────────────────────────────────────────────────── */
 
 void buf_move_left(Buffer *b) {
@@ -190,7 +215,6 @@ int buf_load_file(Buffer *b, const char *path) {
     b->gap_start = read;
     b->gap_end   = read + BUFFER_GAP_MIN;
     b->size      = read + BUFFER_GAP_MIN;
-    /* rellenamos el hueco con ceros (no es estrictamente necesario) */
     memset(b->data + read, 0, BUFFER_GAP_MIN);
     return 1;
 }
@@ -199,11 +223,9 @@ int buf_save_file(const Buffer *b, const char *path) {
     FILE *f = fopen(path, "wb");
     if (!f) return 0;
 
-    /* escribe la parte izquierda del hueco */
     if (b->gap_start > 0)
         fwrite(b->data, 1, b->gap_start, f);
 
-    /* escribe la parte derecha del hueco */
     size_t right_start = b->gap_end;
     size_t right_len   = b->size - b->gap_end;
     if (right_len > 0)

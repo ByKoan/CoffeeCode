@@ -334,6 +334,44 @@ static void render_filetree_toggle_closed(Editor *e) {
 }
 
 /* ── render_frame ────────────────────────────────────────────────────────── */
+
+static void render_find_bar(Editor *e)
+{
+    if (!e->find.visible) return;
+
+    int w = 420, h = 32;
+    int x = e->win_w - w - 12;
+    int y = NAVBAR_HEIGHT + 8;
+
+    set_color(e->renderer, 0x1E,0x22,0x2A,255);
+    SDL_FRect bg = {(float)x,(float)y,(float)w,(float)h};
+    SDL_RenderFillRect(e->renderer, &bg);
+
+    char txt[512];
+    snprintf(txt,sizeof(txt),"Buscar: %s%s",
+             e->find.query,
+             (SDL_GetTicks()/500)%2 ? "|" : "");
+
+    draw_text(e, txt, x+10, y+7, 220,220,220);
+
+    if (e->find.result_line >= 0) {
+        char pos[64];
+        snprintf(pos,sizeof(pos),"Ln %d", e->find.result_line + 1);
+        draw_text(e,pos,x+w-80,y+7,97,175,239);
+    }
+}
+
+static void render_shortcuts(Editor *e)
+{
+    draw_text(
+        e,
+        "Ctrl+F Buscar | Ctrl+B Explorador | Ctrl+D Duplicar | Ctrl+L Seleccionar linea | Ctrl+Z Undo | Ctrl+Y Redo",
+        10,
+        e->win_h - STATUS_HEIGHT - 22,
+        120,120,120
+    );
+}
+
 void render_frame(Editor *e) {
     SDL_Renderer *r = e->renderer;
 

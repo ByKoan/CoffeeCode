@@ -4,6 +4,7 @@
 #include "font_data.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ── editor_pos_from_line_col ───────────────────────────────────────────── */
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
@@ -62,12 +63,143 @@ void editor_update_lexer(Editor *e, int from_line) {
     lexer_cache_dirty(&e->lex, from_line);
 }
 
+/* ── NUEVO: selección ────────────────────────────────────────────────────── */
+
+int editor_sel_range(Editor *e, size_t *from, size_t *to) {
+    if (!e->sel_active) return 0;
+    size_t anchor = editor_pos_from_line_col(e, e->sel_anchor_line, e->sel_anchor_col);
+    size_t cursor = buf_cursor_pos(&e->buf);
+    if (anchor <= cursor) { *from = anchor; *to = cursor; }
+    else                  { *from = cursor; *to = anchor; }
+    return (*from != *to);
+}
+
+void editor_sel_clear(Editor *e) {
+    e->sel_active = 0;
+}
+
+/* ── NUEVO: undo/redo ────────────────────────────────────────────────────── */
+
+/* Libera el texto de una entrada */
+static void undo_entry_free(UndoEntry *ue) {
+    free(ue->text);
+    ue->text = NULL;
+    ue->len  = 0;
+}
+
+/* Descarta las entradas de redo (al escribir nueva acción) */
+static void undo_discard_redo(UndoStack *us) {
+    if (us->redo_top == 0) return;
+    for (int i = 0; i < us->redo_top; i++) {
+        int idx = ((us->head - 1 - i) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
+        undo_entry_free(&us->entries[idx]);
+    }
+    us->count    -= us->redo_top;
+    us->head      = ((us->head - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
+    us->redo_top  = 0;
+}
+
+static void undo_push(UndoStack *us, UndoType type,
+                      size_t pos, const char *text, size_t len,
+                      int cl, int cc) {
+    undo_discard_redo(us);
+
+    int idx = us->head % UNDO_MAX;
+    /* si ya hay algo en esa ranura (buffer circular lleno) liberarlo */
+    if (us->count == UNDO_MAX)
+        undo_entry_free(&us->entries[idx]);
+
+    us->entries[idx].type             = type;
+    us->entries[idx].pos              = pos;
+    us->entries[idx].text             = malloc(len + 1);
+    if (us->entries[idx].text) {
+        memcpy(us->entries[idx].text, text, len);
+        us->entries[idx].text[len] = '\0';
+    }
+    us->entries[idx].len              = len;
+    us->entries[idx].cursor_line_after = cl;
+    us->entries[idx].cursor_col_after  = cc;
+
+    us->head = (us->head + 1) % UNDO_MAX;
+    if (us->count < UNDO_MAX) us->count++;
+    us->redo_top = 0;
+}
+
+void editor_undo_push_insert(Editor *e, size_t pos, const char *text, size_t len) {
+    undo_push(&e->undo, UNDO_INSERT, pos, text, len,
+              e->cursor_line, e->cursor_col);
+}
+
+void editor_undo_push_delete(Editor *e, size_t pos, const char *text, size_t len) {
+    undo_push(&e->undo, UNDO_DELETE, pos, text, len,
+              e->cursor_line, e->cursor_col);
+}
+
+void editor_undo(Editor *e) {
+    UndoStack *us = &e->undo;
+    if (us->count == 0 || us->count == us->redo_top) return;
+
+    int idx = ((us->head - 1 - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
+    UndoEntry *ue = &us->entries[idx];
+
+    if (ue->type == UNDO_INSERT) {
+        /* deshacer inserción: borrar el rango */
+        buf_delete_range(&e->buf, ue->pos, ue->pos + ue->len);
+        buf_move_to(&e->buf, ue->pos);
+    } else {
+        /* deshacer borrado: re-insertar */
+        buf_move_to(&e->buf, ue->pos);
+        buf_insert_str(&e->buf, ue->text, ue->len);
+        buf_move_to(&e->buf, ue->pos);
+    }
+
+    us->redo_top++;
+    editor_sync_cursor(e);
+    editor_update_lexer(e, 0);
+    editor_ensure_visible(e);
+    e->modified    = 1;
+    e->needs_redraw = 1;
+}
+
+void editor_redo(Editor *e) {
+    UndoStack *us = &e->undo;
+    if (us->redo_top == 0) return;
+
+    us->redo_top--;
+    int idx = ((us->head - 1 - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
+    UndoEntry *ue = &us->entries[idx];
+
+    if (ue->type == UNDO_INSERT) {
+        /* rehacer inserción */
+        buf_move_to(&e->buf, ue->pos);
+        buf_insert_str(&e->buf, ue->text, ue->len);
+        buf_move_to(&e->buf, ue->pos + ue->len);
+    } else {
+        /* rehacer borrado */
+        buf_delete_range(&e->buf, ue->pos, ue->pos + ue->len);
+        buf_move_to(&e->buf, ue->pos);
+    }
+
+    editor_sync_cursor(e);
+    editor_update_lexer(e, 0);
+    editor_ensure_visible(e);
+    e->modified    = 1;
+    e->needs_redraw = 1;
+}
+
+/* ── Liberar pila de undo al salir ──────────────────────────────────────── */
+static void undo_stack_free(UndoStack *us) {
+    for (int i = 0; i < UNDO_MAX; i++)
+        undo_entry_free(&us->entries[i]);
+}
+
 /* ── editor_init ────────────────────────────────────────────────────────── */
 int editor_init(Editor *e, const char *filepath) {
     memset(e, 0, sizeof(*e));
     e->running      = 1;
     e->needs_redraw = 1;
     e->menu_hovered = -1;
+    e->find.result_line = -1;
 
     /* SDL */
 #ifdef _DEBUG
@@ -170,6 +302,7 @@ void editor_free(Editor *e) {
     buf_free(&e->buf);
     lexer_cache_free(&e->lex);
     ftree_free(&e->ftree);
+    undo_stack_free(&e->undo);
     if (e->font)     TTF_CloseFont(e->font);
     if (e->renderer) SDL_StopTextInput(e->window);
     if (e->renderer) SDL_DestroyRenderer(e->renderer);
