@@ -34,8 +34,9 @@ void editor_sync_cursor(Editor *e) {
 
 /* ── editor_ensure_visible ──────────────────────────────────────────────── */
 void editor_ensure_visible(Editor *e) {
+    int left_off  = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT) / LINE_HEIGHT;
-    int vis_cols  = (e->win_w - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
+    int vis_cols  = (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
 
     /* scroll vertical */
     if (e->cursor_line < e->scroll_line)
@@ -68,6 +69,7 @@ int editor_init(Editor *e, const char *filepath) {
     e->menu_hovered = -1;
 
     /* SDL */
+    fprintf(stderr, "STEP: SDL_Init\n");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 0;
@@ -75,6 +77,7 @@ int editor_init(Editor *e, const char *filepath) {
 
     e->win_w = 1200;
     e->win_h = 800;
+    fprintf(stderr, "STEP: SDL_CreateWindow\n");
     e->window = SDL_CreateWindow("SDL3 IDE",
                                   e->win_w, e->win_h,
                                   SDL_WINDOW_RESIZABLE);
@@ -83,6 +86,7 @@ int editor_init(Editor *e, const char *filepath) {
         return 0;
     }
 
+    fprintf(stderr, "STEP: SDL_CreateRenderer\n");
     e->renderer = SDL_CreateRenderer(e->window, NULL);
     if (!e->renderer) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
@@ -94,11 +98,13 @@ int editor_init(Editor *e, const char *filepath) {
     SDL_StartTextInput(e->window);
 
     /* SDL_ttf */
+    fprintf(stderr, "STEP: TTF_Init\n");
     if (!TTF_Init()) {
         fprintf(stderr, "TTF_Init: %s\n", SDL_GetError());
         return 0;
     }
 
+    fprintf(stderr, "STEP: TTF_OpenFont\n");
     e->font = TTF_OpenFont("font.ttf", FONT_SIZE);
     if (!e->font) {
         fprintf(stderr, "TTF_OpenFont: %s\n", SDL_GetError());
@@ -113,8 +119,12 @@ int editor_init(Editor *e, const char *filepath) {
         e->char_w = w > 0 ? w : FONT_SIZE / 2;
     }
 
+    fprintf(stderr, "STEP: buf_init\n");
     /* Buffer */
     if (!buf_init(&e->buf)) return 0;
+
+    /* FileTree (panel lateral) */
+    ftree_init(&e->ftree);
 
     if (filepath && filepath[0]) {
         strncpy(e->filepath, filepath, sizeof(e->filepath) - 1);
@@ -122,11 +132,13 @@ int editor_init(Editor *e, const char *filepath) {
         SDL_SetWindowTitle(e->window, filepath);
     }
 
+    fprintf(stderr, "STEP: lexer_cache_init\n");
     /* Lexer */
     int total = buf_line_count(&e->buf);
     if (!lexer_cache_init(&e->lex, total > 0 ? total : 1)) return 0;
 
     editor_sync_cursor(e);
+    fprintf(stderr, "STEP: editor_init OK\n");
     return 1;
 }
 
@@ -134,6 +146,7 @@ int editor_init(Editor *e, const char *filepath) {
 void editor_free(Editor *e) {
     buf_free(&e->buf);
     lexer_cache_free(&e->lex);
+    ftree_free(&e->ftree);
     if (e->font)     TTF_CloseFont(e->font);
     if (e->renderer) SDL_StopTextInput(e->window);
     if (e->renderer) SDL_DestroyRenderer(e->renderer);

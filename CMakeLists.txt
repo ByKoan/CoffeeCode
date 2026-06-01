@@ -66,11 +66,6 @@ target_link_libraries(ide PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
 
 # ── Platform ─────────────────────────────────────────────────────────────────
 if(WIN32)
-    # WIN32_EXECUTABLE suppresses the console window (uses SUBSYSTEM:WINDOWS).
-    # With SDL_MAIN_HANDLED our entry point is plain main(), not WinMain(), so
-    # we must tell the linker explicitly — otherwise it looks for WinMain and fails.
-    set_target_properties(ide PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_options(ide PRIVATE /ENTRY:mainCRTStartup)
     target_link_libraries(ide PRIVATE winmm imm32 version setupapi)
 endif()
 
