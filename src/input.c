@@ -1,5 +1,6 @@
 #include "input.h"
 #include "filetree.h"
+#include "render.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -90,7 +91,7 @@ static void handle_ftree_click(Editor *e, int mx, int my) {
                 strncpy(e->filepath, en->path, sizeof(e->filepath) - 1);
                 buf_free(&e->buf);
                 buf_init(&e->buf);
-                buf_load_file(&e->buf, en->path);
+                editor_tab_open(e, en->path);
                 e->cursor_line = e->cursor_col = 0;
                 e->scroll_line = e->scroll_col = 0;
                 e->modified = 0;
@@ -380,18 +381,8 @@ static void do_delete(Editor *e) {
 
 /* ── Nuevo archivo ───────────────────────────────────────────────────────── */
 static void new_file(Editor *e) {
-    buf_free(&e->buf);
-    buf_init(&e->buf);
-    e->filepath[0] = '\0';
-    e->modified    = 0;
-    e->cursor_line = e->cursor_col = 0;
-    e->scroll_line = e->scroll_col = 0;
-    int total = buf_line_count(&e->buf);
-    lexer_cache_free(&e->lex);
-    lexer_cache_init(&e->lex, total > 0 ? total : 1);
-    editor_sel_clear(e);
-    SDL_SetWindowTitle(e->window, "CoffeeCode");
-    e->needs_redraw = 1;
+    editor_tab_new(e);
+    SDL_SetWindowTitle(e->window, "CoffeeCode - Sin título");
 }
 
 /* ── Guardar ─────────────────────────────────────────────────────────────── */
@@ -401,6 +392,11 @@ static void save_file(Editor *e) {
     if (buf_save_file(&e->buf, e->filepath)) {
         e->modified = 0;
         SDL_SetWindowTitle(e->window, e->filepath);
+        /* sync filepath and modified flag back to tab */
+        if (e->tab_count > 0) {
+            strncpy(e->tabs[e->active_tab].filepath, e->filepath, 511);
+            e->tabs[e->active_tab].modified = 0;
+        }
     }
     e->needs_redraw = 1;
 }
@@ -420,21 +416,8 @@ static void SDLCALL file_dialog_cb(void *userdata,
     strncpy(e->filepath, path, sizeof(e->filepath) - 1);
     e->filepath[sizeof(e->filepath) - 1] = '\0';
 
-    buf_free(&e->buf);
-    buf_init(&e->buf);
-    buf_load_file(&e->buf, path);
-    e->cursor_line = e->cursor_col = 0;
-    e->scroll_line = e->scroll_col = 0;
-    e->modified = 0;
-
-    int total = buf_line_count(&e->buf);
-    lexer_cache_free(&e->lex);
-    lexer_cache_init(&e->lex, total > 0 ? total : 1);
-    editor_update_lexer(e, 0);
-    editor_sync_cursor(e);
-
+    editor_tab_open(e, path);
     SDL_SetWindowTitle(e->window, path);
-    e->needs_redraw = 1;
 }
 
 static void open_file_dialog(Editor *e) {
@@ -705,11 +688,46 @@ static void find_jump(Editor *e) {
     e->needs_redraw = 1;
 }
 
+/* Reemplaza la ocurrencia actualmente seleccionada (si coincide con query)
+   y salta a la siguiente. */
+static void do_replace(Editor *e) {
+    FindBar *f = &e->find;
+    if (f->query_len == 0) return;
+    if (e->sel_active) {
+        size_t from, to;
+        if (editor_sel_range(e, &from, &to)) {
+            size_t qlen = (size_t)f->query_len;
+            if (to - from == qlen) {
+                int match = 1;
+                for (size_t j = 0; j < qlen && match; j++) {
+                    char bc = buf_char_at(&e->buf, from + j);
+                    char qc = f->query[j];
+                    if (tolower((unsigned char)bc) != tolower((unsigned char)qc))
+                        match = 0;
+                }
+                if (match) {
+                    /* borrar el rango seleccionado y sustituir */
+                    buf_delete_range(&e->buf, from, from + qlen);
+                    buf_move_to(&e->buf, from);
+                    if (f->replace_len > 0)
+                        buf_insert_str(&e->buf, f->replace, (size_t)f->replace_len);
+                    editor_sync_cursor(e);
+                    editor_update_lexer(e, 0);
+                }
+            }
+        }
+    }
+    find_jump(e);
+}
+
 static void open_find_bar(Editor *e) {
-    e->find.visible    = 1;
-    e->find.query[0]   = '\0';
-    e->find.query_len  = 0;
-    e->find.result_line = -1;
+    e->find.visible         = 1;
+    e->find.query[0]        = '\0';
+    e->find.query_len       = 0;
+    e->find.replace[0]      = '\0';
+    e->find.replace_len     = 0;
+    e->find.replace_focused = 0;
+    e->find.result_line     = -1;
     e->needs_redraw = 1;
 }
 
@@ -757,8 +775,11 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         break;
     }
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (ev->button.button == SDL_BUTTON_LEFT)
-            e->ftree.dragging_border = 0;
+        if (ev->button.button == SDL_BUTTON_LEFT) {
+            e->ftree.dragging_border  = 0;
+            e->mouse_selecting        = 0;
+            e->scrollbar_dragging     = 0;
+        }
         break;
 
     case SDL_EVENT_MOUSE_MOTION: {
@@ -769,13 +790,67 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->menu_hovered = menu_item_at(mx, my);
             if (e->menu_hovered != prev) e->needs_redraw = 1;
         }
-        if (e->ftree.open && mx < e->ftree.width && my >= NAVBAR_HEIGHT)
+        if (e->ftree.open && mx < e->ftree.width && my >= NAVBAR_HEIGHT + TAB_BAR_HEIGHT)
             handle_ftree_hover(e, mx, my);
         if (e->ftree.dragging_border) {
             int new_w = e->ftree.drag_start_w + (mx - e->ftree.drag_start_x);
             if (new_w < FTREE_MIN_WIDTH)  new_w = FTREE_MIN_WIDTH;
             if (new_w > e->win_w / 2)     new_w = e->win_w / 2;
             e->ftree.width = new_w;
+            e->needs_redraw = 1;
+        }
+
+        /* arratre de scrollbar */
+        if (e->scrollbar_dragging) {
+            int text_height   = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
+            int total_lines   = buf_line_count(&e->buf);
+            int visible_lines = text_height / LINE_HEIGHT;
+            int max_scroll    = total_lines - visible_lines;
+            if (max_scroll < 0) max_scroll = 0;
+            float thumb_h_ratio = (visible_lines > 0 && total_lines > 0)
+                                  ? (float)visible_lines / (float)total_lines : 1.0f;
+            int thumb_h = (int)(text_height * thumb_h_ratio);
+            if (thumb_h < 20) thumb_h = 20;
+            int thumb_range = text_height - thumb_h;
+            if (thumb_range < 1) thumb_range = 1;
+            float frac = (float)(my - e->scrollbar_drag_start_y) / (float)thumb_range;
+            int new_scroll = e->scrollbar_drag_start_line + (int)(frac * max_scroll);
+            if (new_scroll < 0)          new_scroll = 0;
+            if (new_scroll > max_scroll) new_scroll = max_scroll;
+            e->scroll_line = new_scroll;
+            e->needs_redraw = 1;
+        }
+
+        /* arrastre para seleccionar texto */
+        if (e->mouse_selecting) {
+            int left    = get_left_offset(e);
+            int text_x  = left + GUTTER_WIDTH + PADDING_LEFT;
+            int cw      = (e->char_w > 0 ? e->char_w : 8);
+            /* calcular línea visual */
+            int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+            int line = e->scroll_line + vis_line;
+            int total = buf_line_count(&e->buf);
+            if (line < 0)       line = 0;
+            if (line >= total)  line = total - 1;
+            /* calcular columna — limitar al largo real de la línea */
+            int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
+            if (vis_col < 0) vis_col = 0;
+            /* obtener longitud real de la línea */
+            size_t ls = editor_pos_from_line_col(e, line, 0);
+            size_t le = buf_line_end(&e->buf, ls);
+            int line_len = (int)(le - ls);
+            if (vis_col > line_len) vis_col = line_len;
+            int col = vis_col;
+            /* activar selección manteniendo el ancla original */
+            if (!e->sel_active) {
+                e->sel_active      = 1;
+                /* ancla ya fue fijada en BUTTON_DOWN */
+            }
+            /* mover cursor sin tocar el ancla */
+            size_t pos = editor_pos_from_line_col(e, line, col);
+            buf_move_to(&e->buf, pos);
+            editor_sync_cursor(e);
+            editor_ensure_visible(e);
             e->needs_redraw = 1;
         }
         break;
@@ -785,6 +860,36 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         int mx = (int)ev->button.x;
         int my = (int)ev->button.y;
         if (ev->button.button != SDL_BUTTON_LEFT) break;
+
+        /* ── clic en la barra de tabs ── */
+        if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
+            /* botón + nuevo tab */
+            if (mx >= e->tab_new_btn_x && mx < e->tab_new_btn_x + 28) {
+                editor_tab_new(e);
+                break;
+            }
+            /* clic en tab existente */
+            for (int i = 0; i < e->tab_count; i++) {
+                EditorTab *t = &e->tabs[i];
+                if (mx >= t->tab_x && mx < t->tab_x + t->tab_w) {
+                    /* botón × cerrar */
+                    if (mx >= t->close_x && mx < t->close_x + 16 &&
+                        my >= t->close_y  && my < t->close_y  + 16) {
+                        editor_tab_save_state(e);
+                        e->active_tab = i;
+                        editor_tab_close(e);
+                        const char *title = e->filepath[0] ? e->filepath : "CoffeeCode - Sin título";
+                        SDL_SetWindowTitle(e->window, title);
+                    } else {
+                        editor_tab_switch(e, i);
+                        const char *title = e->tabs[i].filepath[0] ? e->tabs[i].filepath : "CoffeeCode - Sin título";
+                        SDL_SetWindowTitle(e->window, title);
+                    }
+                    break;
+                }
+            }
+            break;
+        }
 
         /* clic en el menú abierto */
         if (e->menu_open) {
@@ -810,8 +915,38 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             break;
         }
 
+        /* clic en la barra de búsqueda */
+        if (e->find.visible) {
+            FindBar *fb = &e->find;
+            /* clic en botón Reemplazar */
+            if (mx >= fb->replace_btn_x && mx < fb->replace_btn_x + fb->replace_btn_w &&
+                my >= fb->replace_btn_y && my < fb->replace_btn_y + fb->replace_btn_h) {
+                do_replace(e);
+                break;
+            }
+            /* clic en campo buscar */
+            if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w &&
+                my >= fb->row1_y  && my < fb->row1_y + fb->field_h) {
+                fb->replace_focused = 0;
+                e->needs_redraw = 1;
+                break;
+            }
+            /* clic en campo reemplazar */
+            if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w &&
+                my >= fb->row2_y  && my < fb->row2_y + fb->field_h) {
+                fb->replace_focused = 1;
+                e->needs_redraw = 1;
+                break;
+            }
+            /* clic dentro de la barra pero fuera de campos — ignorar */
+            if (mx >= fb->bar_x && mx < fb->bar_x + fb->bar_w &&
+                my >= fb->bar_y  && my < fb->bar_y  + fb->bar_h) {
+                break;
+            }
+        }
+
         /* clic fuera de navbar y menú */
-        if (my >= NAVBAR_HEIGHT) {
+        if (my >= NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
             if (e->menu_open) {
                 int menu_y = NAVBAR_HEIGHT;
                 int mh     = menu_total_h();
@@ -821,11 +956,50 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                     e->needs_redraw = 1;
                 }
             }
+
+            /* clic en la scrollbar */
+            {
+                int sb_x = e->win_w - 9; /* SCROLLBAR_W=8 + 1px borde */
+                if (mx >= sb_x) {
+                    e->scrollbar_dragging        = 1;
+                    e->scrollbar_drag_start_y    = my;
+                    e->scrollbar_drag_start_line = e->scroll_line;
+                    break;
+                }
+            }
+
             int left = get_left_offset(e);
             if (mx < left) {
                 handle_ftree_click(e, mx, my);
             } else {
-                handle_text_click(e, mx, my);
+                /* iniciar selección con ratón */
+                int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
+                int cw     = (e->char_w > 0 ? e->char_w : 8);
+                int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+                int line = e->scroll_line + vis_line;
+                int total = buf_line_count(&e->buf);
+                if (line < 0)      line = 0;
+                if (line >= total) line = total - 1;
+                /* columna con scroll y limitada al largo real */
+                int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
+                if (vis_col < 0) vis_col = 0;
+                size_t ls = editor_pos_from_line_col(e, line, 0);
+                size_t le = buf_line_end(&e->buf, ls);
+                int line_len = (int)(le - ls);
+                if (vis_col > line_len) vis_col = line_len;
+                int col = vis_col;
+
+                editor_sel_clear(e);
+                size_t pos = editor_pos_from_line_col(e, line, col);
+                buf_move_to(&e->buf, pos);
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+                e->needs_redraw = 1;
+
+                /* establecer ancla para drag-select */
+                e->sel_anchor_line  = e->cursor_line;
+                e->sel_anchor_col   = e->cursor_col;
+                e->mouse_selecting  = 1;
             }
         }
         break;
@@ -835,15 +1009,26 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
     case SDL_EVENT_TEXT_INPUT:
         if (e->menu_open) break;
         if (e->find.visible) {
-            /* añadir caracteres a la query */
             size_t tlen = strlen(ev->text.text);
-            for (size_t i = 0; i < tlen; i++) {
-                if (e->find.query_len < FIND_BAR_MAX - 1) {
-                    e->find.query[e->find.query_len++] = ev->text.text[i];
-                    e->find.query[e->find.query_len]   = '\0';
+            if (e->find.replace_focused == 0) {
+                /* campo buscar */
+                for (size_t i = 0; i < tlen; i++) {
+                    if (e->find.query_len < FIND_BAR_MAX - 1) {
+                        e->find.query[e->find.query_len++] = ev->text.text[i];
+                        e->find.query[e->find.query_len]   = '\0';
+                    }
                 }
+                find_jump(e);
+            } else {
+                /* campo reemplazar */
+                for (size_t i = 0; i < tlen; i++) {
+                    if (e->find.replace_len < FIND_BAR_MAX - 1) {
+                        e->find.replace[e->find.replace_len++] = ev->text.text[i];
+                        e->find.replace[e->find.replace_len]   = '\0';
+                    }
+                }
+                e->needs_redraw = 1;
             }
-            find_jump(e);
             break;
         }
         buf_insert_str(&e->buf, ev->text.text, strlen(ev->text.text));
@@ -866,13 +1051,32 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
 
         /* ── Barra de búsqueda activa: teclas especiales ── */
         if (e->find.visible) {
-            if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                find_jump(e);
+            if (key == SDLK_TAB) {
+                /* Tab alterna entre campo buscar y reemplazar */
+                e->find.replace_focused = !e->find.replace_focused;
+                e->needs_redraw = 1;
                 break;
             }
-            if (key == SDLK_BACKSPACE && e->find.query_len > 0) {
-                e->find.query[--e->find.query_len] = '\0';
-                find_jump(e);
+            if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                if (e->find.replace_focused) {
+                    do_replace(e);
+                } else {
+                    find_jump(e);
+                }
+                break;
+            }
+            if (key == SDLK_BACKSPACE) {
+                if (e->find.replace_focused) {
+                    if (e->find.replace_len > 0) {
+                        e->find.replace[--e->find.replace_len] = '\0';
+                        e->needs_redraw = 1;
+                    }
+                } else {
+                    if (e->find.query_len > 0) {
+                        e->find.query[--e->find.query_len] = '\0';
+                        find_jump(e);
+                    }
+                }
                 break;
             }
             /* Ctrl+F de nuevo = siguiente resultado */
@@ -903,6 +1107,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             /* ── NUEVO: Navegación ── */
             case SDLK_F: open_find_bar(e);     break;
             case SDLK_B: toggle_sidebar(e);    break;
+            case SDLK_W: editor_tab_close(e);  break;
+            case SDLK_TAB: editor_tab_switch(e, (e->active_tab+1) % e->tab_count); break;
             case SDLK_HOME: move_cursor_select(e, 0, 0, shift); break;
             case SDLK_END: {
                 int t = buf_line_count(&e->buf) - 1;

@@ -37,7 +37,7 @@ void editor_sync_cursor(Editor *e) {
 /* ── editor_ensure_visible ──────────────────────────────────────────────── */
 void editor_ensure_visible(Editor *e) {
     int left_off  = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
-    int vis_lines = (e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT) / LINE_HEIGHT;
+    int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT) / LINE_HEIGHT;
     int vis_cols  = (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
 
     /* scroll vertical */
@@ -76,6 +76,133 @@ int editor_sel_range(Editor *e, size_t *from, size_t *to) {
 
 void editor_sel_clear(Editor *e) {
     e->sel_active = 0;
+}
+
+/* ── Tab helpers ─────────────────────────────────────────────────────────── */
+
+/* Guarda el estado del editor en el tab activo */
+void editor_tab_save_state(Editor *e) {
+    if (e->tab_count == 0) return;
+    EditorTab *t = &e->tabs[e->active_tab];
+    t->buf          = e->buf;
+    t->lex          = e->lex;
+    t->undo         = e->undo;
+    t->cursor_line  = e->cursor_line;
+    t->cursor_col   = e->cursor_col;
+    t->scroll_line  = e->scroll_line;
+    t->scroll_col   = e->scroll_col;
+    t->modified     = e->modified;
+    t->sel_active   = e->sel_active;
+    t->sel_anchor_line = e->sel_anchor_line;
+    t->sel_anchor_col  = e->sel_anchor_col;
+}
+
+/* Carga el estado del tab activo en el editor */
+static void editor_tab_load_state(Editor *e) {
+    EditorTab *t = &e->tabs[e->active_tab];
+    e->buf          = t->buf;
+    e->lex          = t->lex;
+    e->undo         = t->undo;
+    e->cursor_line  = t->cursor_line;
+    e->cursor_col   = t->cursor_col;
+    e->scroll_line  = t->scroll_line;
+    e->scroll_col   = t->scroll_col;
+    e->modified     = t->modified;
+    e->sel_active   = t->sel_active;
+    e->sel_anchor_line = t->sel_anchor_line;
+    e->sel_anchor_col  = t->sel_anchor_col;
+    strncpy(e->filepath, t->filepath, sizeof(e->filepath)-1);
+}
+
+/* Crea un nuevo tab vacío y lo activa */
+void editor_tab_new(Editor *e) {
+    if (e->tab_count >= MAX_TABS) return;
+    editor_tab_save_state(e);
+    int idx = e->tab_count++;
+    EditorTab *t = &e->tabs[idx];
+    memset(t, 0, sizeof(*t));
+    buf_init(&t->buf);
+    int total = buf_line_count(&t->buf);
+    lexer_cache_init(&t->lex, total > 0 ? total : 1);
+    t->filepath[0] = '\0';
+    e->active_tab = idx;
+    editor_tab_load_state(e);
+    e->needs_redraw = 1;
+}
+
+/* Abre un archivo en un nuevo tab */
+void editor_tab_open(Editor *e, const char *path) {
+    /* si ya está abierto, activarlo */
+    for (int i = 0; i < e->tab_count; i++) {
+        if (strcmp(e->tabs[i].filepath, path) == 0) {
+            editor_tab_save_state(e);
+            e->active_tab = i;
+            editor_tab_load_state(e);
+            e->needs_redraw = 1;
+            return;
+        }
+    }
+    if (e->tab_count >= MAX_TABS) return;
+    editor_tab_save_state(e);
+    int idx = e->tab_count++;
+    EditorTab *t = &e->tabs[idx];
+    memset(t, 0, sizeof(*t));
+    buf_init(&t->buf);
+    buf_load_file(&t->buf, path);
+    strncpy(t->filepath, path, sizeof(t->filepath)-1);
+    int total = buf_line_count(&t->buf);
+    lexer_cache_init(&t->lex, total > 0 ? total : 1);
+    e->active_tab = idx;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
+/* Cierra el tab activo */
+void editor_tab_close(Editor *e) {
+    if (e->tab_count <= 1) {
+        /* último tab: limpiar contenido en lugar de cerrar */
+        buf_free(&e->buf);
+        buf_init(&e->buf);
+        e->filepath[0] = '\0';
+        e->modified = 0;
+        e->cursor_line = e->cursor_col = 0;
+        e->scroll_line = e->scroll_col = 0;
+        lexer_cache_free(&e->lex);
+        int total = buf_line_count(&e->buf);
+        lexer_cache_init(&e->lex, total > 0 ? total : 1);
+        editor_sel_clear(e);
+        /* sync back to tab 0 */
+        editor_tab_save_state(e);
+        e->needs_redraw = 1;
+        return;
+    }
+    /* liberar recursos del tab actual */
+    EditorTab *t = &e->tabs[e->active_tab];
+    buf_free(&t->buf);
+    lexer_cache_free(&t->lex);
+    /* desplazar tabs */
+    int closing = e->active_tab;
+    for (int i = closing; i < e->tab_count - 1; i++)
+        e->tabs[i] = e->tabs[i+1];
+    e->tab_count--;
+    if (e->active_tab >= e->tab_count)
+        e->active_tab = e->tab_count - 1;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
+/* Cambia al tab i */
+void editor_tab_switch(Editor *e, int i) {
+    if (i < 0 || i >= e->tab_count || i == e->active_tab) return;
+    editor_tab_save_state(e);
+    e->active_tab = i;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    e->needs_redraw = 1;
 }
 
 /* ── NUEVO: undo/redo ────────────────────────────────────────────────────── */
@@ -291,6 +418,11 @@ int editor_init(Editor *e, const char *filepath) {
     if (!lexer_cache_init(&e->lex, total > 0 ? total : 1)) return 0;
 
     editor_sync_cursor(e);
+
+    /* Inicializar sistema de tabs: guardar estado inicial en tab 0 */
+    e->tab_count  = 1;
+    e->active_tab = 0;
+    editor_tab_save_state(e);
 #ifdef _DEBUG
     fprintf(stderr, "STEP: editor_init OK\n");
 #endif
