@@ -102,11 +102,14 @@ static int scan_dir(FileTree *ft, const char *dirpath,
 
     /* Insertar en ft->entries en la posición insert_at */
     int to_insert = tmp_count;
-    if (insert_at + to_insert > FTREE_MAX_ENTRIES)
-        to_insert = FTREE_MAX_ENTRIES - insert_at;
+    /* Asegurar que insert_at + to_insert + existing_after <= FTREE_MAX_ENTRIES */
+    int existing_after = ft->count - insert_at;
+    if (existing_after < 0) existing_after = 0;
+    int available = FTREE_MAX_ENTRIES - ft->count;
+    if (to_insert > available) to_insert = available;
+    if (to_insert <= 0) return 0;
 
     /* Desplazar entradas existentes hacia adelante */
-    int existing_after = ft->count - insert_at;
     if (existing_after > 0) {
         memmove(&ft->entries[insert_at + to_insert],
                 &ft->entries[insert_at],
@@ -166,9 +169,15 @@ void ftree_toggle(FileTree *ft, int index) {
             ft->count -= remove;
         }
     } else {
-        /* Expandir: escanear y añadir hijos justo después */
-        en->expanded = 1;
-        scan_dir(ft, en->path, en->depth + 1, index + 1);
+        /* Expandir: escanear y añadir hijos justo después.
+         * IMPORTANTE: copiar path y depth antes de llamar a scan_dir porque
+         * el memmove interno puede desplazar la entrada y dejar 'en' obsoleto. */
+        char expand_path[512];
+        int  expand_depth = en->depth;
+        strncpy(expand_path, en->path, sizeof(expand_path) - 1);
+        expand_path[sizeof(expand_path) - 1] = '\0';
+        ft->entries[index].expanded = 1;
+        scan_dir(ft, expand_path, expand_depth + 1, index + 1);
     }
 
     ftree_refresh_visibility(ft);

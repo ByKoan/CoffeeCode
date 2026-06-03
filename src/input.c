@@ -10,13 +10,13 @@
 
 /* ── Geometría del menú (debe coincidir con render.c) ────────────────────── */
 #define MENU_ITEM_H   26
-#define MENU_WIDTH   180
-#define MENU_ITEMS    5
+#define MENU_WIDTH   210
+#define MENU_ITEMS    6
 #define BTN_FILE_X    4
-#define BTN_FILE_W   70
+#define BTN_FILE_W   90
 
 static const char *MENU_LABELS[MENU_ITEMS] = {
-    "Nuevo", "Abrir archivo...", "Abrir carpeta...", NULL, "Guardar"
+    "Nuevo", "Abrir archivo...", "Abrir carpeta...", NULL, "Guardar", "Autoguardado"
 };
 
 /* Devuelve el índice de item del menú bajo (mx, my), o -1 si ninguno */
@@ -53,15 +53,17 @@ static int get_left_offset(Editor *e) {
 /* Maneja click en el panel lateral */
 static void handle_ftree_click(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
-    int panel_y  = NAVBAR_HEIGHT;
-    int panel_h  = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
-    int btn_w    = FTREE_TOGGLE_BTN_W;
+    int panel_y    = NAVBAR_HEIGHT;
+    int panel_h    = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
+    int btn_w      = FTREE_TOGGLE_BTN_W;
+    int content_top = panel_y + TAB_BAR_HEIGHT;
+    int content_h   = panel_h - TAB_BAR_HEIGHT;
 
     /* Click en el botón toggle (borde derecho del panel) */
     int toggle_x = ft->open ? (ft->width - btn_w) : 0;
     if (mx >= toggle_x && mx < toggle_x + btn_w) {
         int btn_h = 40;
-        int btn_y = panel_y + (panel_h - btn_h) / 2;
+        int btn_y = content_top + (content_h - btn_h) / 2;
         if (my >= btn_y && my < btn_y + btn_h) {
             ft->open = !ft->open;
             e->needs_redraw = 1;
@@ -73,7 +75,7 @@ static void handle_ftree_click(Editor *e, int mx, int my) {
 
     /* Click en un item del árbol */
     int header_h   = 26;
-    int content_y  = panel_y + header_h;
+    int content_y  = content_top + header_h;
     if (my < content_y) return;
 
     int row = (my - content_y) / FTREE_ITEM_H;
@@ -104,9 +106,8 @@ static void handle_ftree_hover(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
     if (!ft->open) return;
 
-    int panel_y  = NAVBAR_HEIGHT;
-    int header_h = 26;
-    int content_y = panel_y + header_h;
+    int header_h  = 26;
+    int content_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT + header_h;
     if (my < content_y) {
         if (ft->hovered != -1) { ft->hovered = -1; e->needs_redraw = 1; }
         return;
@@ -372,7 +373,15 @@ static void do_delete(Editor *e) {
 /* ── Nuevo archivo ───────────────────────────────────────────────────────── */
 static void new_file(Editor *e) {
     editor_tab_new(e);
-    SDL_SetWindowTitle(e->window, "CoffeeCode - Sin título");
+    /* Asegurar que el tab nuevo queda limpio independientemente del estado anterior */
+    e->filepath[0] = '\0';
+    e->modified    = 0;
+    if (e->tab_count > 0) {
+        e->tabs[e->active_tab].filepath[0] = '\0';
+        e->tabs[e->active_tab].modified    = 0;
+    }
+    SDL_SetWindowTitle(e->window, "CoffeeCode");
+    e->needs_redraw = 1;
 }
 
 /* ── Guardar ─────────────────────────────────────────────────────────────── */
@@ -447,6 +456,11 @@ static void menu_exec(Editor *e, int item) {
     case 2: open_folder_dialog(e); break;
     /* case 3: separador */
     case 4: save_file(e);         break;
+    case 5:
+        e->autosave = !e->autosave;
+        if (e->autosave)
+            e->autosave_last_ms = SDL_GetTicks();
+        break;
     default: break;
     }
     e->menu_open    = 0;
@@ -456,11 +470,12 @@ static void menu_exec(Editor *e, int item) {
 
 /* ── scroll ──────────────────────────────────────────────────────────────── */
 static void handle_scroll(Editor *e, float dy) {
+    if (e->tab_count == 0 || !e->buf) return;
     int lines = (int)(dy * 3);
     e->scroll_line -= lines;
     int total = buf_line_count(e->buf);
     if (e->scroll_line < 0) e->scroll_line = 0;
-    if (e->scroll_line >= total) e->scroll_line = total - 1;
+    if (total > 0 && e->scroll_line >= total) e->scroll_line = total - 1;
     e->needs_redraw = 1;
 }
 
@@ -966,6 +981,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 handle_ftree_click(e, mx, my);
             } else {
                 /* iniciar selección con ratón */
+                if (e->tab_count == 0) break;  /* sin tabs, nada que hacer */
                 int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
                 int cw     = (e->char_w > 0 ? e->char_w : 8);
                 int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
@@ -1088,23 +1104,24 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             case SDLK_Q: e->running = 0;       break;
 
             /* ── NUEVO: Edición ── */
-            case SDLK_Z: editor_undo(e);       break;
-            case SDLK_Y: editor_redo(e);       break;
-            case SDLK_A: select_all(e);        break;
-            case SDLK_C: do_copy(e);           break;
-            case SDLK_X: do_cut(e);            break;
-            case SDLK_V: do_paste(e);          break;
-            case SDLK_D: duplicate_line(e);    break;
-            case SDLK_SLASH: toggle_line_comment(e); break;
-            case SDLK_L: select_line(e);       break;
+            case SDLK_Z: if (e->buf) editor_undo(e);       break;
+            case SDLK_Y: if (e->buf) editor_redo(e);       break;
+            case SDLK_A: if (e->buf) select_all(e);        break;
+            case SDLK_C: if (e->buf) do_copy(e);           break;
+            case SDLK_X: if (e->buf) do_cut(e);            break;
+            case SDLK_V: if (e->buf) do_paste(e);          break;
+            case SDLK_D: if (e->buf) duplicate_line(e);    break;
+            case SDLK_SLASH: if (e->buf) toggle_line_comment(e); break;
+            case SDLK_L: if (e->buf) select_line(e);       break;
 
             /* ── NUEVO: Navegación ── */
             case SDLK_F: open_find_bar(e);     break;
             case SDLK_B: toggle_sidebar(e);    break;
             case SDLK_W: editor_tab_close(e);  break;
-            case SDLK_TAB: editor_tab_switch(e, (e->active_tab+1) % e->tab_count); break;
-            case SDLK_HOME: move_cursor_select(e, 0, 0, shift); break;
+            case SDLK_TAB: if (e->tab_count > 0) editor_tab_switch(e, (e->active_tab+1) % e->tab_count); break;
+            case SDLK_HOME: if (e->buf) move_cursor_select(e, 0, 0, shift); break;
             case SDLK_END: {
+                if (!e->buf) break;
                 int t = buf_line_count(e->buf) - 1;
                 size_t ep = buf_line_end(e->buf,
                     editor_pos_from_line_col(e, t, 0));
@@ -1113,14 +1130,15 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 break;
             }
             /* ── NUEVO: salto de palabra ── */
-            case SDLK_LEFT:  move_word_left(e, shift);  break;
-            case SDLK_RIGHT: move_word_right(e, shift); break;
-            case SDLK_UP:    move_cursor_select(e, e->cursor_line - 5, e->cursor_col, shift); break;
-            case SDLK_DOWN:  move_cursor_select(e, e->cursor_line + 5, e->cursor_col, shift); break;
+            case SDLK_LEFT:  if (e->buf) move_word_left(e, shift);  break;
+            case SDLK_RIGHT: if (e->buf) move_word_right(e, shift); break;
+            case SDLK_UP:    if (e->buf) move_cursor_select(e, e->cursor_line - 5, e->cursor_col, shift); break;
+            case SDLK_DOWN:  if (e->buf) move_cursor_select(e, e->cursor_line + 5, e->cursor_col, shift); break;
             default: break;
             }
         } else {
             if (e->menu_open) break;
+            if (!e->buf) break;  /* sin buffer activo, ignorar teclas de edición */
             switch (key) {
             case SDLK_UP:        move_line_up(e, shift);   break;
             case SDLK_DOWN:      move_line_down(e, shift);  break;
