@@ -122,6 +122,10 @@ typedef struct {
     int           menu_open;     /* 1 = desplegable visible */
     int           menu_hovered;  /* índice del item bajo el cursor, -1 = ninguno */
 
+    /* autoguardado */
+    int           autosave;          /* 1 = autoguardado activado */
+    Uint64        autosave_last_ms;  /* timestamp del último autoguardado */
+
     /* explorador de carpetas lateral */
     FileTree      ftree;
 
