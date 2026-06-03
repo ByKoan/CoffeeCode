@@ -480,25 +480,6 @@ void editor_run(Editor *e) {
             while (SDL_PollEvent(&ev))
                 input_handle_event(e, &ev);
         }
-
-        /* Autoguardado casi instantaneo (300 ms) si hay cambios y filepath definido */
-        if (e->autosave && e->modified && e->filepath[0]) {
-            Uint64 now = SDL_GetTicks();
-            if (now - e->autosave_last_ms >= 300) {
-                if (buf_save_file(e->buf, e->filepath)) {
-                    e->modified = 0;
-                    if (e->tab_count > 0) {
-                        EditorTab *_t = &e->tabs[e->active_tab];
-                        strncpy(_t->filepath, e->filepath, 511);
-                        _t->modified = 0;
-                        { struct stat _st; _t->loaded_mtime = (stat(e->filepath, &_st) == 0) ? (long)_st.st_mtime : 0; }
-                    }
-                    e->needs_redraw = 1;
-                }
-                e->autosave_last_ms = now;
-            }
-        }
-
         if (e->needs_redraw) {
             render_frame(e);
             e->needs_redraw = 0;

@@ -2,7 +2,7 @@
 
 `CoffeeCode` es un proyecto que busca crear un IDE completamente personalizable en el que el programador pueda crear la experiencia mas agradable y comprometida para crear nuevos productos tecnologicos.
 
-Este IDE esta escrito en su mayor parte en lenguaje ***C*** usando la libreria grafica ***SDL3*** para visualizar la aplicacion.
+Este IDE esta escrito en su mayor parte en lenguaje ***C*** usando la libreria grafica **SDL3*** para visualizar la aplicacion.
 
 ## Caracteristicas actuales
 

@@ -21,19 +21,18 @@
 
 /* Menú "Archivo" */
 #define MENU_ITEM_H     26
-#define MENU_WIDTH     210
-#define MENU_ITEMS      6
+#define MENU_WIDTH     180
+#define MENU_ITEMS      5
 
 static const char *MENU_LABELS[MENU_ITEMS] = {
     "Nuevo",
     "Abrir archivo...",
     "Abrir carpeta...",
     NULL,
-    "Guardar",
-    "Autoguardado"
+    "Guardar"
 };
 static const char *MENU_HINTS[MENU_ITEMS] = {
-    "Ctrl+N", "Ctrl+O", "Ctrl+K", NULL, "Ctrl+S", NULL
+    "Ctrl+N", "Ctrl+O", "Ctrl+K", NULL, "Ctrl+S"
 };
 
 /* Colores panel lateral */
@@ -108,16 +107,7 @@ static void render_navbar(Editor *e) {
     SDL_RenderFillRect(r, &sep);
 
     int btn_x = 4, btn_y = 2;
-    int btn_h = NAVBAR_HEIGHT - 4;
-
-    /* Ancho del boton: calcular una vez y cachear en un static */
-    static int cached_btn_w = 0;
-    if (cached_btn_w == 0) {
-        int lw = 0, lh = 0;
-        TTF_GetStringSize(e->font, "  Archivo  ", 0, &lw, &lh);
-        cached_btn_w = (lw > 20) ? lw : 90;
-    }
-    int btn_w = cached_btn_w;
+    int btn_w = 70, btn_h = NAVBAR_HEIGHT - 4;
 
     if (e->menu_open) {
         set_color(r, COL_NAVBAR_BTN);
@@ -126,23 +116,14 @@ static void render_navbar(Editor *e) {
     }
 
     int ty = btn_y + (btn_h - FONT_SIZE) / 2;
-    draw_text(e, "  Archivo  ", btn_x, ty, 0xCC, 0xCC, 0xCC);
+    draw_text(e, "  Archivo", btn_x, ty, 0xCC, 0xCC, 0xCC);
 
-    /* Titulo: siempre "CoffeeCode" + nombre del archivo si hay uno */
-    char nav_title[600];
-    if (e->filepath[0]) {
-        const char *fname = e->filepath + strlen(e->filepath);
-        while (fname > e->filepath && *(fname-1) != '/' && *(fname-1) != '\\') fname--;
-        snprintf(nav_title, sizeof(nav_title), "CoffeeCode \xe2\x80\x94 %s", fname);
-    } else {
-        snprintf(nav_title, sizeof(nav_title), "CoffeeCode");
-    }
-
+    const char *title = e->filepath[0] ? e->filepath : "sin título";
     int tw = 0, th = 0;
-    TTF_GetStringSize(e->font, nav_title, 0, &tw, &th);
+    TTF_GetStringSize(e->font, title, 0, &tw, &th);
     int cx = (e->win_w - tw) / 2;
     if (cx < btn_x + btn_w + 8) cx = btn_x + btn_w + 8;
-    draw_text(e, nav_title, cx, ty, 0x80, 0x85, 0x95);
+    draw_text(e, title, cx, ty, 0x60, 0x65, 0x70);
 
     if (e->modified) {
         set_color(r, 0xE0, 0x6C, 0x75, 0xFF);
@@ -198,27 +179,14 @@ static void render_menu(Editor *e) {
         }
 
         int ty2 = iy + (MENU_ITEM_H - FONT_SIZE) / 2;
-
-        /* Item de autoguardado: mostrar checkmark si esta activo */
-        if (i == 5) {
-            if (e->autosave) {
-                draw_text(e, "\xe2\x9c\x93", mx + 4, ty2, 0x98, 0xC3, 0x79);
-            }
-        }
-
         draw_text(e, MENU_LABELS[i], mx + 14, ty2, 0xCC, 0xCC, 0xCC);
 
         if (MENU_HINTS[i]) {
             int hw = 0, hh = 0;
             TTF_GetStringSize(e->font, MENU_HINTS[i], 0, &hw, &hh);
-            /* Verificar que el hint no se solape con el label */
-            int label_end_x = 0;
-            TTF_GetStringSize(e->font, MENU_LABELS[i], 0, &label_end_x, &hh);
-            int hint_x = mx + MENU_WIDTH - hw - 10;
-            int label_right = mx + 14 + label_end_x + 8;
-            if (hint_x > label_right) {
-                draw_text(e, MENU_HINTS[i], hint_x, ty2, 0x60, 0x65, 0x70);
-            }
+            draw_text(e, MENU_HINTS[i],
+                      mx + MENU_WIDTH - hw - 10, ty2,
+                      0x60, 0x65, 0x70);
         }
         iy += MENU_ITEM_H;
     }
@@ -247,10 +215,7 @@ static void render_filetree(Editor *e) {
 
     int btn_w = FTREE_TOGGLE_BTN_W;
     int btn_h = 40;
-    /* El boton toggle se centra en el area visible debajo de la tabbar */
-    int content_top = panel_y + TAB_BAR_HEIGHT;
-    int content_h   = panel_h - TAB_BAR_HEIGHT;
-    int btn_y = content_top + (content_h - btn_h) / 2;
+    int btn_y = panel_y + (panel_h - btn_h) / 2;
     int btn_x = panel_x + panel_w - btn_w;
     set_color(r, 0x2C, 0x31, 0x3C, 0xFF);
     SDL_FRect tbtn = {(float)btn_x, (float)btn_y, (float)btn_w, (float)btn_h};
@@ -258,29 +223,22 @@ static void render_filetree(Editor *e) {
     draw_text(e, "<", btn_x + 2, btn_y + (btn_h - FONT_SIZE) / 2,
               0x61, 0xAF, 0xEF);
 
-    /* Header del panel: debajo de la tabbar para que no quede tapado */
     int header_h = 26;
-    int header_y = content_top;
     set_color(r, 0x17, 0x1A, 0x21, 0xFF);
-    SDL_FRect hdr = {(float)panel_x, (float)header_y,
+    SDL_FRect hdr = {(float)panel_x, (float)panel_y,
                      (float)(panel_w - btn_w), (float)header_h};
     SDL_RenderFillRect(r, &hdr);
 
-    /* Titulo "CoffeeCode" si no hay carpeta, o nombre de carpeta si hay */
-    const char *rname = ft->root_path;
     char root_label[64];
-    if (rname && rname[0]) {
-        const char *s = rname + strlen(rname);
-        while (s > rname && *(s-1) != '/' && *(s-1) != '\\') s--;
-        snprintf(root_label, sizeof(root_label), " %s", *s ? s : rname);
-    } else {
-        snprintf(root_label, sizeof(root_label), " CoffeeCode");
-    }
+    const char *rname = ft->root_path;
+    const char *s = rname + strlen(rname);
+    while (s > rname && *(s-1) != '/' && *(s-1) != '\\') s--;
+    snprintf(root_label, sizeof(root_label), " %s", *s ? s : rname);
     draw_text(e, root_label, panel_x + 4,
-              header_y + (header_h - FONT_SIZE) / 2,
+              panel_y + (header_h - FONT_SIZE) / 2,
               0x61, 0xAF, 0xEF);
 
-    int visible_rows = (content_h - header_h) / FTREE_ITEM_H;
+    int visible_rows = (panel_h - header_h) / FTREE_ITEM_H;
     int vis_count    = ftree_visible_count(ft);
     int max_scroll   = vis_count - visible_rows;
     if (ft->scroll > max_scroll) ft->scroll = max_scroll;
@@ -294,7 +252,7 @@ static void render_filetree(Editor *e) {
         if (vis_idx < ft->scroll) continue;
         int row = vis_idx - ft->scroll;
 
-        int ey = header_y + header_h + row * FTREE_ITEM_H;
+        int ey = panel_y + header_h + row * FTREE_ITEM_H;
         int ex = panel_x + 4 + en->depth * FTREE_INDENT;
 
         if (ft->hovered == i) {
