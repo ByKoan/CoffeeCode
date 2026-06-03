@@ -68,14 +68,14 @@ static int draw_text(Editor *e, const char *text, int x, int y,
 
 static int get_line_text(Editor *e, int line, char *out, int max) {
     int cur_line = 0, col = 0;
-    size_t len = buf_length(&e->buf);
+    size_t len = buf_length(e->buf);
     for (size_t i = 0; i <= len && col < max - 1; i++) {
         if (cur_line == line) {
-            if (i == len || buf_char_at(&e->buf, i) == '\n') {
+            if (i == len || buf_char_at(e->buf, i) == '\n') {
                 out[col] = '\0';
                 return col;
             }
-            char c = buf_char_at(&e->buf, i);
+            char c = buf_char_at(e->buf, i);
             if (c == '\t') {
                 int spaces = TAB_SIZE - (col % TAB_SIZE);
                 for (int s = 0; s < spaces && col < max - 1; s++)
@@ -84,7 +84,7 @@ static int get_line_text(Editor *e, int line, char *out, int max) {
                 out[col++] = c;
             }
         } else {
-            if (i < len && buf_char_at(&e->buf, i) == '\n') cur_line++;
+            if (i < len && buf_char_at(e->buf, i) == '\n') cur_line++;
         }
     }
     out[col] = '\0';
@@ -627,7 +627,7 @@ static void render_shortcuts(Editor *e)
 static void render_scrollbar(Editor *e, int left_offset)
 {
     SDL_Renderer *r = e->renderer;
-    int total_lines   = buf_line_count(&e->buf);
+    int total_lines   = buf_line_count(e->buf);
     int text_height   = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
     int visible_lines = text_height / LINE_HEIGHT;
 
@@ -676,7 +676,7 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
 
     SDL_Renderer *r = e->renderer;
     int text_x = left_offset + GUTTER_WIDTH + PADDING_LEFT;
-    int total_lines = buf_line_count(&e->buf);
+    int total_lines = buf_line_count(e->buf);
 
     /* encontrar línea/col de from y to */
     int from_line = 0, from_col = 0;
@@ -685,12 +685,12 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
     /* recorrer para calcular línea/col de from */
     {
         int line = 0, col = 0;
-        size_t len = buf_length(&e->buf);
+        size_t len = buf_length(e->buf);
         for (size_t i = 0; i <= len; i++) {
             if (i == from) { from_line = line; from_col = col; }
             if (i == to)   { to_line   = line; to_col   = col; break; }
             if (i < len) {
-                if (buf_char_at(&e->buf, i) == '\n') { line++; col = 0; }
+                if (buf_char_at(e->buf, i) == '\n') { line++; col = 0; }
                 else col++;
             }
         }
@@ -711,7 +711,7 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
         } else {
             /* toda la línea hasta el final */
             size_t ls = editor_pos_from_line_col(e, li, 0);
-            size_t le = buf_line_end(&e->buf, ls);
+            size_t le = buf_line_end(e->buf, ls);
             col_end = (int)(le - ls) + 1; /* +1 para incluir el \n visualmente */
         }
 
@@ -739,23 +739,61 @@ void render_frame(Editor *e) {
     int text_top      = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
     int text_height   = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
     int visible_lines = text_height / LINE_HEIGHT;
-    int total_lines   = buf_line_count(&e->buf);
+    int total_lines   = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
     /* fondo */
     set_color(r, COL_BG);
     SDL_RenderClear(r);
 
+    /* ── Pantalla vacía cuando no hay ningún archivo abierto ── */
+    if (e->tab_count == 0) {
+        render_navbar(e);
+        render_tabbar(e);
+        if (e->ftree.open) render_filetree(e);
+        else               render_filetree_toggle_closed(e);
+        render_menu(e);
+
+        /* mensaje centrado */
+        const char *line1 = "No hay ningún archivo abierto";
+        const char *line2 = "Usa  Ctrl+O  para abrir un archivo, Ctrl+N  para uno nuevo o Ctrl+K para abrir una carpeta.";
+        int w1=0, w2=0, h=0;
+        TTF_GetStringSize(e->font, line1, 0, &w1, &h);
+        TTF_GetStringSize(e->font, line2, 0, &w2, &h);
+        int area_top  = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
+        int area_h    = e->win_h - area_top - STATUS_HEIGHT;
+        int cx        = e->win_w / 2;
+        int mid_y     = area_top + area_h / 2;
+        draw_text(e, line1, cx - w1/2, mid_y - LINE_HEIGHT,     0x6B, 0x72, 0x88);
+        draw_text(e, line2, cx - w2/2, mid_y + LINE_HEIGHT / 2, 0x45, 0x4C, 0x5E);
+
+        /* barra de estado mínima */
+        {
+            int sy = e->win_h - STATUS_HEIGHT;
+            set_color(r, COL_STATUS_BG);
+            SDL_FRect sb = {0, (float)sy, (float)e->win_w, (float)STATUS_HEIGHT};
+            SDL_RenderFillRect(r, &sb);
+            set_color(r, 0x35, 0x3A, 0x45, 0xFF);
+            SDL_FRect sep_s = {0, (float)sy, (float)e->win_w, 1};
+            SDL_RenderFillRect(r, &sep_s);
+            draw_text(e, "  CoffeeCode", 0, sy + (STATUS_HEIGHT - FONT_SIZE) / 2,
+                      0x98, 0xC3, 0x79);
+        }
+
+        SDL_RenderPresent(r);
+        return;
+    }
+
     /* actualizar lexer */
     {
         int in_block = 0;
-        for (int li = 0; li < e->lex.count; li++) {
-            if (e->lex.dirty[li]) {
+        for (int li = 0; li < e->lex->count; li++) {
+            if (e->lex->dirty[li]) {
                 char line_buf[4096];
                 get_line_text(e, li, line_buf, sizeof(line_buf));
                 in_block = lexer_tokenize_line(line_buf,
                                (int)strlen(line_buf),
-                               &e->lex.lines[li], in_block);
-                e->lex.dirty[li] = 0;
+                               &e->lex->lines[li], in_block);
+                e->lex->dirty[li] = 0;
             }
         }
     }
@@ -780,8 +818,8 @@ void render_frame(Editor *e) {
         char line_buf[4096];
         int  line_len = get_line_text(e, li, line_buf, sizeof(line_buf));
 
-        if (li < e->lex.count && e->lex.lines[li].count > 0) {
-            LineTokens *lt = &e->lex.lines[li];
+        if (li < e->lex->count && e->lex->lines[li].count > 0) {
+            LineTokens *lt = &e->lex->lines[li];
             int drawn_to = 0;
 
             for (int ti = 0; ti < lt->count; ti++) {
@@ -897,11 +935,10 @@ void render_frame(Editor *e) {
         SDL_FRect sep_status = {0, (float)sy, (float)e->win_w, 1};
         SDL_RenderFillRect(r, &sep_status);
 
-        char status[256];
-        snprintf(status, sizeof(status), "  %s%s  |  Ln %d, Col %d  |  CoffeeCode",
-                 e->filepath[0] ? e->filepath : "sin título",
-                 e->modified ? " *" : "",
-                 e->cursor_line + 1, e->cursor_col + 1);
+        char status[128];
+        snprintf(status, sizeof(status), " CoffeeCode | Ln %d, Col %d%s |",
+                 e->cursor_line + 1, e->cursor_col + 1,
+                 e->modified ? "  *" : "");
         draw_text(e, status, 0, sy + (STATUS_HEIGHT - FONT_SIZE) / 2,
                   0x98, 0xC3, 0x79);
     }

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <ctype.h>
 
 /* ── Geometría del menú (debe coincidir con render.c) ────────────────────── */
@@ -88,18 +89,7 @@ static void handle_ftree_click(Editor *e, int mx, int my) {
                 ftree_toggle(ft, i);
             } else {
                 /* Abrir archivo en el editor */
-                strncpy(e->filepath, en->path, sizeof(e->filepath) - 1);
-                buf_free(&e->buf);
-                buf_init(&e->buf);
                 editor_tab_open(e, en->path);
-                e->cursor_line = e->cursor_col = 0;
-                e->scroll_line = e->scroll_col = 0;
-                e->modified = 0;
-                int total = buf_line_count(&e->buf);
-                lexer_cache_free(&e->lex);
-                lexer_cache_init(&e->lex, total > 0 ? total : 1);
-                editor_update_lexer(e, 0);
-                editor_sync_cursor(e);
                 SDL_SetWindowTitle(e->window, en->path);
             }
             e->needs_redraw = 1;
@@ -139,12 +129,12 @@ static void handle_ftree_hover(Editor *e, int mx, int my) {
 
 /* ── helpers de cursor ───────────────────────────────────────────────────── */
 static void move_cursor(Editor *e, int line, int col) {
-    int total = buf_line_count(&e->buf);
+    int total = buf_line_count(e->buf);
     if (line < 0) line = 0;
     if (line >= total) line = total - 1;
     if (col  < 0) col  = 0;
     size_t pos = editor_pos_from_line_col(e, line, col);
-    buf_move_to(&e->buf, pos);
+    buf_move_to(e->buf, pos);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
@@ -181,7 +171,7 @@ static void move_col_left(Editor *e, int sel) {
             size_t from, to;
             if (editor_sel_range(e, &from, &to)) {
                 editor_sel_clear(e);
-                buf_move_to(&e->buf, from);
+                buf_move_to(e->buf, from);
                 editor_sync_cursor(e);
                 editor_ensure_visible(e);
                 e->needs_redraw = 1;
@@ -194,7 +184,7 @@ static void move_col_left(Editor *e, int sel) {
         move_cursor(e, e->cursor_line, e->cursor_col - 1);
     } else if (e->cursor_line > 0) {
         int prev = e->cursor_line - 1;
-        size_t end = buf_line_end(&e->buf, editor_pos_from_line_col(e, prev, 0));
+        size_t end = buf_line_end(e->buf, editor_pos_from_line_col(e, prev, 0));
         int lc = (int)(end - editor_pos_from_line_col(e, prev, 0));
         move_cursor(e, prev, lc);
     }
@@ -213,7 +203,7 @@ static void move_col_right(Editor *e, int sel) {
             size_t from, to;
             if (editor_sel_range(e, &from, &to)) {
                 editor_sel_clear(e);
-                buf_move_to(&e->buf, to);
+                buf_move_to(e->buf, to);
                 editor_sync_cursor(e);
                 editor_ensure_visible(e);
                 e->needs_redraw = 1;
@@ -222,10 +212,10 @@ static void move_col_right(Editor *e, int sel) {
             editor_sel_clear(e);
         }
     }
-    size_t pos = buf_cursor_pos(&e->buf);
-    size_t len = buf_length(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
+    size_t len = buf_length(e->buf);
     if (pos < len) {
-        buf_move_right(&e->buf);
+        buf_move_right(e->buf);
         editor_sync_cursor(e);
         editor_ensure_visible(e);
         e->needs_redraw = 1;
@@ -238,7 +228,7 @@ static void move_home(Editor *e, int sel) {
 
 static void move_end(Editor *e, int sel) {
     size_t pos = editor_pos_from_line_col(e, e->cursor_line, 0);
-    size_t end = buf_line_end(&e->buf, pos);
+    size_t end = buf_line_end(e->buf, pos);
     int col = (int)(end - pos);
     move_cursor_select(e, e->cursor_line, col, sel);
 }
@@ -252,18 +242,18 @@ static void move_word_left(Editor *e, int sel) {
     } else if (!sel) {
         editor_sel_clear(e);
     }
-    size_t pos = buf_cursor_pos(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
     if (pos == 0) return;
     pos--;
     /* salta espacios/no-word */
-    while (pos > 0 && !isalnum((unsigned char)buf_char_at(&e->buf, pos)) &&
-           buf_char_at(&e->buf, pos) != '_')
+    while (pos > 0 && !isalnum((unsigned char)buf_char_at(e->buf, pos)) &&
+           buf_char_at(e->buf, pos) != '_')
         pos--;
     /* salta la palabra */
-    while (pos > 0 && (isalnum((unsigned char)buf_char_at(&e->buf, pos - 1)) ||
-                       buf_char_at(&e->buf, pos - 1) == '_'))
+    while (pos > 0 && (isalnum((unsigned char)buf_char_at(e->buf, pos - 1)) ||
+                       buf_char_at(e->buf, pos - 1) == '_'))
         pos--;
-    buf_move_to(&e->buf, pos);
+    buf_move_to(e->buf, pos);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
@@ -277,17 +267,17 @@ static void move_word_right(Editor *e, int sel) {
     } else if (!sel) {
         editor_sel_clear(e);
     }
-    size_t pos = buf_cursor_pos(&e->buf);
-    size_t len = buf_length(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
+    size_t len = buf_length(e->buf);
     /* salta la palabra actual */
-    while (pos < len && (isalnum((unsigned char)buf_char_at(&e->buf, pos)) ||
-                         buf_char_at(&e->buf, pos) == '_'))
+    while (pos < len && (isalnum((unsigned char)buf_char_at(e->buf, pos)) ||
+                         buf_char_at(e->buf, pos) == '_'))
         pos++;
     /* salta espacios/no-word */
-    while (pos < len && !isalnum((unsigned char)buf_char_at(&e->buf, pos)) &&
-           buf_char_at(&e->buf, pos) != '_')
+    while (pos < len && !isalnum((unsigned char)buf_char_at(e->buf, pos)) &&
+           buf_char_at(e->buf, pos) != '_')
         pos++;
-    buf_move_to(&e->buf, pos);
+    buf_move_to(e->buf, pos);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
@@ -303,12 +293,12 @@ static int delete_selection(Editor *e) {
     size_t len = to - from;
     char *tmp = malloc(len + 1);
     if (tmp) {
-        buf_get_text(&e->buf, from, to, tmp);
+        buf_get_text(e->buf, from, to, tmp);
         editor_undo_push_delete(e, from, tmp, len);
         free(tmp);
     }
-    buf_delete_range(&e->buf, from, to);
-    buf_move_to(&e->buf, from);
+    buf_delete_range(e->buf, from, to);
+    buf_move_to(e->buf, from);
     editor_sel_clear(e);
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line);
@@ -320,17 +310,17 @@ static int delete_selection(Editor *e) {
 
 static void insert_newline(Editor *e) {
     delete_selection(e);
-    size_t pos = buf_cursor_pos(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
     editor_undo_push_insert(e, pos, "\n", 1);
-    buf_insert(&e->buf, '\n');
+    buf_insert(e->buf, '\n');
     editor_sync_cursor(e);
     size_t prev_start = editor_pos_from_line_col(e, e->cursor_line - 1, 0);
-    size_t len = buf_length(&e->buf);
+    size_t len = buf_length(e->buf);
     size_t i = prev_start;
     while (i < len) {
-        char c = buf_char_at(&e->buf, i);
-        if (c == ' ')  { buf_insert(&e->buf, ' ');  i++; }
-        else if (c == '\t') { buf_insert(&e->buf, '\t'); i++; }
+        char c = buf_char_at(e->buf, i);
+        if (c == ' ')  { buf_insert(e->buf, ' ');  i++; }
+        else if (c == '\t') { buf_insert(e->buf, '\t'); i++; }
         else break;
     }
     editor_sync_cursor(e);
@@ -342,12 +332,12 @@ static void insert_newline(Editor *e) {
 static void insert_tab(Editor *e) {
     delete_selection(e);
     int spaces = TAB_SIZE - (e->cursor_col % TAB_SIZE);
-    size_t pos = buf_cursor_pos(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
     char tmp[TAB_SIZE + 1];
     for (int i = 0; i < spaces; i++) tmp[i] = ' ';
     tmp[spaces] = '\0';
     editor_undo_push_insert(e, pos, tmp, spaces);
-    for (int i = 0; i < spaces; i++) buf_insert(&e->buf, ' ');
+    for (int i = 0; i < spaces; i++) buf_insert(e->buf, ' ');
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line);
     editor_ensure_visible(e);
@@ -356,12 +346,12 @@ static void insert_tab(Editor *e) {
 
 static void do_backspace(Editor *e) {
     if (e->sel_active) { delete_selection(e); return; }
-    if (buf_cursor_pos(&e->buf) == 0) return;
+    if (buf_cursor_pos(e->buf) == 0) return;
     int prev_line = e->cursor_line;
-    size_t pos = buf_cursor_pos(&e->buf) - 1;
-    char c = buf_char_at(&e->buf, pos);
+    size_t pos = buf_cursor_pos(e->buf) - 1;
+    char c = buf_char_at(e->buf, pos);
     editor_undo_push_delete(e, pos, &c, 1);
-    buf_delete_before(&e->buf);
+    buf_delete_before(e->buf);
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line < prev_line ? e->cursor_line : prev_line);
     editor_ensure_visible(e);
@@ -370,11 +360,11 @@ static void do_backspace(Editor *e) {
 
 static void do_delete(Editor *e) {
     if (e->sel_active) { delete_selection(e); return; }
-    if (buf_cursor_pos(&e->buf) >= buf_length(&e->buf)) return;
-    size_t pos = buf_cursor_pos(&e->buf);
-    char c = buf_char_at(&e->buf, pos);
+    if (buf_cursor_pos(e->buf) >= buf_length(e->buf)) return;
+    size_t pos = buf_cursor_pos(e->buf);
+    char c = buf_char_at(e->buf, pos);
     editor_undo_push_delete(e, pos, &c, 1);
-    buf_delete_after(&e->buf);
+    buf_delete_after(e->buf);
     editor_update_lexer(e, e->cursor_line);
     e->modified = 1; e->needs_redraw = 1;
 }
@@ -389,13 +379,15 @@ static void new_file(Editor *e) {
 static void save_file(Editor *e) {
     if (!e->filepath[0])
         strncpy(e->filepath, "untitled.c", sizeof(e->filepath) - 1);
-    if (buf_save_file(&e->buf, e->filepath)) {
+    if (buf_save_file(e->buf, e->filepath)) {
         e->modified = 0;
         SDL_SetWindowTitle(e->window, e->filepath);
-        /* sync filepath and modified flag back to tab */
+        /* sync filepath, modified y mtime de vuelta al tab */
         if (e->tab_count > 0) {
-            strncpy(e->tabs[e->active_tab].filepath, e->filepath, 511);
-            e->tabs[e->active_tab].modified = 0;
+            EditorTab *_t = &e->tabs[e->active_tab];
+            strncpy(_t->filepath, e->filepath, 511);
+            _t->modified = 0;
+            { struct stat _st; _t->loaded_mtime = (stat(e->filepath, &_st) == 0) ? (long)_st.st_mtime : 0; }
         }
     }
     e->needs_redraw = 1;
@@ -466,7 +458,7 @@ static void menu_exec(Editor *e, int item) {
 static void handle_scroll(Editor *e, float dy) {
     int lines = (int)(dy * 3);
     e->scroll_line -= lines;
-    int total = buf_line_count(&e->buf);
+    int total = buf_line_count(e->buf);
     if (e->scroll_line < 0) e->scroll_line = 0;
     if (e->scroll_line >= total) e->scroll_line = total - 1;
     e->needs_redraw = 1;
@@ -481,7 +473,7 @@ static void handle_text_click(Editor *e, int mx, int my) {
     int vis_col  = (mx - text_x) / e->char_w;
     int line = e->scroll_line + vis_line;
     int col  = e->scroll_col  + vis_col;
-    int total = buf_line_count(&e->buf);
+    int total = buf_line_count(e->buf);
     if (line >= total) line = total - 1;
     editor_sel_clear(e);
     move_cursor(e, line, col);
@@ -493,9 +485,9 @@ static void select_all(Editor *e) {
     e->sel_anchor_line = 0;
     e->sel_anchor_col  = 0;
     /* mover cursor al final del documento */
-    int last = buf_line_count(&e->buf) - 1;
-    size_t end_pos = buf_length(&e->buf);
-    buf_move_to(&e->buf, end_pos);
+    int last = buf_line_count(e->buf) - 1;
+    size_t end_pos = buf_length(e->buf);
+    buf_move_to(e->buf, end_pos);
     editor_sync_cursor(e);
     (void)last;
     e->needs_redraw = 1;
@@ -508,7 +500,7 @@ static void do_copy(Editor *e) {
     size_t len = to - from;
     char *tmp = malloc(len + 1);
     if (!tmp) return;
-    buf_get_text(&e->buf, from, to, tmp);
+    buf_get_text(e->buf, from, to, tmp);
     tmp[len] = '\0';
     SDL_SetClipboardText(tmp);
     free(tmp);
@@ -528,9 +520,9 @@ static void do_paste(Editor *e) {
 
     delete_selection(e);  /* borra selección si la hay */
 
-    size_t pos = buf_cursor_pos(&e->buf);
+    size_t pos = buf_cursor_pos(e->buf);
     editor_undo_push_insert(e, pos, text, len);
-    buf_insert_str(&e->buf, text, len);
+    buf_insert_str(e->buf, text, len);
     SDL_free(text);
     editor_sync_cursor(e);
     editor_update_lexer(e, e->cursor_line);
@@ -542,19 +534,19 @@ static void do_paste(Editor *e) {
 static void duplicate_line(Editor *e) {
     /* Obtener texto de la línea actual */
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
-    size_t line_end   = buf_line_end(&e->buf, line_start);
+    size_t line_end   = buf_line_end(e->buf, line_start);
     size_t len        = line_end - line_start;
 
     char *tmp = malloc(len + 2);
     if (!tmp) return;
-    buf_get_text(&e->buf, line_start, line_end, tmp);
+    buf_get_text(e->buf, line_start, line_end, tmp);
     tmp[len]     = '\n';
     tmp[len + 1] = '\0';
 
     /* Insertar al final de la línea */
-    buf_move_to(&e->buf, line_end);
+    buf_move_to(e->buf, line_end);
     editor_undo_push_insert(e, line_end, tmp, len + 1);
-    buf_insert_str(&e->buf, tmp, len + 1);
+    buf_insert_str(e->buf, tmp, len + 1);
     free(tmp);
 
     editor_sync_cursor(e);
@@ -581,12 +573,12 @@ static void toggle_line_comment(Editor *e) {
     size_t plen = strlen(prefix);
 
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
-    size_t line_end   = buf_line_end(&e->buf, line_start);
+    size_t line_end   = buf_line_end(e->buf, line_start);
     size_t line_len   = line_end - line_start;
 
     char *line_text = malloc(line_len + 1);
     if (!line_text) return;
-    buf_get_text(&e->buf, line_start, line_end, line_text);
+    buf_get_text(e->buf, line_start, line_end, line_text);
     line_text[line_len] = '\0';
 
     /* Omitir espacios iniciales para el check */
@@ -599,15 +591,15 @@ static void toggle_line_comment(Editor *e) {
         /* ya está comentado → quitar prefijo */
         size_t del_pos = line_start + indent;
         editor_undo_push_delete(e, del_pos, prefix, plen);
-        buf_delete_range(&e->buf, del_pos, del_pos + plen);
-        buf_move_to(&e->buf, del_pos);
+        buf_delete_range(e->buf, del_pos, del_pos + plen);
+        buf_move_to(e->buf, del_pos);
     } else {
         /* sin comentar → añadir prefijo en la posición de sangría */
         size_t ins_pos = line_start + indent;
         editor_undo_push_insert(e, ins_pos, prefix, plen);
-        buf_move_to(&e->buf, ins_pos);
-        buf_insert_str(&e->buf, prefix, plen);
-        buf_move_to(&e->buf, ins_pos + plen);
+        buf_move_to(e->buf, ins_pos);
+        buf_insert_str(e->buf, prefix, plen);
+        buf_move_to(e->buf, ins_pos + plen);
     }
     free(line_text);
 
@@ -620,14 +612,14 @@ static void toggle_line_comment(Editor *e) {
 /* ── NUEVO: Ctrl+L — seleccionar línea completa ──────────────────────────── */
 static void select_line(Editor *e) {
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
-    size_t line_end   = buf_line_end(&e->buf, line_start);
+    size_t line_end   = buf_line_end(e->buf, line_start);
     /* si no es la última línea, incluye el \n */
-    if (line_end < buf_length(&e->buf)) line_end++;
+    if (line_end < buf_length(e->buf)) line_end++;
 
     e->sel_active      = 1;
     e->sel_anchor_line = e->cursor_line;
     e->sel_anchor_col  = 0;
-    buf_move_to(&e->buf, line_end);
+    buf_move_to(e->buf, line_end);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
@@ -645,12 +637,12 @@ static void select_line(Editor *e) {
 static size_t find_next(Editor *e, size_t start_pos) {
     FindBar *f = &e->find;
     if (f->query_len == 0) return (size_t)-1;
-    size_t len = buf_length(&e->buf);
+    size_t len = buf_length(e->buf);
     size_t qlen = (size_t)f->query_len;
     for (size_t i = start_pos; i + qlen <= len; i++) {
         int match = 1;
         for (size_t j = 0; j < qlen && match; j++) {
-            char bc = buf_char_at(&e->buf, i + j);
+            char bc = buf_char_at(e->buf, i + j);
             char qc = f->query[j];
             /* búsqueda case-insensitive */
             if (tolower((unsigned char)bc) != tolower((unsigned char)qc))
@@ -663,7 +655,7 @@ static size_t find_next(Editor *e, size_t start_pos) {
 
 static void find_jump(Editor *e) {
     if (e->find.query_len == 0) return;
-    size_t from = buf_cursor_pos(&e->buf) + 1;
+    size_t from = buf_cursor_pos(e->buf) + 1;
     size_t hit  = find_next(e, from);
     if (hit == (size_t)-1) {
         /* wrap around */
@@ -674,7 +666,7 @@ static void find_jump(Editor *e) {
         e->needs_redraw = 1;
         return;
     }
-    buf_move_to(&e->buf, hit);
+    buf_move_to(e->buf, hit);
     editor_sync_cursor(e);
     e->find.result_line = e->cursor_line;
     e->find.result_col  = e->cursor_col;
@@ -682,7 +674,7 @@ static void find_jump(Editor *e) {
     e->sel_active       = 1;
     e->sel_anchor_line  = e->cursor_line;
     e->sel_anchor_col   = e->cursor_col;
-    buf_move_to(&e->buf, hit + (size_t)e->find.query_len);
+    buf_move_to(e->buf, hit + (size_t)e->find.query_len);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
@@ -700,17 +692,17 @@ static void do_replace(Editor *e) {
             if (to - from == qlen) {
                 int match = 1;
                 for (size_t j = 0; j < qlen && match; j++) {
-                    char bc = buf_char_at(&e->buf, from + j);
+                    char bc = buf_char_at(e->buf, from + j);
                     char qc = f->query[j];
                     if (tolower((unsigned char)bc) != tolower((unsigned char)qc))
                         match = 0;
                 }
                 if (match) {
                     /* borrar el rango seleccionado y sustituir */
-                    buf_delete_range(&e->buf, from, from + qlen);
-                    buf_move_to(&e->buf, from);
+                    buf_delete_range(e->buf, from, from + qlen);
+                    buf_move_to(e->buf, from);
                     if (f->replace_len > 0)
-                        buf_insert_str(&e->buf, f->replace, (size_t)f->replace_len);
+                        buf_insert_str(e->buf, f->replace, (size_t)f->replace_len);
                     editor_sync_cursor(e);
                     editor_update_lexer(e, 0);
                 }
@@ -803,7 +795,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         /* arratre de scrollbar */
         if (e->scrollbar_dragging) {
             int text_height   = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
-            int total_lines   = buf_line_count(&e->buf);
+            if (e->tab_count == 0) break;
+            int total_lines   = buf_line_count(e->buf);
             int visible_lines = text_height / LINE_HEIGHT;
             int max_scroll    = total_lines - visible_lines;
             if (max_scroll < 0) max_scroll = 0;
@@ -822,14 +815,14 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         }
 
         /* arrastre para seleccionar texto */
-        if (e->mouse_selecting) {
+        if (e->mouse_selecting && e->tab_count > 0) {
             int left    = get_left_offset(e);
             int text_x  = left + GUTTER_WIDTH + PADDING_LEFT;
             int cw      = (e->char_w > 0 ? e->char_w : 8);
             /* calcular línea visual */
             int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
             int line = e->scroll_line + vis_line;
-            int total = buf_line_count(&e->buf);
+            int total = buf_line_count(e->buf);
             if (line < 0)       line = 0;
             if (line >= total)  line = total - 1;
             /* calcular columna — limitar al largo real de la línea */
@@ -837,7 +830,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             if (vis_col < 0) vis_col = 0;
             /* obtener longitud real de la línea */
             size_t ls = editor_pos_from_line_col(e, line, 0);
-            size_t le = buf_line_end(&e->buf, ls);
+            size_t le = buf_line_end(e->buf, ls);
             int line_len = (int)(le - ls);
             if (vis_col > line_len) vis_col = line_len;
             int col = vis_col;
@@ -848,7 +841,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             }
             /* mover cursor sin tocar el ancla */
             size_t pos = editor_pos_from_line_col(e, line, col);
-            buf_move_to(&e->buf, pos);
+            buf_move_to(e->buf, pos);
             editor_sync_cursor(e);
             editor_ensure_visible(e);
             e->needs_redraw = 1;
@@ -977,21 +970,21 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 int cw     = (e->char_w > 0 ? e->char_w : 8);
                 int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
                 int line = e->scroll_line + vis_line;
-                int total = buf_line_count(&e->buf);
+                int total = buf_line_count(e->buf);
                 if (line < 0)      line = 0;
                 if (line >= total) line = total - 1;
                 /* columna con scroll y limitada al largo real */
                 int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
                 if (vis_col < 0) vis_col = 0;
                 size_t ls = editor_pos_from_line_col(e, line, 0);
-                size_t le = buf_line_end(&e->buf, ls);
+                size_t le = buf_line_end(e->buf, ls);
                 int line_len = (int)(le - ls);
                 if (vis_col > line_len) vis_col = line_len;
                 int col = vis_col;
 
                 editor_sel_clear(e);
                 size_t pos = editor_pos_from_line_col(e, line, col);
-                buf_move_to(&e->buf, pos);
+                buf_move_to(e->buf, pos);
                 editor_sync_cursor(e);
                 editor_ensure_visible(e);
                 e->needs_redraw = 1;
@@ -1031,7 +1024,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             }
             break;
         }
-        buf_insert_str(&e->buf, ev->text.text, strlen(ev->text.text));
+        if (e->tab_count == 0) break;
+        buf_insert_str(e->buf, ev->text.text, strlen(ev->text.text));
         editor_sync_cursor(e);
         editor_update_lexer(e, e->cursor_line);
         editor_ensure_visible(e);
@@ -1111,8 +1105,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             case SDLK_TAB: editor_tab_switch(e, (e->active_tab+1) % e->tab_count); break;
             case SDLK_HOME: move_cursor_select(e, 0, 0, shift); break;
             case SDLK_END: {
-                int t = buf_line_count(&e->buf) - 1;
-                size_t ep = buf_line_end(&e->buf,
+                int t = buf_line_count(e->buf) - 1;
+                size_t ep = buf_line_end(e->buf,
                     editor_pos_from_line_col(e, t, 0));
                 size_t sp = editor_pos_from_line_col(e, t, 0);
                 move_cursor_select(e, t, (int)(ep - sp), shift);
@@ -1142,15 +1136,15 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                     size_t ls = editor_pos_from_line_col(e, e->cursor_line, 0);
                     int removed = 0;
                     for (int i = 0; i < TAB_SIZE; i++) {
-                        if (buf_char_at(&e->buf, ls) == ' ') {
+                        if (buf_char_at(e->buf, ls) == ' ') {
                             char c = ' ';
                             editor_undo_push_delete(e, ls, &c, 1);
-                            buf_delete_range(&e->buf, ls, ls + 1);
+                            buf_delete_range(e->buf, ls, ls + 1);
                             removed++;
                         } else break;
                     }
                     if (removed) {
-                        buf_move_to(&e->buf, ls);
+                        buf_move_to(e->buf, ls);
                         editor_sync_cursor(e);
                         editor_update_lexer(e, e->cursor_line);
                         editor_ensure_visible(e);

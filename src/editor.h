@@ -54,6 +54,7 @@ typedef struct {
     UndoStack  undo;
     char       filepath[512];
     int        modified;
+    long       loaded_mtime;  /* mtime del fichero en la última carga desde disco */
     int        cursor_line, cursor_col;
     int        scroll_line, scroll_col;
     int        sel_active;
@@ -96,9 +97,11 @@ typedef struct {
     int           tab_count;
     int           active_tab;
 
-    /* buffer de texto (apunta al tab activo — acceso directo) */
-    Buffer        buf;
-    LexerCache    lex;
+    /* Punteros al tab activo — NUNCA copias por valor.
+     * Apuntan directamente a tabs[active_tab].buf/lex/undo;
+     * se actualizan en editor_tab_load_state(). */
+    Buffer       *buf;
+    LexerCache   *lex;
 
     /* vista */
     int           scroll_line;
@@ -123,7 +126,7 @@ typedef struct {
     FileTree      ftree;
 
     /* ── NUEVO: undo/redo ──────────────────────────────────────────────── */
-    UndoStack     undo;
+    UndoStack    *undo;
 
     /* ── NUEVO: barra de búsqueda (Ctrl+F) ────────────────────────────── */
     FindBar       find;
