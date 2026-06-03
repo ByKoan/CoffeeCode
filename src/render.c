@@ -66,25 +66,28 @@ static int draw_text(Editor *e, const char *text, int x, int y,
     return w;
 }
 
+/*
+ * get_line_text — O(longitud de línea), no O(n).
+ * Usa el índice de líneas del Buffer para saltar directamente al inicio
+ * de la línea pedida, evitando iterar desde el principio del archivo.
+ */
 static int get_line_text(Editor *e, int line, char *out, int max) {
-    int cur_line = 0, col = 0;
-    size_t len = buf_length(e->buf);
-    for (size_t i = 0; i <= len && col < max - 1; i++) {
-        if (cur_line == line) {
-            if (i == len || buf_char_at(e->buf, i) == '\n') {
-                out[col] = '\0';
-                return col;
-            }
-            char c = buf_char_at(e->buf, i);
-            if (c == '\t') {
-                int spaces = TAB_SIZE - (col % TAB_SIZE);
-                for (int s = 0; s < spaces && col < max - 1; s++)
-                    out[col++] = ' ';
-            } else {
-                out[col++] = c;
-            }
+    const Buffer *b = e->buf;
+    if (line < 0 || line >= buf_line_count(b)) { out[0] = '\0'; return 0; }
+
+    size_t start = buf_line_start(b, b->line_index[line]);
+    size_t total = buf_length(b);
+    int col = 0;
+
+    for (size_t i = start; i < total && col < max - 1; i++) {
+        char c = buf_char_at(b, i);
+        if (c == '\n') break;
+        if (c == '\t') {
+            int spaces = TAB_SIZE - (col % TAB_SIZE);
+            for (int s = 0; s < spaces && col < max - 1; s++)
+                out[col++] = ' ';
         } else {
-            if (i < len && buf_char_at(e->buf, i) == '\n') cur_line++;
+            out[col++] = c;
         }
     }
     out[col] = '\0';
@@ -753,18 +756,27 @@ void render_frame(Editor *e) {
         else               render_filetree_toggle_closed(e);
         render_menu(e);
 
-        /* mensaje centrado */
+        /* mensaje centrado — adaptado al ancho disponible */
         const char *line1 = "No hay ningún archivo abierto";
-        const char *line2 = "Usa  Ctrl+O  para abrir un archivo, Ctrl+N  para uno nuevo o Ctrl+K para abrir una carpeta.";
-        int w1=0, w2=0, h=0;
+        const char *hint1 = "Ctrl+O  Abrir archivo";
+        const char *hint2 = "Ctrl+N  Nuevo archivo";
+        const char *hint3 = "Ctrl+K  Abrir carpeta";
+        int w1=0, wh=0, h=0;
         TTF_GetStringSize(e->font, line1, 0, &w1, &h);
-        TTF_GetStringSize(e->font, line2, 0, &w2, &h);
+        TTF_GetStringSize(e->font, hint1, 0, &wh, &h);
+        int left_off  = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+        int area_left = left_off;
+        int area_w    = e->win_w - area_left;
         int area_top  = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
         int area_h    = e->win_h - area_top - STATUS_HEIGHT;
-        int cx        = e->win_w / 2;
+        int cx        = area_left + area_w / 2;
         int mid_y     = area_top + area_h / 2;
-        draw_text(e, line1, cx - w1/2, mid_y - LINE_HEIGHT,     0x6B, 0x72, 0x88);
-        draw_text(e, line2, cx - w2/2, mid_y + LINE_HEIGHT / 2, 0x45, 0x4C, 0x5E);
+        /* título */
+        draw_text(e, line1, cx - w1/2, mid_y - LINE_HEIGHT * 2, 0x6B, 0x72, 0x88);
+        /* atajos en tres líneas separadas */
+        draw_text(e, hint1, cx - wh/2, mid_y,                  0x45, 0x4C, 0x5E);
+        draw_text(e, hint2, cx - wh/2, mid_y + LINE_HEIGHT,     0x45, 0x4C, 0x5E);
+        draw_text(e, hint3, cx - wh/2, mid_y + LINE_HEIGHT * 2, 0x45, 0x4C, 0x5E);
 
         /* barra de estado mínima */
         {

@@ -3,13 +3,109 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ── helpers internos ───────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════
+ * ÍNDICE DE LÍNEAS
+ * ──────────────────────────────────────────────────────────────────────────
+ * line_index[i] = posición lógica del primer byte de la línea i.
+ * Invariante: line_index[0] == 0 siempre.
+ *
+ * Ventaja clave: buf_line_count, buf_line_start y buf_line_col pasan de
+ * O(n) a O(1), eliminando el cuello de botella al abrir/editar archivos
+ * grandes.  El índice se reconstruye en O(n) solo al cargar el archivo;
+ * en cada insert/delete se actualiza de forma incremental en O(líneas
+ * afectadas), que es O(1) para cambios en una sola posición.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Asegura capacidad para `need` entradas en el índice */
+static int li_reserve(Buffer *b, int need) {
+    if (need <= b->line_cap) return 1;
+    int new_cap = b->line_cap * 2;
+    if (new_cap < need) new_cap = need + 64;
+    size_t *nd = realloc(b->line_index, (size_t)new_cap * sizeof(size_t));
+    if (!nd) return 0;
+    b->line_index = nd;
+    b->line_cap   = new_cap;
+    return 1;
+}
+
+/*
+ * Reconstruye el índice completo en una sola pasada O(n).
+ * Se llama solo desde buf_load_file (o tras cambios masivos).
+ */
+static int li_rebuild(Buffer *b) {
+    size_t len = buf_length(b);
+
+    /* Primera línea siempre en offset 0 */
+    if (!li_reserve(b, 1)) return 0;
+    b->line_index[0] = 0;
+    b->line_count    = 1;
+
+    for (size_t i = 0; i < len; i++) {
+        if (buf_char_at(b, i) == '\n') {
+            if (!li_reserve(b, b->line_count + 1)) return 0;
+            b->line_index[b->line_count] = i + 1;
+            b->line_count++;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Actualiza el índice tras insertar `len` bytes en la posición lógica `pos`.
+ * Si alguno de los bytes es '\n', se añade la entrada correspondiente.
+ * Las entradas posteriores al punto de inserción se desplazan +len.
+ */
+static void li_after_insert(Buffer *b, size_t pos, const char *text, size_t len) {
+    /* 1. Desplazar todas las entradas > pos */
+    for (int i = 0; i < b->line_count; i++)
+        if (b->line_index[i] > pos)
+            b->line_index[i] += len;
+
+    /* 2. Insertar nuevas entradas para cada '\n' en el texto insertado */
+    for (size_t k = 0; k < len; k++) {
+        if (text[k] == '\n') {
+            size_t new_start = pos + k + 1;
+            /* Encontrar posición de inserción (mantener orden) */
+            int ins = b->line_count;
+            for (int i = 1; i < b->line_count; i++) {
+                if (b->line_index[i] > new_start) { ins = i; break; }
+            }
+            if (!li_reserve(b, b->line_count + 1)) return;
+            memmove(&b->line_index[ins + 1], &b->line_index[ins],
+                    (size_t)(b->line_count - ins) * sizeof(size_t));
+            b->line_index[ins] = new_start;
+            b->line_count++;
+        }
+    }
+}
+
+/*
+ * Actualiza el índice tras borrar el rango lógico [from, to).
+ * Elimina entradas de línea dentro del rango y ajusta las posteriores.
+ */
+static void li_after_delete(Buffer *b, size_t from, size_t to) {
+    size_t del = to - from;
+
+    /* Eliminar entradas cuyo inicio cae dentro de [from, to) */
+    int wr = 0;
+    for (int i = 0; i < b->line_count; i++) {
+        size_t s = b->line_index[i];
+        if (s >= from && s < to) continue;          /* borrar */
+        b->line_index[wr++] = (s >= to) ? s - del : s;
+    }
+    b->line_count = wr;
+    if (b->line_count == 0) {
+        b->line_index[0] = 0;
+        b->line_count    = 1;
+    }
+}
+
+/* ── helpers internos del gap buffer ────────────────────────────────────── */
 
 static size_t gap_size(const Buffer *b) {
     return b->gap_end - b->gap_start;
 }
 
-/* Asegura que el hueco tenga al menos `need` bytes */
 static int ensure_gap(Buffer *b, size_t need) {
     if (gap_size(b) >= need) return 1;
 
@@ -21,7 +117,6 @@ static int ensure_gap(Buffer *b, size_t need) {
     if (!nd) return 0;
     b->data = nd;
 
-    /* mueve el bloque derecho para abrir espacio */
     size_t right_len = old_size - b->gap_end;
     memmove(b->data + new_size - right_len,
             b->data + b->gap_end,
@@ -32,13 +127,11 @@ static int ensure_gap(Buffer *b, size_t need) {
     return 1;
 }
 
-/* Mueve el hueco a la posición lógica `pos` */
 static void move_gap_to(Buffer *b, size_t pos) {
     size_t cur = b->gap_start;
     if (pos == cur) return;
 
     if (pos < cur) {
-        /* mover texto de [pos, cur) hacia la derecha (dentro del hueco) */
         size_t len = cur - pos;
         memmove(b->data + b->gap_end - len,
                 b->data + pos,
@@ -46,7 +139,6 @@ static void move_gap_to(Buffer *b, size_t pos) {
         b->gap_start = pos;
         b->gap_end  -= len;
     } else {
-        /* mover texto de [gap_end, gap_end+(pos-cur)) hacia la izquierda */
         size_t len = pos - cur;
         memmove(b->data + cur,
                 b->data + b->gap_end,
@@ -56,7 +148,6 @@ static void move_gap_to(Buffer *b, size_t pos) {
     }
 }
 
-/* Convierte posición lógica → índice físico en el array */
 static size_t phys(const Buffer *b, size_t pos) {
     return pos < b->gap_start ? pos : pos + gap_size(b);
 }
@@ -69,39 +160,57 @@ int buf_init(Buffer *b) {
     b->size      = BUFFER_INIT_SIZE;
     b->gap_start = 0;
     b->gap_end   = BUFFER_INIT_SIZE;
+
+    b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
+    if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
+    b->line_cap      = LINE_INDEX_INIT;
+    b->line_index[0] = 0;
+    b->line_count    = 1;
     return 1;
 }
 
 void buf_free(Buffer *b) {
     free(b->data);
+    free(b->line_index);
     b->data = NULL;
+    b->line_index = NULL;
     b->size = b->gap_start = b->gap_end = 0;
+    b->line_count = 0;
+    b->line_cap   = 0;
 }
 
 /* ── edición ────────────────────────────────────────────────────────────── */
 
 void buf_insert(Buffer *b, char c) {
     if (!ensure_gap(b, 1)) return;
+    size_t pos = b->gap_start;
     b->data[b->gap_start++] = c;
+    li_after_insert(b, pos, &c, 1);
 }
 
 void buf_insert_str(Buffer *b, const char *s, size_t len) {
     if (!ensure_gap(b, len)) return;
+    size_t pos = b->gap_start;
     memcpy(b->data + b->gap_start, s, len);
     b->gap_start += len;
+    li_after_insert(b, pos, s, len);
 }
 
 void buf_delete_before(Buffer *b) {
     if (b->gap_start == 0) return;
+    size_t pos = b->gap_start - 1;
+    li_after_delete(b, pos, pos + 1);
     b->gap_start--;
 }
 
 void buf_delete_after(Buffer *b) {
     if (b->gap_end == b->size) return;
+    size_t pos = b->gap_start;
+    li_after_delete(b, pos, pos + 1);
     b->gap_end++;
 }
 
-/* ── NUEVO: edición de rangos ───────────────────────────────────────────── */
+/* ── edición de rangos ───────────────────────────────────────────────────── */
 
 void buf_delete_range(Buffer *b, size_t from, size_t to) {
     size_t len = buf_length(b);
@@ -109,7 +218,7 @@ void buf_delete_range(Buffer *b, size_t from, size_t to) {
     if (to   > len) to   = len;
     if (from >= to) return;
 
-    /* Mover el hueco a `from`, luego extenderlo hasta `to` */
+    li_after_delete(b, from, to);
     move_gap_to(b, from);
     b->gap_end += (to - from);
 }
@@ -162,30 +271,46 @@ size_t buf_cursor_pos(const Buffer *b) {
     return b->gap_start;
 }
 
+/* O(1) — sólo consulta el índice */
 int buf_line_count(const Buffer *b) {
-    size_t len = buf_length(b);
-    int lines = 1;
-    for (size_t i = 0; i < len; i++)
-        if (buf_char_at(b, i) == '\n') lines++;
-    return lines;
+    return b->line_count;
 }
 
-int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
-    *line = 0; *col = 0;
-    for (size_t i = 0; i < pos; i++) {
-        if (buf_char_at(b, i) == '\n') { (*line)++; *col = 0; }
-        else (*col)++;
+/*
+ * buf_line_start: O(1)
+ * Busca con búsqueda binaria en el índice qué línea contiene `pos`,
+ * y devuelve el offset de inicio de esa línea.
+ */
+size_t buf_line_start(const Buffer *b, size_t pos) {
+    /* Búsqueda binaria: mayor índice de línea cuyo start <= pos */
+    int lo = 0, hi = b->line_count - 1, best = 0;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (b->line_index[mid] <= pos) { best = mid; lo = mid + 1; }
+        else                            hi = mid - 1;
     }
+    return b->line_index[best];
+}
+
+/*
+ * buf_line_col: O(col) — itera solo desde el inicio de la línea, no desde 0
+ */
+int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
+    /* Búsqueda binaria para encontrar la línea */
+    int lo = 0, hi = b->line_count - 1, ln = 0;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (b->line_index[mid] <= pos) { ln = mid; lo = mid + 1; }
+        else                            hi = mid - 1;
+    }
+    *line = ln;
+    *col  = (int)(pos - b->line_index[ln]);
     return 1;
 }
 
-size_t buf_line_start(const Buffer *b, size_t pos) {
-    if (pos == 0) return 0;
-    size_t i = pos - 1;
-    while (i > 0 && buf_char_at(b, i) != '\n') i--;
-    return (buf_char_at(b, i) == '\n') ? i + 1 : 0;
-}
-
+/*
+ * buf_line_end: O(longitud de línea) — itera solo dentro de la línea
+ */
 size_t buf_line_end(const Buffer *b, size_t pos) {
     size_t len = buf_length(b);
     while (pos < len && buf_char_at(b, pos) != '\n') pos++;
@@ -202,21 +327,51 @@ int buf_load_file(Buffer *b, const char *path) {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if (fsize <= 0) { fclose(f); return 1; }
+    /* Liberar estado anterior */
+    free(b->data);
+    b->data = NULL;
+    /* Conservar line_index si ya existe; li_rebuild lo rellenará */
 
-    /* reinicia el buffer */
-    buf_free(b);
+    if (fsize <= 0) {
+        fclose(f);
+        /* Buffer vacío */
+        b->data = malloc(BUFFER_INIT_SIZE);
+        if (!b->data) return 0;
+        b->size      = BUFFER_INIT_SIZE;
+        b->gap_start = 0;
+        b->gap_end   = BUFFER_INIT_SIZE;
+        if (!b->line_index) {
+            b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
+            if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
+            b->line_cap = LINE_INDEX_INIT;
+        }
+        b->line_index[0] = 0;
+        b->line_count    = 1;
+        return 1;
+    }
+
+    /* Alojar exactamente lo necesario + hueco mínimo */
     b->data = malloc((size_t)fsize + BUFFER_GAP_MIN);
     if (!b->data) { fclose(f); return 0; }
 
-    size_t read = fread(b->data, 1, (size_t)fsize, f);
+    size_t nread = fread(b->data, 1, (size_t)fsize, f);
     fclose(f);
 
-    b->gap_start = read;
-    b->gap_end   = read + BUFFER_GAP_MIN;
-    b->size      = read + BUFFER_GAP_MIN;
-    memset(b->data + read, 0, BUFFER_GAP_MIN);
-    return 1;
+    b->gap_start = nread;
+    b->gap_end   = nread + BUFFER_GAP_MIN;
+    b->size      = nread + BUFFER_GAP_MIN;
+    memset(b->data + nread, 0, BUFFER_GAP_MIN);
+
+    /* Inicializar line_index si no existe */
+    if (!b->line_index) {
+        b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
+        if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
+        b->line_cap = LINE_INDEX_INIT;
+    }
+    b->line_count = 0;
+
+    /* Construir índice en una sola pasada — O(n) */
+    return li_rebuild(b);
 }
 
 int buf_save_file(const Buffer *b, const char *path) {
