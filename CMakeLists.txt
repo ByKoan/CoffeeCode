@@ -114,8 +114,23 @@ if(NOT EXISTS "${FONT_DATA_H}")
     )
 endif()
 
-# ── Executable ───────────────────────────────────────────────────────────────
+# ── Icono (.ico en la raíz del proyecto) ─────────────────────────────────────
 file(GLOB SOURCES "src/*.c")
+
+if(WIN32)
+    set(ICON_ICO "${CMAKE_SOURCE_DIR}/icono.ico")
+    if(EXISTS "${ICON_ICO}")
+        configure_file(
+            "${CMAKE_SOURCE_DIR}/src/app.rc"
+            "${CMAKE_BINARY_DIR}/app_configured.rc"
+            @ONLY
+        )
+        list(APPEND SOURCES "${CMAKE_BINARY_DIR}/app_configured.rc")
+        message(STATUS "Icono embebido: ${ICON_ICO}")
+    else()
+        message(WARNING "No se encontró icono.ico en la raíz del proyecto.")
+    endif()
+endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
