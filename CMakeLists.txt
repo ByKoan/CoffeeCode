@@ -157,6 +157,12 @@ if(WIN32)
             @ONLY
         )
         list(APPEND SOURCES "${CMAKE_BINARY_DIR}/app_configured.rc")
+        # windres no declara que el recurso depende del .ico. Lo hacemos explicito
+        # para que cambiar el icono fuerce recompilar el .rc (si no, queda cacheado).
+        set_source_files_properties(
+            "${CMAKE_BINARY_DIR}/app_configured.rc"
+            PROPERTIES OBJECT_DEPENDS "${ICON_ICO}"
+        )
         message(STATUS "Icono embebido: ${ICON_ICO}")
     else()
         message(WARNING "No se encontró icono.ico en la raíz del proyecto.")
