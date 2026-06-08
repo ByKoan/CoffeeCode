@@ -723,27 +723,27 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
     int text_x = left_offset + GUTTER_WIDTH + PADDING_LEFT;
     int total_lines = buf_line_count(e->buf);
 
-    /* encontrar línea/col de from y to */
-    int from_line = 0, from_col = 0;
-    int to_line   = 0, to_col   = 0;
-
-    /* recorrer para calcular línea/col de from */
-    {
-        int line = 0, col = 0;
-        size_t len = buf_length(e->buf);
-        for (size_t i = 0; i <= len; i++) {
-            if (i == from) { from_line = line; from_col = col; }
-            if (i == to)   { to_line   = line; to_col   = col; break; }
-            if (i < len) {
-                if (buf_char_at(e->buf, i) == '\n') { line++; col = 0; }
-                else col++;
-            }
-        }
-    }
+    /* O(log n): usar buf_line_col con búsqueda binaria */
+    int from_line, from_col, to_line, to_col;
+    buf_line_col(e->buf, from, &from_line, &from_col);
+    buf_line_col(e->buf, to,   &to_line,   &to_col);
 
     set_color(r, COL_SEL_BG);
 
-    for (int li = from_line; li <= to_line && li < total_lines; li++) {
+    /* Si to_col == 0 y to_line > from_line, el cursor está al inicio de
+     * to_line: visualmente la selección cubre hasta el \n de (to_line-1),
+     * así que pintamos hasta to_line-1 completa y no tocamos to_line. */
+    int paint_to_line = to_line;
+    int paint_to_col  = to_col;
+    if (to_col == 0 && to_line > from_line) {
+        paint_to_line = to_line - 1;
+        /* col_end para esa línea = longitud + 1 (incluye \n visual) */
+        size_t ls = e->buf->line_index[paint_to_line];
+        size_t le = buf_line_end(e->buf, ls);
+        paint_to_col = (int)(le - ls) + 1;
+    }
+
+    for (int li = from_line; li <= paint_to_line && li < total_lines; li++) {
         int vi = li - e->scroll_line;
         if (vi < 0 || vi >= visible_lines) continue;
 
@@ -751,19 +751,19 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
 
         int col_start = (li == from_line) ? from_col : 0;
         int col_end;
-        if (li == to_line) {
-            col_end = to_col;
+        if (li == paint_to_line) {
+            col_end = paint_to_col;
         } else {
-            /* toda la línea hasta el final */
-            size_t ls = editor_pos_from_line_col(e, li, 0);
+            /* toda la línea hasta el final + 1 para incluir el \n visualmente */
+            size_t ls = e->buf->line_index[li];
             size_t le = buf_line_end(e->buf, ls);
-            col_end = (int)(le - ls) + 1; /* +1 para incluir el \n visualmente */
+            col_end = (int)(le - ls) + 1;
         }
 
         int x_start = text_x + (col_start - e->scroll_col) * e->char_w;
         int x_end   = text_x + (col_end   - e->scroll_col) * e->char_w;
         if (x_start < text_x) x_start = text_x;
-        if (x_end   < x_start) x_end = x_start + e->char_w; /* mínimo 1 char */
+        if (x_end   < x_start) x_end = x_start + e->char_w;
 
         SDL_FRect sel_rect = {(float)x_start, (float)y,
                               (float)(x_end - x_start), (float)LINE_HEIGHT};
@@ -852,7 +852,18 @@ void render_frame(Editor *e) {
         }
     }
 
-    /* ── Resaltado de selección (debajo del texto) ── */
+    /* ── Resaltado de línea activa (solo cuando no hay selección) ── */
+    if (!e->sel_active) {
+        int vi_cursor = e->cursor_line - e->scroll_line;
+        if (vi_cursor >= 0 && vi_cursor < visible_lines) {
+            int y = text_top + vi_cursor * LINE_HEIGHT;
+            set_color(r, COL_CURSOR_LINE);
+            SDL_FRect hl = {0, (float)y, (float)e->win_w, (float)LINE_HEIGHT};
+            SDL_RenderFillRect(r, &hl);
+        }
+    }
+
+    /* ── Resaltado de selección (encima del fondo, debajo del texto) ── */
     render_selection(e, left_offset, text_top, visible_lines);
 
     /* ── líneas de texto ── */
@@ -863,11 +874,7 @@ void render_frame(Editor *e) {
         int y      = text_top + vi * LINE_HEIGHT;
         int text_x = left_offset + GUTTER_WIDTH + PADDING_LEFT;
 
-        if (li == e->cursor_line) {
-            set_color(r, COL_CURSOR_LINE);
-            SDL_FRect hl = {0, (float)y, (float)e->win_w, (float)LINE_HEIGHT};
-            SDL_RenderFillRect(r, &hl);
-        }
+
 
         char line_buf[4096];
         int  line_len = get_line_text(e, li, line_buf, sizeof(line_buf));

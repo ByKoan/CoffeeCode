@@ -44,7 +44,13 @@ set(PACKAGE_VERSION_EXACT TRUE)
 ]])
 
 # ── SDL3_ttf 3.2.2 ───────────────────────────────────────────────────────────
-# Descargamos SDL3_ttf primero sin configurar para poder parchear su CMakeLists
+# Usamos el flujo Declare+Populate+add_subdirectory para poder compilar
+# Freetype vendorizado antes de que SDL3_ttf lo busque.  CMP0169=OLD suprime
+# el warning de deprecación de FetchContent_Populate con detalles declarados.
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
 FetchContent_Declare(
     SDL3_ttf
     GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
