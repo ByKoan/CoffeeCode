@@ -34,6 +34,8 @@
 
 /* Utilidades de dibujo compartidas */
 void set_color(SDL_Renderer *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A);
+void fill_rect(SDL_Renderer *r, int x, int y, int w, int h);    /* relleno, color actual  */
+void stroke_rect(SDL_Renderer *r, int x, int y, int w, int h);  /* contorno 1px, color actual */
 int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G, uint8_t B);
 int get_line_text(Editor *e, int line, char *out, int max);
 

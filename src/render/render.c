@@ -6,6 +6,21 @@ void set_color(SDL_Renderer *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) {
     SDL_SetRenderDrawColor(r, R, G, B, A);
 }
 
+/* Rellena un rectángulo con el color actual del renderer. */
+void fill_rect(SDL_Renderer *r, int x, int y, int w, int h) {
+    SDL_FRect rect = {(float)x, (float)y, (float)w, (float)h};
+    SDL_RenderFillRect(r, &rect);
+}
+
+/* Dibuja el contorno (1 px) de un rectángulo con el color actual. */
+void stroke_rect(SDL_Renderer *r, int x, int y, int w, int h) {
+    SDL_FRect sides[4] = {{(float)x, (float)y, (float)w, 1},
+                          {(float)x, (float)(y + h - 1), (float)w, 1},
+                          {(float)x, (float)y, 1, (float)h},
+                          {(float)(x + w - 1), (float)y, 1, (float)h}};
+    SDL_RenderFillRects(r, sides, 4);
+}
+
 int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G, uint8_t B) {
     if (!text || !text[0]) return 0;
     SDL_Color col = {R, G, B, 255};
