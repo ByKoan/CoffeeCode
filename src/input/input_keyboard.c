@@ -1,30 +1,59 @@
+/**
+ * @file input_keyboard.c
+ * @brief Movimiento del cursor, selección y operaciones de edición de texto
+ *        (las que disparan teclas y atajos).
+ */
 #include "input_internal.h"
+
+/* ── Helpers comunes ──────────────────────────────────────────────────────── */
+
+/** Refresca el estado tras una edición: re-tokeniza desde @p dirty_line, ajusta
+ *  el scroll y marca el buffer como modificado. (No mueve el cursor.) */
+static void after_edit(Editor *e, int dirty_line) {
+    editor_update_lexer(e, dirty_line);
+    editor_ensure_visible(e);
+    e->modified = 1;
+    e->needs_redraw = 1;
+}
+
+/** Refresca tras mover el cursor (sin marcar modificado ni tocar el lexer). */
+static void after_cursor_move(Editor *e) {
+    editor_sync_cursor(e);
+    editor_ensure_visible(e);
+    e->needs_redraw = 1;
+}
+
+/** Si no hay selección activa, fija el ancla en la posición actual del cursor. */
+static void begin_selection(Editor *e) {
+    if (!e->sel_active) {
+        e->sel_active = 1;
+        e->sel_anchor_line = e->cursor_line;
+        e->sel_anchor_col = e->cursor_col;
+    }
+}
+
+/** ¿Es @p c un carácter de palabra (alfanumérico o '_')? */
+static int is_word_char(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+/* ── Movimiento del cursor ────────────────────────────────────────────────── */
 
 void move_cursor(Editor *e, int line, int col) {
     int total = buf_line_count(e->buf);
     if (line < 0) line = 0;
     if (line >= total) line = total - 1;
     if (col < 0) col = 0;
-    size_t pos = editor_pos_from_line_col(e, line, col);
-    buf_move_to(e->buf, pos);
-    editor_sync_cursor(e);
-    editor_ensure_visible(e);
-    e->needs_redraw = 1;
+    buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+    after_cursor_move(e);
 }
 
-/* -- move_cursor con selección Shift -------------------------------- */
-
+/** Mueve el cursor extendiendo la selección si @p selecting (Shift). */
 void move_cursor_select(Editor *e, int line, int col, int selecting) {
-    if (selecting) {
-        if (!e->sel_active) {
-            /* ancla en posición actual */
-            e->sel_active = 1;
-            e->sel_anchor_line = e->cursor_line;
-            e->sel_anchor_col = e->cursor_col;
-        }
-    } else {
+    if (selecting)
+        begin_selection(e);
+    else
         editor_sel_clear(e);
-    }
     move_cursor(e, line, col);
 }
 
@@ -38,65 +67,47 @@ void move_line_down(Editor *e, int sel) {
 
 void move_col_left(Editor *e, int sel) {
     if (sel) {
-        if (!e->sel_active) {
-            e->sel_active = 1;
-            e->sel_anchor_line = e->cursor_line;
-            e->sel_anchor_col = e->cursor_col;
-        }
-    } else {
-        /* si había selección, saltar al inicio de la misma */
-        if (e->sel_active) {
-            size_t from, to;
-            if (editor_sel_range(e, &from, &to)) {
-                editor_sel_clear(e);
-                buf_move_to(e->buf, from);
-                editor_sync_cursor(e);
-                editor_ensure_visible(e);
-                e->needs_redraw = 1;
-                return;
-            }
+        begin_selection(e);
+    } else if (e->sel_active) {
+        /* sin Shift y con selección: colapsar al inicio de la misma */
+        size_t from, to;
+        if (editor_sel_range(e, &from, &to)) {
             editor_sel_clear(e);
+            buf_move_to(e->buf, from);
+            after_cursor_move(e);
+            return;
         }
+        editor_sel_clear(e);
     }
+
     if (e->cursor_col > 0) {
         move_cursor(e, e->cursor_line, e->cursor_col - 1);
     } else if (e->cursor_line > 0) {
         int prev = e->cursor_line - 1;
-        size_t end = buf_line_end(e->buf, editor_pos_from_line_col(e, prev, 0));
-        int lc = (int)(end - editor_pos_from_line_col(e, prev, 0));
-        move_cursor(e, prev, lc);
+        size_t prev_start = editor_pos_from_line_col(e, prev, 0);
+        int line_len = (int)(buf_line_end(e->buf, prev_start) - prev_start);
+        move_cursor(e, prev, line_len);
     }
 }
 
 void move_col_right(Editor *e, int sel) {
     if (sel) {
-        if (!e->sel_active) {
-            e->sel_active = 1;
-            e->sel_anchor_line = e->cursor_line;
-            e->sel_anchor_col = e->cursor_col;
-        }
-    } else {
-        /* si había selección, saltar al final */
-        if (e->sel_active) {
-            size_t from, to;
-            if (editor_sel_range(e, &from, &to)) {
-                editor_sel_clear(e);
-                buf_move_to(e->buf, to);
-                editor_sync_cursor(e);
-                editor_ensure_visible(e);
-                e->needs_redraw = 1;
-                return;
-            }
+        begin_selection(e);
+    } else if (e->sel_active) {
+        /* sin Shift y con selección: colapsar al final de la misma */
+        size_t from, to;
+        if (editor_sel_range(e, &from, &to)) {
             editor_sel_clear(e);
+            buf_move_to(e->buf, to);
+            after_cursor_move(e);
+            return;
         }
+        editor_sel_clear(e);
     }
-    size_t pos = buf_cursor_pos(e->buf);
-    size_t len = buf_length(e->buf);
-    if (pos < len) {
+
+    if (buf_cursor_pos(e->buf) < buf_length(e->buf)) {
         buf_move_right(e->buf);
-        editor_sync_cursor(e);
-        editor_ensure_visible(e);
-        e->needs_redraw = 1;
+        after_cursor_move(e);
     }
 }
 
@@ -105,67 +116,49 @@ void move_home(Editor *e, int sel) {
 }
 
 void move_end(Editor *e, int sel) {
-    size_t pos = editor_pos_from_line_col(e, e->cursor_line, 0);
-    size_t end = buf_line_end(e->buf, pos);
-    int col = (int)(end - pos);
-    move_cursor_select(e, e->cursor_line, col, sel);
+    size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
+    int line_len = (int)(buf_line_end(e->buf, line_start) - line_start);
+    move_cursor_select(e, e->cursor_line, line_len, sel);
 }
 
-/* -- salto de palabra (Ctrl+Left / Ctrl+Right) --------------------- */
+/* ── Salto de palabra (Ctrl+Left / Ctrl+Right) ────────────────────────────── */
 
 void move_word_left(Editor *e, int sel) {
-    if (sel && !e->sel_active) {
-        e->sel_active = 1;
-        e->sel_anchor_line = e->cursor_line;
-        e->sel_anchor_col = e->cursor_col;
-    } else if (!sel) {
+    if (sel)
+        begin_selection(e);
+    else
         editor_sel_clear(e);
-    }
+
     size_t pos = buf_cursor_pos(e->buf);
     if (pos == 0) return;
     pos--;
-    /* salta espacios/no-word */
-    while (pos > 0 && !isalnum((unsigned char)buf_char_at(e->buf, pos)) &&
-           buf_char_at(e->buf, pos) != '_')
-        pos--;
-    /* salta la palabra */
-    while (pos > 0 && (isalnum((unsigned char)buf_char_at(e->buf, pos - 1)) ||
-                       buf_char_at(e->buf, pos - 1) == '_'))
-        pos--;
+    while (pos > 0 && !is_word_char(buf_char_at(e->buf, pos)))
+        pos--; /* saltar separadores */
+    while (pos > 0 && is_word_char(buf_char_at(e->buf, pos - 1)))
+        pos--; /* saltar la palabra */
     buf_move_to(e->buf, pos);
-    editor_sync_cursor(e);
-    editor_ensure_visible(e);
-    e->needs_redraw = 1;
+    after_cursor_move(e);
 }
 
 void move_word_right(Editor *e, int sel) {
-    if (sel && !e->sel_active) {
-        e->sel_active = 1;
-        e->sel_anchor_line = e->cursor_line;
-        e->sel_anchor_col = e->cursor_col;
-    } else if (!sel) {
+    if (sel)
+        begin_selection(e);
+    else
         editor_sel_clear(e);
-    }
+
     size_t pos = buf_cursor_pos(e->buf);
     size_t len = buf_length(e->buf);
-    /* salta la palabra actual */
-    while (pos < len &&
-           (isalnum((unsigned char)buf_char_at(e->buf, pos)) || buf_char_at(e->buf, pos) == '_'))
-        pos++;
-    /* salta espacios/no-word */
-    while (pos < len && !isalnum((unsigned char)buf_char_at(e->buf, pos)) &&
-           buf_char_at(e->buf, pos) != '_')
-        pos++;
+    while (pos < len && is_word_char(buf_char_at(e->buf, pos)))
+        pos++; /* saltar la palabra actual */
+    while (pos < len && !is_word_char(buf_char_at(e->buf, pos)))
+        pos++; /* saltar separadores */
     buf_move_to(e->buf, pos);
-    editor_sync_cursor(e);
-    editor_ensure_visible(e);
-    e->needs_redraw = 1;
+    after_cursor_move(e);
 }
 
-/* -- operaciones de edición ----------------------------------------------- */
+/* ── Operaciones de edición ───────────────────────────────────────────────── */
 
-/* Borra la selección activa y la registra en undo. Devuelve 1 si borró algo */
-
+/** Borra la selección activa y la registra en el undo. @return 1 si borró algo. */
 int delete_selection(Editor *e) {
     size_t from, to;
     if (!editor_sel_range(e, &from, &to)) return 0;
@@ -181,56 +174,46 @@ int delete_selection(Editor *e) {
     buf_move_to(e->buf, from);
     editor_sel_clear(e);
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line);
     return 1;
 }
 
+/** Inserta un salto de línea con autoindentación (copia la sangría anterior). */
 void insert_newline(Editor *e) {
     delete_selection(e);
     size_t pos = buf_cursor_pos(e->buf);
     editor_undo_push_insert(e, pos, "\n", 1);
     buf_insert(e->buf, '\n');
     editor_sync_cursor(e);
+
+    /* copiar la sangría (espacios/tabs) del inicio de la línea anterior */
     size_t prev_start = editor_pos_from_line_col(e, e->cursor_line - 1, 0);
     size_t len = buf_length(e->buf);
-    size_t i = prev_start;
-    while (i < len) {
+    for (size_t i = prev_start; i < len; i++) {
         char c = buf_char_at(e->buf, i);
-        if (c == ' ') {
-            buf_insert(e->buf, ' ');
-            i++;
-        } else if (c == '\t') {
-            buf_insert(e->buf, '\t');
-            i++;
-        } else
-            break;
+        if (c != ' ' && c != '\t') break;
+        buf_insert(e->buf, c);
     }
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line - 1);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line - 1);
 }
 
+/** Inserta espacios hasta el siguiente tab stop. */
 void insert_tab(Editor *e) {
     delete_selection(e);
     int spaces = TAB_SIZE - (e->cursor_col % TAB_SIZE);
     size_t pos = buf_cursor_pos(e->buf);
+
     char tmp[TAB_SIZE + 1];
     for (int i = 0; i < spaces; i++)
         tmp[i] = ' ';
     tmp[spaces] = '\0';
+
     editor_undo_push_insert(e, pos, tmp, spaces);
     for (int i = 0; i < spaces; i++)
         buf_insert(e->buf, ' ');
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line);
 }
 
 void do_backspace(Editor *e) {
@@ -239,16 +222,14 @@ void do_backspace(Editor *e) {
         return;
     }
     if (buf_cursor_pos(e->buf) == 0) return;
+
     int prev_line = e->cursor_line;
     size_t pos = buf_cursor_pos(e->buf) - 1;
     char c = buf_char_at(e->buf, pos);
     editor_undo_push_delete(e, pos, &c, 1);
     buf_delete_before(e->buf);
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line < prev_line ? e->cursor_line : prev_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line < prev_line ? e->cursor_line : prev_line);
 }
 
 void do_delete(Editor *e) {
@@ -257,31 +238,28 @@ void do_delete(Editor *e) {
         return;
     }
     if (buf_cursor_pos(e->buf) >= buf_length(e->buf)) return;
+
     size_t pos = buf_cursor_pos(e->buf);
     char c = buf_char_at(e->buf, pos);
     editor_undo_push_delete(e, pos, &c, 1);
     buf_delete_after(e->buf);
+    /* Supr no mueve el cursor: solo re-tokeniza y repinta */
     editor_update_lexer(e, e->cursor_line);
     e->modified = 1;
     e->needs_redraw = 1;
 }
 
-/* -- Nuevo archivo --------------------------------------------------------- */
+/* ── Selección global ─────────────────────────────────────────────────────── */
 
 void select_all(Editor *e) {
-    /* ancla en posición lógica 0 → línea 0, col 0 */
-    e->sel_anchor_line = 0;
+    e->sel_anchor_line = 0; /* ancla en (0,0) */
     e->sel_anchor_col = 0;
     e->sel_active = 1;
-    /* mover cursor al final del documento */
-    size_t end_pos = buf_length(e->buf);
-    buf_move_to(e->buf, end_pos);
-    editor_sync_cursor(e);
-    editor_ensure_visible(e);
-    e->needs_redraw = 1;
+    buf_move_to(e->buf, buf_length(e->buf)); /* cursor al final */
+    after_cursor_move(e);
 }
 
-/* -- Clipboard ------------------------------------------------------ */
+/* ── Portapapeles ─────────────────────────────────────────────────────────── */
 
 void do_copy(Editor *e) {
     size_t from, to;
@@ -310,23 +288,18 @@ void do_paste(Editor *e) {
         return;
     }
 
-    delete_selection(e); /* borra selección si la hay */
-
+    delete_selection(e); /* reemplaza la selección si la hay */
     size_t pos = buf_cursor_pos(e->buf);
     editor_undo_push_insert(e, pos, text, len);
     buf_insert_str(e->buf, text, len);
     SDL_free(text);
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line);
 }
 
-/* -- Ctrl+D — duplicar línea actual --------------------------------- */
+/* ── Ctrl+D — duplicar la línea actual ────────────────────────────────────── */
 
 void duplicate_line(Editor *e) {
-    /* Obtener texto de la línea actual */
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
     size_t line_end = buf_line_end(e->buf, line_start);
     size_t len = line_end - line_start;
@@ -337,35 +310,31 @@ void duplicate_line(Editor *e) {
     tmp[len] = '\n';
     tmp[len + 1] = '\0';
 
-    /* Insertar al final de la línea */
     buf_move_to(e->buf, line_end);
     editor_undo_push_insert(e, line_end, tmp, len + 1);
     buf_insert_str(e->buf, tmp, len + 1);
     free(tmp);
 
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line);
 }
 
-/* -- Ctrl+/ — comentar/descomentar línea --------------------------- */
+/* ── Ctrl+/ — comentar / descomentar la línea ─────────────────────────────── */
+
+/** Prefijo de comentario de línea según la extensión del archivo. */
+static const char *line_comment_prefix(const char *filepath) {
+    const char *ext = strrchr(filepath, '.');
+    if (!ext) return "// ";
+    if (!strcmp(ext, ".py") || !strcmp(ext, ".sh") || !strcmp(ext, ".rb") ||
+        !strcmp(ext, ".yaml") || !strcmp(ext, ".yml") || !strcmp(ext, ".toml"))
+        return "# ";
+    if (!strcmp(ext, ".lua") || !strcmp(ext, ".sql")) return "-- ";
+    return "// "; /* C/C++/JS por defecto */
+}
 
 void toggle_line_comment(Editor *e) {
-    /* Detecta el comentario según la extensión del archivo */
-    const char *prefix = "// "; /* default C/C++/JS */
-    const char *ext = strrchr(e->filepath, '.');
-    if (ext) {
-        if (strcmp(ext, ".py") == 0 || strcmp(ext, ".sh") == 0 || strcmp(ext, ".rb") == 0 ||
-            strcmp(ext, ".yaml") == 0 || strcmp(ext, ".yml") == 0 || strcmp(ext, ".toml") == 0)
-            prefix = "# ";
-        else if (strcmp(ext, ".lua") == 0)
-            prefix = "-- ";
-        else if (strcmp(ext, ".sql") == 0)
-            prefix = "-- ";
-    }
-    size_t plen = strlen(prefix);
+    const char *prefix = line_comment_prefix(e->filepath);
+    size_t prefix_len = strlen(prefix);
 
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
     size_t line_end = buf_line_end(e->buf, line_start);
@@ -376,57 +345,42 @@ void toggle_line_comment(Editor *e) {
     buf_get_text(e->buf, line_start, line_end, line_text);
     line_text[line_len] = '\0';
 
-    /* Omitir espacios iniciales para el check */
+    /* omitir la sangría inicial para detectar/insertar el prefijo */
     size_t indent = 0;
     while (indent < line_len && (line_text[indent] == ' ' || line_text[indent] == '\t'))
         indent++;
 
-    if (line_len - indent >= plen && strncmp(line_text + indent, prefix, plen) == 0) {
-        /* ya está comentado → quitar prefijo */
+    int already_commented =
+        (line_len - indent >= prefix_len && strncmp(line_text + indent, prefix, prefix_len) == 0);
+
+    if (already_commented) {
         size_t del_pos = line_start + indent;
-        editor_undo_push_delete(e, del_pos, prefix, plen);
-        buf_delete_range(e->buf, del_pos, del_pos + plen);
+        editor_undo_push_delete(e, del_pos, prefix, prefix_len);
+        buf_delete_range(e->buf, del_pos, del_pos + prefix_len);
         buf_move_to(e->buf, del_pos);
     } else {
-        /* sin comentar → añadir prefijo en la posición de sangría */
         size_t ins_pos = line_start + indent;
-        editor_undo_push_insert(e, ins_pos, prefix, plen);
+        editor_undo_push_insert(e, ins_pos, prefix, prefix_len);
         buf_move_to(e->buf, ins_pos);
-        buf_insert_str(e->buf, prefix, plen);
-        buf_move_to(e->buf, ins_pos + plen);
+        buf_insert_str(e->buf, prefix, prefix_len);
+        buf_move_to(e->buf, ins_pos + prefix_len);
     }
     free(line_text);
 
     editor_sync_cursor(e);
-    editor_update_lexer(e, e->cursor_line);
-    editor_ensure_visible(e);
-    e->modified = 1;
-    e->needs_redraw = 1;
+    after_edit(e, e->cursor_line);
 }
 
-/* -- Ctrl+L — seleccionar línea completa ---------------------------- */
+/* ── Ctrl+L — seleccionar la línea completa ───────────────────────────────── */
 
 void select_line(Editor *e) {
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
     size_t line_end = buf_line_end(e->buf, line_start);
-    /* si no es la última línea, incluye el \n */
-    if (line_end < buf_length(e->buf)) line_end++;
+    if (line_end < buf_length(e->buf)) line_end++; /* incluir el '\n' si no es la última */
 
     e->sel_active = 1;
     e->sel_anchor_line = e->cursor_line;
     e->sel_anchor_col = 0;
     buf_move_to(e->buf, line_end);
-    editor_sync_cursor(e);
-    editor_ensure_visible(e);
-    e->needs_redraw = 1;
+    after_cursor_move(e);
 }
-
-/* -- Ctrl+G — ir a línea -------------------------------------------- */
-/* Implementación simple: el número se teclea en la barra find reutilizada.
-   Se activa con un flag especial y se interpreta el texto como número de línea. */
-#define GOTO_MODE_PREFIX "Ir a línea: "
-
-/* -- Ctrl+F — barra de búsqueda ------------------------------------ */
-
-/* Busca hacia adelante desde `start_pos` (exclusivo).
-   Devuelve la posición lógica del match o (size_t)-1 si no encontrado. */
