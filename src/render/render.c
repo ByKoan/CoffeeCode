@@ -931,14 +931,14 @@ void render_frame(Editor *e) {
     /* actualizar lexer */
     {
         int in_block = 0;
-        for (int li = 0; li < e->lex->count; li++) {
-            if (e->lex->dirty[li]) {
+        for (int li = 0; li < lexer_cache_count(e->lex); li++) {
+            if (*lexer_cache_dirty_at(e->lex, li)) {
                 char line_buf[4096];
                 get_line_text(e, li, line_buf, sizeof(line_buf));
                 in_block = lexer_tokenize_line(line_buf,
                                (int)strlen(line_buf),
-                               &e->lex->lines[li], in_block);
-                e->lex->dirty[li] = 0;
+                               lexer_cache_line(e->lex, li), in_block);
+                *lexer_cache_dirty_at(e->lex, li) = 0;
             }
         }
     }
@@ -970,8 +970,8 @@ void render_frame(Editor *e) {
         char line_buf[4096];
         int  line_len = get_line_text(e, li, line_buf, sizeof(line_buf));
 
-        if (li < e->lex->count && e->lex->lines[li].count > 0) {
-            LineTokens *lt = &e->lex->lines[li];
+        if (li < lexer_cache_count(e->lex) && lexer_cache_line(e->lex, li)->count > 0) {
+            LineTokens *lt = lexer_cache_line(e->lex, li);
             int drawn_to = 0;
 
             for (int ti = 0; ti < lt->count; ti++) {

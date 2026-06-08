@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "structs/vec.h"
 
 /* -- Tipos de token ------------------------------------------------------- */
 typedef enum {
@@ -37,16 +38,25 @@ typedef struct {
 
 /* -- Cache de resaltado --------------------------------------------------- */
 typedef struct {
-    LineTokens *lines;   /* array de LineTokens, uno por línea    */
-    int         count;   /* número de líneas en cache             */
-    int        *dirty;   /* dirty[i] = 1 si la línea i necesita  */
-                         /*            ser re-tokenizada          */
+    Vec lines;   /* Vec<LineTokens>: una entrada por línea de cache         */
+    Vec dirty;   /* Vec<int>: dirty[i] = 1 si la línea i debe re-tokenizarse */
 } LexerCache;
 
 int  lexer_cache_init   (LexerCache *lc, int line_count);
 void lexer_cache_free   (LexerCache *lc);
 void lexer_cache_resize (LexerCache *lc, int new_count);
 void lexer_cache_dirty  (LexerCache *lc, int from_line);
+
+/* Accesores (inline): el cache es Vec<LineTokens> + Vec<int> */
+static inline int lexer_cache_count(const LexerCache *lc) {
+    return (int)lc->lines.len;
+}
+static inline LineTokens *lexer_cache_line(LexerCache *lc, int i) {
+    return (LineTokens *)vec_at(&lc->lines, (size_t)i);
+}
+static inline int *lexer_cache_dirty_at(LexerCache *lc, int i) {
+    return (int *)vec_at(&lc->dirty, (size_t)i);
+}
 
 /*
  * Tokeniza `text` (longitud `len`, sin '\n') y escribe en `out`.

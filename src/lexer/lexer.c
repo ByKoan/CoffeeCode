@@ -177,31 +177,35 @@ int lexer_tokenize_line(const char *text, int len,
 
 /* -- Cache ---------------------------------------------------------------- */
 int lexer_cache_init(LexerCache *lc, int line_count) {
-    lc->count = line_count;
-    lc->lines = calloc((size_t)line_count, sizeof(LineTokens));
-    lc->dirty = malloc((size_t)line_count * sizeof(int));
-    if (!lc->lines || !lc->dirty) return 0;
-    for (int i = 0; i < line_count; i++) lc->dirty[i] = 1;
+    if (line_count < 1) line_count = 1;
+    vec_init(&lc->lines, sizeof(LineTokens));
+    vec_init(&lc->dirty, sizeof(int));
+    /* vec_resize pone a cero las entradas nuevas => LineTokens.count = 0 */
+    if (!vec_resize(&lc->lines, (size_t)line_count)) return 0;
+    if (!vec_resize(&lc->dirty, (size_t)line_count)) return 0;
+    for (int i = 0; i < line_count; i++)
+        *(int *)vec_at(&lc->dirty, (size_t)i) = 1;   /* todo sucio al inicio */
     return 1;
 }
 
 void lexer_cache_free(LexerCache *lc) {
-    free(lc->lines); lc->lines = NULL;
-    free(lc->dirty); lc->dirty = NULL;
-    lc->count = 0;
+    vec_free(&lc->lines);
+    vec_free(&lc->dirty);
 }
 
 void lexer_cache_resize(LexerCache *lc, int new_count) {
-    if (new_count == lc->count) return;
-    lc->lines = realloc(lc->lines, (size_t)new_count * sizeof(LineTokens));
-    lc->dirty = realloc(lc->dirty, (size_t)new_count * sizeof(int));
-    for (int i = lc->count; i < new_count; i++) {
-        lc->lines[i].count = 0;
-        lc->dirty[i] = 1;
-    }
-    lc->count = new_count;
+    if (new_count < 1) new_count = 1;
+    int old = (int)lc->lines.len;
+    if (new_count == old) return;
+
+    vec_resize(&lc->lines, (size_t)new_count);   /* nuevas LineTokens a cero (count=0) */
+    vec_resize(&lc->dirty, (size_t)new_count);
+    for (int i = old; i < new_count; i++)
+        *(int *)vec_at(&lc->dirty, (size_t)i) = 1;   /* líneas nuevas: sucias */
 }
 
 void lexer_cache_dirty(LexerCache *lc, int from_line) {
-    for (int i = from_line; i < lc->count; i++) lc->dirty[i] = 1;
+    int n = (int)lc->dirty.len;
+    for (int i = from_line; i < n; i++)
+        *(int *)vec_at(&lc->dirty, (size_t)i) = 1;
 }
