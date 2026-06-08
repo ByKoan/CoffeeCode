@@ -83,23 +83,29 @@ cmake --build build --config Release -j
 ide/
 ├── CMakeLists.txt
 ├── assets/
-│   └── font.ttf          ← JetBrains Mono (se copia junto al .exe)
+│   ├── font.ttf          ← JetBrains Mono (se copia junto al .exe)
+|   └── icono.ico         ← Icono del programa que se aplicara al .exe
 └── src/
     ├── main.c            ← punto de entrada
-    ├── editor.c/h        ← estado global + main loop
-    ├── buffer.c/h        ← gap buffer (estructura de datos del texto)
-    ├── lexer.c/h         ← tokenizador C + cache de resaltado
-    ├── render.c/h        ← render SDL3 (texto, gutter, cursor, status)
-    └── input.c/h         ← gestión de eventos SDL3
+    ├── buffer.c/h        ← Buffer de texto para el editor
+    ├── editor.c/h        ← Nucleo del editor
+    ├── filetree.c/h      ← Funcionalidades para explorador de archivos
+    ├── input.c/h         ← Gestor de entrada
+    ├── lexer.c/h         ← Lexer del IDE
+    └── render.c/h        ← Renderizador de la aplicacion
 ```
 
 ## TODO (Siguientes Implementaciones)
 
-- [ ] Diálogo nativo de abrir/guardar (SDL_ShowOpenFileDialog en SDL3)
-- [ ] Búsqueda y reemplazo (Ctrl+F)
-- [ ] Múltiples pestañas / buffers
-- [ ] Selección de texto con shift+flechas y Ctrl+C/V
-- [ ] Soporte de lenguajes adicionales (Python, Markdown…)
-- [ ] Numeración de línea con resaltado de la línea actual
+- [ ] Implementar cuadricula para tener varios archivos en la misma pantalla
+- [ ] Implementar una barra de busqueda (visual)
+- [ ] Implementacion de idiomas
+- [ ] Integrar GIT (Posible solucion via comandos)
+- [ ] Soporte de markdown (visual)
 
 ## Bug / Fixes (Correciones)
+
+- Texto en la barra de busqueda (CTRL+F) se buguea
+- CTRL+A o seleccion de texto con el raton funciona, pero funciona raro
+- Boton "nuevo" en archivo no funciona
+- Flechas para moverse en el texto no funcionan bien

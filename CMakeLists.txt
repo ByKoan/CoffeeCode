@@ -118,7 +118,7 @@ endif()
 file(GLOB SOURCES "src/*.c")
 
 if(WIN32)
-    set(ICON_ICO "${CMAKE_SOURCE_DIR}/icono.ico")
+    set(ICON_ICO "${CMAKE_SOURCE_DIR}/assets/icono.ico")
     if(EXISTS "${ICON_ICO}")
         configure_file(
             "${CMAKE_SOURCE_DIR}/src/app.rc"

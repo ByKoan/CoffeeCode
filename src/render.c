@@ -582,7 +582,7 @@ static void render_find_bar(Editor *e)
     e->find.field_h = field_h;
 }
 
-/* ── NUEVO: Atajos visuales como badges de teclado ──────────────────────── */
+/* ── Atajos visuales como badges de teclado ──────────────────────── */
 static void render_shortcut_badge(Editor *e, const char *key, const char *label,
                                   int *x, int y)
 {
@@ -668,7 +668,7 @@ static void render_shortcuts(Editor *e)
     }
 }
 
-/* ── NUEVO: Scrollbar vertical ───────────────────────────────────────────── */
+/* ── Scrollbar vertical ───────────────────────────────────────────── */
 static void render_scrollbar(Editor *e, int left_offset)
 {
     SDL_Renderer *r = e->renderer;
@@ -711,7 +711,7 @@ static void render_scrollbar(Editor *e, int left_offset)
     (void)left_offset;
 }
 
-/* ── NUEVO: Resaltado de selección ───────────────────────────────────────── */
+/* ── Resaltado de selección ───────────────────────────────────────── */
 static void render_selection(Editor *e, int left_offset, int text_top, int visible_lines)
 {
     if (!e->sel_active) return;

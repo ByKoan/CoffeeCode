@@ -481,7 +481,7 @@ void editor_run(Editor *e) {
                 input_handle_event(e, &ev);
         }
 
-        /* Autoguardado casi instantaneo (300 ms) si hay cambios y filepath definido */
+        /* Autoguardado instantaneo si hay cambios y filepath definido */
         if (e->autosave && e->modified && e->filepath[0]) {
             Uint64 now = SDL_GetTicks();
             if (now - e->autosave_last_ms >= 300) {
