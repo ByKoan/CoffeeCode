@@ -73,14 +73,23 @@ typedef struct {
     int  query_len;
     int  result_line;   /* -1 = sin resultado                        */
     int  result_col;
+    int  match_count;   /* total de coincidencias (0 = sin resultados) */
+    int  match_index;   /* índice de la coincidencia actual (0-based)  */
     /* reemplazo */
     char replace[FIND_BAR_MAX];
     int  replace_len;
     int  replace_focused; /* 0 = foco en buscar, 1 = foco en reemplazar */
+    int  bar_focused;     /* 1 = teclado va a la barra, 0 = va al editor */
+    /* selección de texto dentro de los inputs (-1 = sin selección) */
+    int  query_sel_start,   query_sel_end;
+    int  replace_sel_start, replace_sel_end;
     /* geometría para click detection (calculado en render) */
     int  bar_x, bar_y, bar_w, bar_h;
     int  field_x, row1_y, row2_y, field_h;
     int  replace_btn_x, replace_btn_y, replace_btn_w, replace_btn_h;
+    /* botones flecha prev/next en fila de búsqueda */
+    int  prev_btn_x, prev_btn_y, prev_btn_w, prev_btn_h;
+    int  next_btn_x, next_btn_y, next_btn_w, next_btn_h;
 } FindBar;
 
 /* ── Estado global del editor ───────────────────────────────────────────── */
