@@ -207,6 +207,7 @@ void editor_tab_open(Editor *e, const char *path) {
     strncpy(t->filepath, path, sizeof(t->filepath) - 1);
     int total = buf_line_count(&t->buf);
     lexer_cache_init(&t->lex, total > 0 ? total : 1);
+    ring_init(&t->undo.entries, sizeof(UndoEntry), UNDO_MAX);
     e->active_tab = idx;
     editor_tab_load_state(e);
     editor_update_lexer(e, 0);
