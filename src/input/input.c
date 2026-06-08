@@ -1,6 +1,6 @@
-#include "input.h"
-#include "filetree.h"
-#include "render.h"
+#include "input/input.h"
+#include "filetree/filetree.h"
+#include "render/render.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <ctype.h>
 
-/* ── Geometría del menú (debe coincidir con render.c) ────────────────────── */
+/* -- Geometría del menú (debe coincidir con render.c) ---------------------- */
 #define MENU_ITEM_H   26
 #define MENU_WIDTH   210
 #define MENU_ITEMS    6
@@ -128,7 +128,7 @@ static void handle_ftree_hover(Editor *e, int mx, int my) {
     }
 }
 
-/* ── helpers de cursor ───────────────────────────────────────────────────── */
+/* -- helpers de cursor ----------------------------------------------------- */
 static void move_cursor(Editor *e, int line, int col) {
     int total = buf_line_count(e->buf);
     if (line < 0) line = 0;
@@ -141,7 +141,7 @@ static void move_cursor(Editor *e, int line, int col) {
     e->needs_redraw = 1;
 }
 
-/* ── move_cursor con selección Shift ──────────────────────────────── */
+/* -- move_cursor con selección Shift -------------------------------- */
 static void move_cursor_select(Editor *e, int line, int col, int selecting) {
     if (selecting) {
         if (!e->sel_active) {
@@ -234,7 +234,7 @@ static void move_end(Editor *e, int sel) {
     move_cursor_select(e, e->cursor_line, col, sel);
 }
 
-/* ── salto de palabra (Ctrl+Left / Ctrl+Right) ───────────────────── */
+/* -- salto de palabra (Ctrl+Left / Ctrl+Right) --------------------- */
 static void move_word_left(Editor *e, int sel) {
     if (sel && !e->sel_active) {
         e->sel_active      = 1;
@@ -284,7 +284,7 @@ static void move_word_right(Editor *e, int sel) {
     e->needs_redraw = 1;
 }
 
-/* ── operaciones de edición ─────────────────────────────────────────────── */
+/* -- operaciones de edición ----------------------------------------------- */
 
 /* Borra la selección activa y la registra en undo. Devuelve 1 si borró algo */
 static int delete_selection(Editor *e) {
@@ -370,7 +370,7 @@ static void do_delete(Editor *e) {
     e->modified = 1; e->needs_redraw = 1;
 }
 
-/* ── Nuevo archivo ───────────────────────────────────────────────────────── */
+/* -- Nuevo archivo --------------------------------------------------------- */
 static void new_file(Editor *e) {
     editor_tab_new(e);
     /* Asegurar que el tab nuevo queda limpio independientemente del estado anterior */
@@ -384,7 +384,7 @@ static void new_file(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* ── Guardar ─────────────────────────────────────────────────────────────── */
+/* -- Guardar --------------------------------------------------------------- */
 static void save_file(Editor *e) {
     if (!e->filepath[0])
         strncpy(e->filepath, "untitled.c", sizeof(e->filepath) - 1);
@@ -402,7 +402,7 @@ static void save_file(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* ── Callback del diálogo de apertura de archivos ────────────────────────── */
+/* -- Callback del diálogo de apertura de archivos -------------------------- */
 static void SDLCALL file_dialog_cb(void *userdata,
                                    const char * const *filelist,
                                    int filter)
@@ -430,7 +430,7 @@ static void open_file_dialog(Editor *e) {
                            filters, 2, NULL, false);
 }
 
-/* ── Ejecutar un item del menú ───────────────────────────────────────────── */
+/* -- Ejecutar un item del menú --------------------------------------------- */
 static void SDLCALL folder_dialog_cb(void *userdata,
                                     const char * const *filelist,
                                     int filter)
@@ -468,7 +468,7 @@ static void menu_exec(Editor *e, int item) {
     e->needs_redraw = 1;
 }
 
-/* ── scroll ──────────────────────────────────────────────────────────────── */
+/* -- scroll ---------------------------------------------------------------- */
 static void handle_scroll(Editor *e, float dy) {
     if (e->tab_count == 0 || !e->buf) return;
     int lines = (int)(dy * 3);
@@ -479,7 +479,7 @@ static void handle_scroll(Editor *e, float dy) {
     e->needs_redraw = 1;
 }
 
-/* ── click en el área de texto ───────────────────────────────────────────── */
+/* -- click en el área de texto --------------------------------------------- */
 static void handle_text_click(Editor *e, int mx, int my) {
     int left = get_left_offset(e);
     int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
@@ -503,7 +503,7 @@ static void handle_text_click(Editor *e, int mx, int my) {
     move_cursor(e, line, vis_col);
 }
 
-/* ── Ctrl+A — seleccionar todo ───────────────────────────────────── */
+/* -- Ctrl+A — seleccionar todo ------------------------------------- */
 static void select_all(Editor *e) {
     /* ancla en posición lógica 0 → línea 0, col 0 */
     e->sel_anchor_line = 0;
@@ -517,7 +517,7 @@ static void select_all(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* ── Clipboard ────────────────────────────────────────────────────── */
+/* -- Clipboard ------------------------------------------------------ */
 static void do_copy(Editor *e) {
     size_t from, to;
     if (!editor_sel_range(e, &from, &to)) return;
@@ -554,7 +554,7 @@ static void do_paste(Editor *e) {
     e->modified = 1; e->needs_redraw = 1;
 }
 
-/* ── Ctrl+D — duplicar línea actual ───────────────────────────────── */
+/* -- Ctrl+D — duplicar línea actual --------------------------------- */
 static void duplicate_line(Editor *e) {
     /* Obtener texto de la línea actual */
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
@@ -579,7 +579,7 @@ static void duplicate_line(Editor *e) {
     e->modified = 1; e->needs_redraw = 1;
 }
 
-/* ── Ctrl+/ — comentar/descomentar línea ─────────────────────────── */
+/* -- Ctrl+/ — comentar/descomentar línea --------------------------- */
 static void toggle_line_comment(Editor *e) {
     /* Detecta el comentario según la extensión del archivo */
     const char *prefix = "// ";  /* default C/C++/JS */
@@ -633,7 +633,7 @@ static void toggle_line_comment(Editor *e) {
     e->modified = 1; e->needs_redraw = 1;
 }
 
-/* ── Ctrl+L — seleccionar línea completa ──────────────────────────── */
+/* -- Ctrl+L — seleccionar línea completa ---------------------------- */
 static void select_line(Editor *e) {
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
     size_t line_end   = buf_line_end(e->buf, line_start);
@@ -649,12 +649,12 @@ static void select_line(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* ── Ctrl+G — ir a línea ──────────────────────────────────────────── */
+/* -- Ctrl+G — ir a línea -------------------------------------------- */
 /* Implementación simple: el número se teclea en la barra find reutilizada.
    Se activa con un flag especial y se interpreta el texto como número de línea. */
 #define GOTO_MODE_PREFIX "Ir a línea: "
 
-/* ── Ctrl+F — barra de búsqueda ──────────────────────────────────── */
+/* -- Ctrl+F — barra de búsqueda ------------------------------------ */
 
 /* Busca hacia adelante desde `start_pos` (exclusivo).
    Devuelve la posición lógica del match o (size_t)-1 si no encontrado. */
@@ -920,13 +920,13 @@ static void close_find_bar(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* ── Ctrl+B — toggle panel lateral ───────────────────────────────── */
+/* -- Ctrl+B — toggle panel lateral --------------------------------- */
 static void toggle_sidebar(Editor *e) {
     e->ftree.open = !e->ftree.open;
     e->needs_redraw = 1;
 }
 
-/* ── dispatcher principal ────────────────────────────────────────────────── */
+/* -- dispatcher principal -------------------------------------------------- */
 void input_handle_event(Editor *e, SDL_Event *ev) {
     SDL_Keymod mods  = SDL_GetModState();
     int ctrl  = (mods & SDL_KMOD_CTRL)  != 0;
@@ -1044,7 +1044,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         int my = (int)ev->button.y;
         if (ev->button.button != SDL_BUTTON_LEFT) break;
 
-        /* ── clic en la barra de tabs ── */
+        /* -- clic en la barra de tabs -- */
         if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
             /* botón + nuevo tab */
             if (mx >= e->tab_new_btn_x && mx < e->tab_new_btn_x + 28) {
@@ -1213,7 +1213,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         break;
     }
 
-    /* ── entrada de texto — va a la barra de búsqueda si está visible */
+    /* -- entrada de texto — va a la barra de búsqueda si está visible */
     case SDL_EVENT_TEXT_INPUT:
         if (e->menu_open) break;
         if (ctrl) break;  /* ignorar cuando Ctrl esta pulsado (ej: Ctrl+A, Ctrl+C) */
@@ -1291,7 +1291,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             break;
         }
 
-        /* ── Barra de busqueda activa: teclas especiales ── */
+        /* -- Barra de busqueda activa: teclas especiales -- */
         if (e->find.visible) {
             /* Si la barra no tiene foco, las teclas van al editor.
                Ctrl+F vuelve a enfocar la barra. */
@@ -1385,14 +1385,14 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         editor_keys:
         if (ctrl) {
             switch (key) {
-            /* ── Archivo ── */
+            /* -- Archivo -- */
             case SDLK_N: new_file(e);          break;
             case SDLK_O: open_file_dialog(e);  break;
             case SDLK_K: open_folder_dialog(e); break;
             case SDLK_S: save_file(e);         break;
             case SDLK_Q: e->running = 0;       break;
 
-            /* ── Edición ── */
+            /* -- Edición -- */
             case SDLK_Z: if (e->buf) editor_undo(e);       break;
             case SDLK_Y: if (e->buf) editor_redo(e);       break;
             case SDLK_A: if (e->buf) select_all(e);        break;
@@ -1403,7 +1403,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             case SDLK_SLASH: if (e->buf) toggle_line_comment(e); break;
             case SDLK_L: if (e->buf) select_line(e);       break;
 
-            /* ── Navegación ── */
+            /* -- Navegación -- */
             case SDLK_F: open_find_bar(e);     break;
             case SDLK_B: toggle_sidebar(e);    break;
             case SDLK_W: editor_tab_close(e);  break;
@@ -1418,7 +1418,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 move_cursor_select(e, t, (int)(ep - sp), shift);
                 break;
             }
-            /* ── salto de palabra ── */
+            /* -- salto de palabra -- */
             case SDLK_LEFT:  if (e->buf) move_word_left(e, shift);  break;
             case SDLK_RIGHT: if (e->buf) move_word_right(e, shift); break;
             case SDLK_UP:    if (e->buf) move_cursor_select(e, e->cursor_line - 5, e->cursor_col, shift); break;

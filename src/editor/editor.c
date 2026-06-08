@@ -1,6 +1,6 @@
-#include "editor.h"
-#include "render.h"
-#include "input.h"
+#include "editor/editor.h"
+#include "render/render.h"
+#include "input/input.h"
 #include "font_data.h"
 #include <string.h>
 #include <stdio.h>
@@ -9,7 +9,7 @@
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * DISEÑO DE TABS
- * ─────────────────────────────────────────────────────────────────────────
+ * -------------------------------------------------------------------------
  * • e->buf / e->lex / e->undo son PUNTEROS que apuntan directamente a
  *   tabs[active_tab].buf/lex/undo.  No hay copia por valor — nunca
  *   pueden divergir aunque buf_insert/delete haga realloc internamente.
@@ -21,7 +21,7 @@
  *   tiene el contenido correcto y no se re-lee.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Utilidad: mtime del fichero ─────────────────────────────────────────── */
+/* -- Utilidad: mtime del fichero ------------------------------------------- */
 static long file_mtime(const char *path) {
     if (!path || !path[0]) return 0;
     struct stat st;
@@ -29,7 +29,7 @@ static long file_mtime(const char *path) {
     return (long)st.st_mtime;
 }
 
-/* ── editor_pos_from_line_col ────────────────────────────────────────────── */
+/* -- editor_pos_from_line_col ---------------------------------------------- */
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     Buffer *b = e->buf;
     int total = buf_line_count(b);
@@ -50,7 +50,7 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     return line_start + (size_t)col;
 }
 
-/* ── editor_sync_cursor ──────────────────────────────────────────────────── */
+/* -- editor_sync_cursor ---------------------------------------------------- */
 void editor_sync_cursor(Editor *e) {
     size_t pos = buf_cursor_pos(e->buf);
     int line, col;
@@ -59,7 +59,7 @@ void editor_sync_cursor(Editor *e) {
     e->cursor_col  = col;
 }
 
-/* ── editor_ensure_visible ───────────────────────────────────────────────── */
+/* -- editor_ensure_visible ------------------------------------------------- */
 void editor_ensure_visible(Editor *e) {
     int left_off  = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT) / LINE_HEIGHT;
@@ -79,14 +79,14 @@ void editor_ensure_visible(Editor *e) {
     if (e->scroll_col  < 0) e->scroll_col  = 0;
 }
 
-/* ── editor_update_lexer ─────────────────────────────────────────────────── */
+/* -- editor_update_lexer --------------------------------------------------- */
 void editor_update_lexer(Editor *e, int from_line) {
     int total = buf_line_count(e->buf);
     lexer_cache_resize(e->lex, total);
     lexer_cache_dirty(e->lex, from_line);
 }
 
-/* ── Selección ───────────────────────────────────────────────────────────── */
+/* -- Selección ------------------------------------------------------------- */
 int editor_sel_range(Editor *e, size_t *from, size_t *to) {
     if (!e->sel_active) return 0;
     size_t anchor = editor_pos_from_line_col(e, e->sel_anchor_line, e->sel_anchor_col);
@@ -124,12 +124,12 @@ void editor_tab_save_state(Editor *e) {
 static void editor_tab_load_state(Editor *e) {
     EditorTab *t = &e->tabs[e->active_tab];
 
-    /* ── punteros directos al almacenamiento del tab ── */
+    /* -- punteros directos al almacenamiento del tab -- */
     e->buf  = &t->buf;
     e->lex  = &t->lex;
     e->undo = &t->undo;
 
-    /* ── recarga eficiente ──────────────────────────────────────────────
+    /* -- recarga eficiente ----------------------------------------------
      * Solo si el tab tiene ruta, NO está modificado y el mtime del
      * fichero en disco es distinto al que guardamos al cargar.
      * Si hay cambios sin guardar, nunca pisamos el trabajo del usuario. */
@@ -152,7 +152,7 @@ static void editor_tab_load_state(Editor *e) {
         }
     }
 
-    /* ── escalares ── */
+    /* -- escalares -- */
     e->cursor_line     = t->cursor_line;
     e->cursor_col      = t->cursor_col;
     e->scroll_line     = t->scroll_line;
@@ -439,7 +439,7 @@ int editor_init(Editor *e, const char *filepath) {
     /* FileTree */
     ftree_init(&e->ftree);
 
-    /* ── Tabs ───────────────────────────────────────────────────────────
+    /* -- Tabs -----------------------------------------------------------
      * Si se pasó un filepath, crear el tab inicial con ese archivo.
      * Si no, arrancar con tab_count = 0 (pantalla de bienvenida). */
     e->tab_count  = 0;

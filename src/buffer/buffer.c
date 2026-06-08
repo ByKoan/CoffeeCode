@@ -1,11 +1,11 @@
-#include "buffer.h"
+#include "buffer/buffer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 /* ══════════════════════════════════════════════════════════════════════════
  * ÍNDICE DE LÍNEAS
- * ──────────────────────────────────────────────────────────────────────────
+ * --------------------------------------------------------------------------
  * line_index[i] = posición lógica del primer byte de la línea i.
  * Invariante: line_index[0] == 0 siempre.
  *
@@ -100,7 +100,7 @@ static void li_after_delete(Buffer *b, size_t from, size_t to) {
     }
 }
 
-/* ── helpers internos del gap buffer ────────────────────────────────────── */
+/* -- helpers internos del gap buffer -------------------------------------- */
 
 static size_t gap_size(const Buffer *b) {
     return b->gap_end - b->gap_start;
@@ -152,7 +152,7 @@ static size_t phys(const Buffer *b, size_t pos) {
     return pos < b->gap_start ? pos : pos + gap_size(b);
 }
 
-/* ── ciclo de vida ──────────────────────────────────────────────────────── */
+/* -- ciclo de vida -------------------------------------------------------- */
 
 int buf_init(Buffer *b) {
     b->data = malloc(BUFFER_INIT_SIZE);
@@ -179,7 +179,7 @@ void buf_free(Buffer *b) {
     b->line_cap   = 0;
 }
 
-/* ── edición ────────────────────────────────────────────────────────────── */
+/* -- edición -------------------------------------------------------------- */
 
 void buf_insert(Buffer *b, char c) {
     if (!ensure_gap(b, 1)) return;
@@ -210,7 +210,7 @@ void buf_delete_after(Buffer *b) {
     b->gap_end++;
 }
 
-/* ── edición de rangos ───────────────────────────────────────────────────── */
+/* -- edición de rangos ----------------------------------------------------- */
 
 void buf_delete_range(Buffer *b, size_t from, size_t to) {
     size_t len = buf_length(b);
@@ -235,7 +235,7 @@ size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out) {
     return n;
 }
 
-/* ── movimiento ─────────────────────────────────────────────────────────── */
+/* -- movimiento ----------------------------------------------------------- */
 
 void buf_move_left(Buffer *b) {
     if (b->gap_start == 0) return;
@@ -257,7 +257,7 @@ void buf_move_to(Buffer *b, size_t pos) {
     move_gap_to(b, pos);
 }
 
-/* ── consulta ───────────────────────────────────────────────────────────── */
+/* -- consulta ------------------------------------------------------------- */
 
 size_t buf_length(const Buffer *b) {
     return b->size - gap_size(b);
@@ -317,7 +317,7 @@ size_t buf_line_end(const Buffer *b, size_t pos) {
     return pos;
 }
 
-/* ── carga / guarda ─────────────────────────────────────────────────────── */
+/* -- carga / guarda ------------------------------------------------------- */
 
 int buf_load_file(Buffer *b, const char *path) {
     FILE *f = fopen(path, "rb");

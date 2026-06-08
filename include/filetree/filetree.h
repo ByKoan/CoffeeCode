@@ -2,7 +2,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
-/* ── Dimensiones del panel ───────────────────────────────────────────────── */
+/* -- Dimensiones del panel ------------------------------------------------- */
 #define FTREE_WIDTH_DEFAULT  220   /* ancho cuando está visible               */
 #define FTREE_MIN_WIDTH       80   /* no se puede colapsar más que esto        */
 #define FTREE_ITEM_H          22   /* altura de cada fila                      */
@@ -10,16 +10,16 @@
 #define FTREE_ICON_W          16   /* espacio para icono de carpeta/archivo    */
 #define FTREE_TOGGLE_BTN_W    18   /* ancho del botón « / » en el borde        */
 
-/* ── Número máximo de entradas ───────────────────────────────────────────── */
+/* -- Número máximo de entradas --------------------------------------------- */
 #define FTREE_MAX_ENTRIES    2048
 
-/* ── Tipo de entrada ─────────────────────────────────────────────────────── */
+/* -- Tipo de entrada ------------------------------------------------------- */
 typedef enum {
     FTYPE_DIR  = 0,
     FTYPE_FILE = 1
 } FEntryType;
 
-/* ── Una entrada del árbol ───────────────────────────────────────────────── */
+/* -- Una entrada del árbol ------------------------------------------------- */
 typedef struct {
     char         path[512];   /* ruta absoluta                               */
     char         name[256];   /* nombre de archivo / carpeta                 */
@@ -29,7 +29,7 @@ typedef struct {
     int          visible;     /* 1 si debe pintarse (padres expandidos)      */
 } FEntry;
 
-/* ── Estado del explorador ───────────────────────────────────────────────── */
+/* -- Estado del explorador ------------------------------------------------- */
 typedef struct {
     int      open;                        /* 1 = panel visible               */
     int      width;                       /* ancho actual en px               */
@@ -45,7 +45,7 @@ typedef struct {
     int      drag_start_w;
 } FileTree;
 
-/* ── API pública ─────────────────────────────────────────────────────────── */
+/* -- API pública ----------------------------------------------------------- */
 
 /* Inicializa la estructura (panel cerrado) — aloja entries en el heap */
 void ftree_init(FileTree *ft);

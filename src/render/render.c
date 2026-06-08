@@ -1,9 +1,9 @@
-#include "render.h"
-#include "filetree.h"
+#include "render/render.h"
+#include "filetree/filetree.h"
 #include <stdio.h>
 #include <string.h>
 
-/* ── Colores del tema ────────────────────────────────────────────────────── */
+/* -- Colores del tema ------------------------------------------------------ */
 #define COL_BG          0x28, 0x2C, 0x34, 0xFF
 #define COL_GUTTER      0x21, 0x25, 0x2B, 0xFF
 #define COL_CURSOR_LINE 0x2C, 0x31, 0x3C, 0xFF
@@ -44,7 +44,7 @@ static const char *MENU_HINTS[MENU_ITEMS] = {
 #define COL_FTREE_FILE  0xAB, 0xB2, 0xBF, 0xFF
 #define COL_FTREE_ROOT  0x61, 0xAF, 0xEF, 0xFF
 
-/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+/* -- Scrollbar ------------------------------------------------------------- */
 #define SCROLLBAR_W     8    /* ancho de la barra de scroll (px) */
 
 static void set_color(SDL_Renderer *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) {
@@ -95,7 +95,7 @@ static int get_line_text(Editor *e, int line, char *out, int max) {
     return col;
 }
 
-/* ── Navbar ─────────────────────────────────────────────────────────────── */
+/* -- Navbar --------------------------------------------------------------- */
 static void render_navbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
@@ -151,7 +151,7 @@ static void render_navbar(Editor *e) {
     }
 }
 
-/* ── Menú desplegable ────────────────────────────────────────────────────── */
+/* -- Menú desplegable ------------------------------------------------------ */
 static void render_menu(Editor *e) {
     if (!e->menu_open) return;
     SDL_Renderer *r = e->renderer;
@@ -224,7 +224,7 @@ static void render_menu(Editor *e) {
     }
 }
 
-/* ── Panel lateral ──────────────────────────────────────────────────────── */
+/* -- Panel lateral -------------------------------------------------------- */
 static void render_filetree(Editor *e) {
     FileTree *ft = &e->ftree;
     if (!ft->open) return;
@@ -357,8 +357,8 @@ static void render_filetree_toggle_closed(Editor *e) {
               0x61, 0xAF, 0xEF);
 }
 
-/* ── Barra de búsqueda ───────────────────────────────────────────────────── */
-/* ── Tab bar ─────────────────────────────────────────────────────────────── */
+/* -- Barra de búsqueda ----------------------------------------------------- */
+/* -- Tab bar --------------------------------------------------------------- */
 static void render_tabbar(Editor *e)
 {
     SDL_Renderer *r = e->renderer;
@@ -495,7 +495,7 @@ static void render_find_bar(Editor *e)
     int row1_y  = y + pad;
     int row2_y  = row1_y + field_h + row_gap;
 
-    /* ── Fondo + borde ── */
+    /* -- Fondo + borde -- */
     set_color(e->renderer, 0x1E,0x22,0x2A,255);
     SDL_FRect bg = {(float)x,(float)y,(float)w,(float)h};
     SDL_RenderFillRect(e->renderer, &bg);
@@ -514,7 +514,7 @@ static void render_find_bar(Editor *e)
     int focused1 = (e->find.bar_focused && e->find.replace_focused == 0);
     int focused2 = (e->find.bar_focused && e->find.replace_focused == 1);
 
-    /* ── Fila 1: Buscar ── */
+    /* -- Fila 1: Buscar -- */
     /* etiqueta centrada verticalmente */
     draw_text(e, "Buscar:", lbl_x, row1_y + (field_h - FONT_SIZE)/2, 0x88,0x8C,0x99);
     DRAW_FIELD(field_x, row1_y, field_w, focused1);
@@ -548,7 +548,7 @@ static void render_find_bar(Editor *e)
     draw_text(e, txt1, field_x+4, row1_y+(field_h-FONT_SIZE)/2, 220,220,220);
 
     if (e->find.result_line >= 0 && e->find.match_count > 0) {
-        /* ── Botones ↑ ↓ + contador "X/N" a la derecha del campo buscar ── */
+        /* -- Botones ↑ ↓ + contador "X/N" a la derecha del campo buscar -- */
         int arrow_w = field_h;  /* botones cuadrados */
         int ctr_w   = 0, ctr_h = 0;
         char ctr_lbl[32];
@@ -603,7 +603,7 @@ static void render_find_bar(Editor *e)
         draw_text(e, "Sin resultados", field_x+field_w/2-30, row1_y+(field_h-FONT_SIZE)/2, 200,80,80);
     }
 
-    /* ── Fila 2: Reemplazar ── */
+    /* -- Fila 2: Reemplazar -- */
     draw_text(e, "Reemplazar:", lbl_x, row2_y + (field_h - FONT_SIZE)/2, 0x88,0x8C,0x99);
     DRAW_FIELD(field_x, row2_y, fld2_w, focused2);
 
@@ -635,7 +635,7 @@ static void render_find_bar(Editor *e)
              (focused2 && e->find.replace_sel_start < 0 && (SDL_GetTicks()/500)%2) ? "|" : "");
     draw_text(e, txt2, field_x+4, row2_y+(field_h-FONT_SIZE)/2, 220,220,220);
 
-    /* ── Botón "Reemplazar" ── */
+    /* -- Botón "Reemplazar" -- */
     set_color(e->renderer, 0x2C,0x5F,0x8C,255);
     SDL_FRect btn = {(float)btn_x,(float)row2_y,(float)btn_w,(float)field_h};
     SDL_RenderFillRect(e->renderer, &btn);
@@ -673,7 +673,7 @@ static void render_find_bar(Editor *e)
     e->find.field_h = field_h;
 }
 
-/* ── Atajos visuales como badges de teclado ──────────────────────── */
+/* -- Atajos visuales como badges de teclado ------------------------ */
 static void render_shortcut_badge(Editor *e, const char *key, const char *label,
                                   int *x, int y)
 {
@@ -759,7 +759,7 @@ static void render_shortcuts(Editor *e)
     }
 }
 
-/* ── Scrollbar vertical ───────────────────────────────────────────── */
+/* -- Scrollbar vertical --------------------------------------------- */
 static void render_scrollbar(Editor *e, int left_offset)
 {
     SDL_Renderer *r = e->renderer;
@@ -802,7 +802,7 @@ static void render_scrollbar(Editor *e, int left_offset)
     (void)left_offset;
 }
 
-/* ── Resaltado de selección ───────────────────────────────────────── */
+/* -- Resaltado de selección ----------------------------------------- */
 static void render_selection(Editor *e, int left_offset, int text_top, int visible_lines)
 {
     if (!e->sel_active) return;
@@ -862,7 +862,7 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
     }
 }
 
-/* ── render_frame ────────────────────────────────────────────────────────── */
+/* -- render_frame ---------------------------------------------------------- */
 void render_frame(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
@@ -881,7 +881,7 @@ void render_frame(Editor *e) {
     set_color(r, COL_BG);
     SDL_RenderClear(r);
 
-    /* ── Pantalla vacía cuando no hay ningún archivo abierto ── */
+    /* -- Pantalla vacía cuando no hay ningún archivo abierto -- */
     if (e->tab_count == 0) {
         render_navbar(e);
         render_tabbar(e);
@@ -943,7 +943,7 @@ void render_frame(Editor *e) {
         }
     }
 
-    /* ── Resaltado de línea activa (solo cuando no hay selección) ── */
+    /* -- Resaltado de línea activa (solo cuando no hay selección) -- */
     if (!e->sel_active) {
         int vi_cursor = e->cursor_line - e->scroll_line;
         if (vi_cursor >= 0 && vi_cursor < visible_lines) {
@@ -954,10 +954,10 @@ void render_frame(Editor *e) {
         }
     }
 
-    /* ── Resaltado de selección (encima del fondo, debajo del texto) ── */
+    /* -- Resaltado de selección (encima del fondo, debajo del texto) -- */
     render_selection(e, left_offset, text_top, visible_lines);
 
-    /* ── líneas de texto ── */
+    /* -- líneas de texto -- */
     for (int vi = 0; vi < visible_lines; vi++) {
         int li = e->scroll_line + vi;
         if (li >= total_lines) break;
@@ -1044,7 +1044,7 @@ void render_frame(Editor *e) {
         }
     }
 
-    /* ── gutter ── */
+    /* -- gutter -- */
     set_color(r, COL_GUTTER);
     SDL_FRect gutter = {(float)left_offset, (float)text_top,
                         (float)GUTTER_WIDTH, (float)text_height};
@@ -1060,7 +1060,7 @@ void render_frame(Editor *e) {
                   0x49, 0x50, 0x5E);
     }
 
-    /* ── cursor ── */
+    /* -- cursor -- */
     {
         int vis_line = e->cursor_line - e->scroll_line;
         int vis_col  = e->cursor_col  - e->scroll_col;
@@ -1075,7 +1075,7 @@ void render_frame(Editor *e) {
 
     /* atajos visuales desactivados */
 
-    /* ── barra de estado ── */
+    /* -- barra de estado -- */
     {
         int sy = e->win_h - STATUS_HEIGHT;
         set_color(r, COL_STATUS_BG);
@@ -1095,25 +1095,25 @@ void render_frame(Editor *e) {
                   0x98, 0xC3, 0x79);
     }
 
-    /* ── scrollbar vertical ── */
+    /* -- scrollbar vertical -- */
     render_scrollbar(e, left_offset);
 
-    /* ── panel lateral ── */
+    /* -- panel lateral -- */
     if (e->ftree.open)
         render_filetree(e);
     else
         render_filetree_toggle_closed(e);
 
-    /* ── navbar ── */
+    /* -- navbar -- */
     render_navbar(e);
 
-    /* ── tab bar ── */
+    /* -- tab bar -- */
     render_tabbar(e);
 
-    /* ── find bar ── */
+    /* -- find bar -- */
     render_find_bar(e);
 
-    /* ── menú ── */
+    /* -- menú -- */
     render_menu(e);
 
     SDL_RenderPresent(r);
