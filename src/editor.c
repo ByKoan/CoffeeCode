@@ -31,20 +31,23 @@ static long file_mtime(const char *path) {
 
 /* ── editor_pos_from_line_col ────────────────────────────────────────────── */
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
-    size_t len = buf_length(e->buf);
-    int cur_line = 0, cur_col = 0;
-    for (size_t i = 0; i <= len; i++) {
-        if (cur_line == line && cur_col == col) return i;
-        if (i == len) break;
-        char c = buf_char_at(e->buf, i);
-        if (c == '\n') {
-            if (cur_line == line) return i;
-            cur_line++; cur_col = 0;
-        } else {
-            cur_col++;
-        }
-    }
-    return len;
+    Buffer *b = e->buf;
+    int total = buf_line_count(b);
+    if (line < 0)      line = 0;
+    if (line >= total) line = total - 1;
+
+    /* O(1): inicio de línea directo desde line_index */
+    size_t line_start = b->line_index[line];
+
+    /* fin de línea sin incluir \n: O(longitud de línea) */
+    size_t line_end = buf_line_end(b, line_start);
+
+    /* clamp col al rango real */
+    int line_len = (int)(line_end - line_start);
+    if (col < 0)        col = 0;
+    if (col > line_len) col = line_len;
+
+    return line_start + (size_t)col;
 }
 
 /* ── editor_sync_cursor ──────────────────────────────────────────────────── */

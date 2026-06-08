@@ -484,27 +484,36 @@ static void handle_text_click(Editor *e, int mx, int my) {
     int left = get_left_offset(e);
     int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
     if (mx < text_x) return;
-    int vis_line = (my - NAVBAR_HEIGHT) / LINE_HEIGHT;
-    int vis_col  = (mx - text_x) / e->char_w;
+    int cw = (e->char_w > 0 ? e->char_w : 8);
+    int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+    if (vis_line < 0) vis_line = 0;
     int line = e->scroll_line + vis_line;
-    int col  = e->scroll_col  + vis_col;
     int total = buf_line_count(e->buf);
+    if (line < 0) line = 0;
     if (line >= total) line = total - 1;
+    /* columna: desplazar por scroll_col */
+    int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
+    if (vis_col < 0) vis_col = 0;
+    /* limitar al largo real de la línea */
+    size_t ls = editor_pos_from_line_col(e, line, 0);
+    size_t le = buf_line_end(e->buf, ls);
+    int line_len = (int)(le - ls);
+    if (vis_col > line_len) vis_col = line_len;
     editor_sel_clear(e);
-    move_cursor(e, line, col);
+    move_cursor(e, line, vis_col);
 }
 
 /* ── Ctrl+A — seleccionar todo ───────────────────────────────────── */
 static void select_all(Editor *e) {
-    e->sel_active      = 1;
+    /* ancla en posición lógica 0 → línea 0, col 0 */
     e->sel_anchor_line = 0;
     e->sel_anchor_col  = 0;
+    e->sel_active      = 1;
     /* mover cursor al final del documento */
-    int last = buf_line_count(e->buf) - 1;
     size_t end_pos = buf_length(e->buf);
     buf_move_to(e->buf, end_pos);
     editor_sync_cursor(e);
-    (void)last;
+    editor_ensure_visible(e);
     e->needs_redraw = 1;
 }
 
@@ -681,14 +690,16 @@ static void find_jump(Editor *e) {
         e->needs_redraw = 1;
         return;
     }
+    /* posicionar cursor en el inicio del match para calcular línea/col del ancla */
     buf_move_to(e->buf, hit);
     editor_sync_cursor(e);
     e->find.result_line = e->cursor_line;
     e->find.result_col  = e->cursor_col;
-    /* seleccionar el match */
-    e->sel_active       = 1;
-    e->sel_anchor_line  = e->cursor_line;
-    e->sel_anchor_col   = e->cursor_col;
+    /* fijar ancla ANTES de mover cursor al final */
+    e->sel_active      = 1;
+    e->sel_anchor_line = e->cursor_line;
+    e->sel_anchor_col  = e->cursor_col;
+    /* ahora mover cursor al final del match */
     buf_move_to(e->buf, hit + (size_t)e->find.query_len);
     editor_sync_cursor(e);
     editor_ensure_visible(e);
@@ -836,6 +847,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             int cw      = (e->char_w > 0 ? e->char_w : 8);
             /* calcular línea visual */
             int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+            if (vis_line < 0) vis_line = 0;
             int line = e->scroll_line + vis_line;
             int total = buf_line_count(e->buf);
             if (line < 0)       line = 0;
@@ -849,11 +861,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             int line_len = (int)(le - ls);
             if (vis_col > line_len) vis_col = line_len;
             int col = vis_col;
-            /* activar selección manteniendo el ancla original */
-            if (!e->sel_active) {
-                e->sel_active      = 1;
-                /* ancla ya fue fijada en BUTTON_DOWN */
-            }
+            /* activar selección manteniendo el ancla fijada en BUTTON_DOWN */
+            e->sel_active = 1;
             /* mover cursor sin tocar el ancla */
             size_t pos = editor_pos_from_line_col(e, line, col);
             buf_move_to(e->buf, pos);
@@ -985,6 +994,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
                 int cw     = (e->char_w > 0 ? e->char_w : 8);
                 int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+                if (vis_line < 0) vis_line = 0;
                 int line = e->scroll_line + vis_line;
                 int total = buf_line_count(e->buf);
                 if (line < 0)      line = 0;
@@ -999,16 +1009,15 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 int col = vis_col;
 
                 editor_sel_clear(e);
+                /* fijar ancla ANTES de mover el cursor, usando las coords calculadas */
+                e->sel_anchor_line = line;
+                e->sel_anchor_col  = col;
+                e->mouse_selecting = 1;
                 size_t pos = editor_pos_from_line_col(e, line, col);
                 buf_move_to(e->buf, pos);
                 editor_sync_cursor(e);
                 editor_ensure_visible(e);
                 e->needs_redraw = 1;
-
-                /* establecer ancla para drag-select */
-                e->sel_anchor_line  = e->cursor_line;
-                e->sel_anchor_col   = e->cursor_col;
-                e->mouse_selecting  = 1;
             }
         }
         break;
