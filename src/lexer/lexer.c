@@ -44,7 +44,7 @@ static int is_type(const char *w, int len) {
 }
 
 /* -- Tokenizador por línea ------------------------------------------------ */
-int lexer_tokenize_line(const char *text, int len,
+static int lexer_tokenize_line(const char *text, int len,
                         LineTokens *out, int in_block_comment)
 {
     out->count = 0;
@@ -208,4 +208,47 @@ void lexer_cache_dirty(LexerCache *lc, int from_line) {
     int n = (int)lc->dirty.len;
     for (int i = from_line; i < n; i++)
         *(int *)vec_at(&lc->dirty, (size_t)i) = 1;
+}
+
+/* ── Interfaz Highlighter (resaltadores enchufables) ──────────────────────── */
+
+/* Resaltador de C: delega en el tokenizador de arriba. */
+static int hl_c_tokenize(const Highlighter *self, const char *text, int len,
+                         LineTokens *out, int in_block) {
+    (void)self;
+    return lexer_tokenize_line(text, len, out, in_block);
+}
+const Highlighter highlighter_c = { "C", hl_c_tokenize };
+
+/* Resaltador nulo: texto plano, sin tokens (render usa el color por defecto). */
+static int hl_none_tokenize(const Highlighter *self, const char *text, int len,
+                            LineTokens *out, int in_block) {
+    (void)self; (void)text; (void)len; (void)in_block;
+    out->count = 0;
+    return 0;
+}
+const Highlighter highlighter_none = { "texto", hl_none_tokenize };
+
+/* Comparación de extensión case-insensitive (sin depender de SDL/POSIX). */
+static int ext_eq(const char *a, const char *b) {
+    for (; *a && *b; a++, b++)
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+    return *a == *b;
+}
+
+const Highlighter *highlighter_default(void) {
+    return &highlighter_c;
+}
+
+const Highlighter *highlighter_for_path(const char *path) {
+    if (!path || !path[0]) return &highlighter_c;
+    const char *dot = strrchr(path, '.');
+    if (!dot) return &highlighter_none;
+
+    static const char *c_exts[] = {
+        ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", NULL
+    };
+    for (int i = 0; c_exts[i]; i++)
+        if (ext_eq(dot, c_exts[i])) return &highlighter_c;
+    return &highlighter_none;
 }

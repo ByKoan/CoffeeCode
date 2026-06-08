@@ -935,7 +935,7 @@ void render_frame(Editor *e) {
             if (*lexer_cache_dirty_at(e->lex, li)) {
                 char line_buf[4096];
                 get_line_text(e, li, line_buf, sizeof(line_buf));
-                in_block = lexer_tokenize_line(line_buf,
+                in_block = e->hl->tokenize_line(e->hl, line_buf,
                                (int)strlen(line_buf),
                                lexer_cache_line(e->lex, li), in_block);
                 *lexer_cache_dirty_at(e->lex, li) = 0;

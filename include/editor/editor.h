@@ -51,6 +51,7 @@ typedef struct {
     Buffer     buf;
     LexerCache lex;
     UndoStack  undo;
+    const Highlighter *hl;    /* resaltador según el lenguaje del archivo */
     char       filepath[512];
     int        modified;
     long       loaded_mtime;  /* mtime del fichero en la última carga desde disco */
@@ -110,6 +111,7 @@ typedef struct {
      * se actualizan en editor_tab_load_state(). */
     Buffer       *buf;
     LexerCache   *lex;
+    const Highlighter *hl;    /* resaltador del tab activo */
 
     /* vista */
     int           scroll_line;

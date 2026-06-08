@@ -128,6 +128,7 @@ static void editor_tab_load_state(Editor *e) {
     e->buf  = &t->buf;
     e->lex  = &t->lex;
     e->undo = &t->undo;
+    e->hl   = t->hl;
 
     /* -- recarga eficiente ----------------------------------------------
      * Solo si el tab tiene ruta, NO está modificado y el mtime del
@@ -174,6 +175,7 @@ void editor_tab_new(Editor *e) {
     buf_init(&t->buf);
     lexer_cache_init(&t->lex, 1);
     ring_init(&t->undo.entries, sizeof(UndoEntry), UNDO_MAX);
+    t->hl = highlighter_default();
     t->filepath[0] = '\0';
     e->active_tab = idx;
     editor_tab_load_state(e);
@@ -208,6 +210,7 @@ void editor_tab_open(Editor *e, const char *path) {
     int total = buf_line_count(&t->buf);
     lexer_cache_init(&t->lex, total > 0 ? total : 1);
     ring_init(&t->undo.entries, sizeof(UndoEntry), UNDO_MAX);
+    t->hl = highlighter_for_path(path);
     e->active_tab = idx;
     editor_tab_load_state(e);
     editor_update_lexer(e, 0);
@@ -244,6 +247,7 @@ void editor_tab_close(Editor *e) {
         e->buf  = NULL;
         e->lex  = NULL;
         e->undo = NULL;
+        e->hl   = NULL;
         e->active_tab      = 0;
         e->filepath[0]     = '\0';
         e->modified        = 0;

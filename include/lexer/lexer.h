@@ -58,10 +58,19 @@ static inline int *lexer_cache_dirty_at(LexerCache *lc, int i) {
     return (int *)vec_at(&lc->dirty, (size_t)i);
 }
 
-/*
- * Tokeniza `text` (longitud `len`, sin '\n') y escribe en `out`.
- * `in_block_comment` indica si la línea empieza dentro de un bloque.
- * Devuelve 1 si la línea termina dentro de un bloque de comentario.
- */
-int lexer_tokenize_line(const char *text, int len,
-                        LineTokens *out, int in_block_comment);
+/* ── Resaltador: interfaz por punteros a función (estilo *_ops del kernel) ──
+ * Permite enchufar distintos lenguajes. tokenize_line escribe los tokens de una
+ * línea en `out` y devuelve 1 si la línea termina dentro de un bloque de
+ * comentario (el estado se encadena entre líneas). */
+typedef struct Highlighter {
+    const char *name;
+    int (*tokenize_line)(const struct Highlighter *self,
+                         const char *text, int len,
+                         LineTokens *out, int in_block_comment);
+} Highlighter;
+
+extern const Highlighter highlighter_c;     /* lenguaje C/C++           */
+extern const Highlighter highlighter_none;  /* texto plano (sin tokens) */
+
+const Highlighter *highlighter_default(void);              /* por defecto (C) */
+const Highlighter *highlighter_for_path(const char *path); /* según extensión */
