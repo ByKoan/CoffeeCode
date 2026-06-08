@@ -78,8 +78,10 @@ static void li_after_delete(Buffer *b, size_t from, size_t to) {
     int wr = 0;
     for (int i = 0; i < count; i++) {
         size_t s = LI(b)[i];
-        if (s >= from && s < to) continue;          /* borrar */
-        LI(b)[wr++] = (s >= to) ? s - del : s;
+        /* una línea (s>0) desaparece si se borra su '\n' precedente (en s-1),
+           lo que ocurre exactamente cuando from < s <= to. */
+        if (s > from && s <= to) continue;          /* borrar */
+        LI(b)[wr++] = (s > to) ? s - del : s;
     }
     b->lines.len = (size_t)wr;
     if (b->lines.len == 0) {
