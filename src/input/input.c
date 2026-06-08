@@ -1,304 +1,19 @@
 #include "input_internal.h"
 
-void input_handle_event(Editor *e, SDL_Event *ev) {
-    SDL_Keymod mods  = SDL_GetModState();
-    int ctrl  = (mods & SDL_KMOD_CTRL)  != 0;
-    int shift = (mods & SDL_KMOD_SHIFT) != 0;
+/* Manejadores de teclado y texto. Los de raton estan en input_mouse.c. */
 
-    switch (ev->type) {
-
-    case SDL_EVENT_QUIT:
-        e->running = 0;
-        break;
-
-    case SDL_EVENT_WINDOW_RESIZED:
-        e->win_w = ev->window.data1;
-        e->win_h = ev->window.data2;
-        e->needs_redraw = 1;
-        break;
-
-    case SDL_EVENT_MOUSE_WHEEL: {
-        float mx2f = 0.0f, my2f = 0.0f;
-        SDL_GetMouseState(&mx2f, &my2f);
-        int mx2 = (int)mx2f;
-        int left2 = get_left_offset(e);
-        if (e->ftree.open && mx2 < left2) {
-            e->ftree.scroll -= (int)(ev->wheel.y * 3);
-            if (e->ftree.scroll < 0) e->ftree.scroll = 0;
-            e->needs_redraw = 1;
-        } else {
-            handle_scroll(e, ev->wheel.y);
-        }
-        break;
-    }
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (ev->button.button == SDL_BUTTON_LEFT) {
-            e->ftree.dragging_border  = 0;
-            e->mouse_selecting        = 0;
-            e->scrollbar_dragging     = 0;
-        }
-        break;
-
-    case SDL_EVENT_MOUSE_MOTION: {
-        int mx = (int)ev->motion.x;
-        int my = (int)ev->motion.y;
-        if (e->menu_open) {
-            int prev = e->menu_hovered;
-            e->menu_hovered = menu_item_at(mx, my);
-            if (e->menu_hovered != prev) e->needs_redraw = 1;
-        }
-        if (e->ftree.open && mx < e->ftree.width && my >= NAVBAR_HEIGHT + TAB_BAR_HEIGHT)
-            handle_ftree_hover(e, mx, my);
-        if (e->ftree.dragging_border) {
-            int new_w = e->ftree.drag_start_w + (mx - e->ftree.drag_start_x);
-            if (new_w < FTREE_MIN_WIDTH)  new_w = FTREE_MIN_WIDTH;
-            if (new_w > e->win_w / 2)     new_w = e->win_w / 2;
-            e->ftree.width = new_w;
-            e->needs_redraw = 1;
-        }
-
-        /* arratre de scrollbar */
-        if (e->scrollbar_dragging) {
-            int text_height   = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
-            if (e->tab_count == 0) break;
-            int total_lines   = buf_line_count(e->buf);
-            int visible_lines = text_height / LINE_HEIGHT;
-            int max_scroll    = total_lines - visible_lines;
-            if (max_scroll < 0) max_scroll = 0;
-            float thumb_h_ratio = (visible_lines > 0 && total_lines > 0)
-                                  ? (float)visible_lines / (float)total_lines : 1.0f;
-            int thumb_h = (int)(text_height * thumb_h_ratio);
-            if (thumb_h < 20) thumb_h = 20;
-            int thumb_range = text_height - thumb_h;
-            if (thumb_range < 1) thumb_range = 1;
-            float frac = (float)(my - e->scrollbar_drag_start_y) / (float)thumb_range;
-            int new_scroll = e->scrollbar_drag_start_line + (int)(frac * max_scroll);
-            if (new_scroll < 0)          new_scroll = 0;
-            if (new_scroll > max_scroll) new_scroll = max_scroll;
-            e->scroll_line = new_scroll;
-            e->needs_redraw = 1;
-        }
-
-        /* arrastre para seleccionar texto */
-        if (e->mouse_selecting && e->tab_count > 0) {
-            int left    = get_left_offset(e);
-            int text_x  = left + GUTTER_WIDTH + PADDING_LEFT;
-            int cw      = (e->char_w > 0 ? e->char_w : 8);
-            /* calcular línea visual */
-            int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
-            if (vis_line < 0) vis_line = 0;
-            int line = e->scroll_line + vis_line;
-            int total = buf_line_count(e->buf);
-            if (line < 0)       line = 0;
-            if (line >= total)  line = total - 1;
-            /* calcular columna — limitar al largo real de la línea */
-            int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
-            if (vis_col < 0) vis_col = 0;
-            /* obtener longitud real de la línea */
-            size_t ls = editor_pos_from_line_col(e, line, 0);
-            size_t le = buf_line_end(e->buf, ls);
-            int line_len = (int)(le - ls);
-            if (vis_col > line_len) vis_col = line_len;
-            int col = vis_col;
-            /* activar selección manteniendo el ancla fijada en BUTTON_DOWN */
-            e->sel_active = 1;
-            /* mover cursor sin tocar el ancla */
-            size_t pos = editor_pos_from_line_col(e, line, col);
-            buf_move_to(e->buf, pos);
-            editor_sync_cursor(e);
-            editor_ensure_visible(e);
-            e->needs_redraw = 1;
-        }
-        break;
-    }
-
-    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-        int mx = (int)ev->button.x;
-        int my = (int)ev->button.y;
-        if (ev->button.button != SDL_BUTTON_LEFT) break;
-
-        /* -- clic en la barra de tabs -- */
-        if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
-            /* botón + nuevo tab */
-            if (mx >= e->tab_new_btn_x && mx < e->tab_new_btn_x + 28) {
-                editor_tab_new(e);
-                break;
-            }
-            /* clic en tab existente */
-            for (int i = 0; i < e->tab_count; i++) {
-                EditorTab *t = &e->tabs[i];
-                if (mx >= t->tab_x && mx < t->tab_x + t->tab_w) {
-                    /* botón × cerrar */
-                    if (mx >= t->close_x && mx < t->close_x + 16 &&
-                        my >= t->close_y  && my < t->close_y  + 16) {
-                        editor_tab_save_state(e);
-                        e->active_tab = i;
-                        editor_tab_close(e);
-                        const char *title = e->filepath[0] ? e->filepath : "CoffeeCode - Sin título";
-                        SDL_SetWindowTitle(e->window, title);
-                    } else {
-                        editor_tab_switch(e, i);
-                        const char *title = e->tabs[i].filepath[0] ? e->tabs[i].filepath : "CoffeeCode - Sin título";
-                        SDL_SetWindowTitle(e->window, title);
-                    }
-                    break;
-                }
-            }
-            break;
-        }
-
-        /* clic en el menú abierto */
-        if (e->menu_open) {
-            int item = menu_item_at(mx, my);
-            if (item >= 0) {
-                menu_exec(e, item);
-            } else {
-                int in_btn = (mx >= BTN_FILE_X && mx < BTN_FILE_X + BTN_FILE_W
-                              && my >= 0 && my < NAVBAR_HEIGHT);
-                e->menu_open    = in_btn ? 0 : 0;
-                e->menu_hovered = -1;
-                e->needs_redraw = 1;
-            }
-            break;
-        }
-
-        /* clic en botón "Archivo" */
-        if (my >= 0 && my < NAVBAR_HEIGHT &&
-            mx >= BTN_FILE_X && mx < BTN_FILE_X + BTN_FILE_W) {
-            e->menu_open    = 1;
-            e->menu_hovered = -1;
-            e->needs_redraw = 1;
-            break;
-        }
-
-        /* clic en la barra de búsqueda */
-        if (e->find.visible) {
-            FindBar *fb = &e->find;
-            /* clic en botón Reemplazar */
-            if (mx >= fb->replace_btn_x && mx < fb->replace_btn_x + fb->replace_btn_w &&
-                my >= fb->replace_btn_y && my < fb->replace_btn_y + fb->replace_btn_h) {
-                fb->bar_focused = 1;
-                do_replace(e);
-                break;
-            }
-            /* clic en botón ↑ (prev) */
-            if (fb->prev_btn_w > 0 &&
-                mx >= fb->prev_btn_x && mx < fb->prev_btn_x + fb->prev_btn_w &&
-                my >= fb->prev_btn_y && my < fb->prev_btn_y + fb->prev_btn_h) {
-                fb->bar_focused = 1;
-                find_prev(e);
-                break;
-            }
-            /* clic en botón ↓ (next) */
-            if (fb->next_btn_w > 0 &&
-                mx >= fb->next_btn_x && mx < fb->next_btn_x + fb->next_btn_w &&
-                my >= fb->next_btn_y && my < fb->next_btn_y + fb->next_btn_h) {
-                fb->bar_focused = 1;
-                find_jump(e);
-                break;
-            }
-            /* clic en campo buscar */
-            if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w &&
-                my >= fb->row1_y  && my < fb->row1_y + fb->field_h) {
-                fb->replace_focused = 0;
-                fb->bar_focused     = 1;
-                e->needs_redraw = 1;
-                break;
-            }
-            /* clic en campo reemplazar */
-            if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w &&
-                my >= fb->row2_y  && my < fb->row2_y + fb->field_h) {
-                fb->replace_focused = 1;
-                fb->bar_focused     = 1;
-                e->needs_redraw = 1;
-                break;
-            }
-            /* clic dentro de la barra pero fuera de campos */
-            if (mx >= fb->bar_x && mx < fb->bar_x + fb->bar_w &&
-                my >= fb->bar_y  && my < fb->bar_y  + fb->bar_h) {
-                break;
-            }
-            /* clic fuera de la barra: foco vuelve al editor */
-            if (fb->bar_focused) {
-                fb->bar_focused = 0;
-                e->needs_redraw = 1;
-            }
-        }
-
-        /* clic fuera de navbar y menú */
-        if (my >= NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
-            if (e->menu_open) {
-                int menu_y = NAVBAR_HEIGHT;
-                int mh     = menu_total_h();
-                if (!(mx >= BTN_FILE_X && mx < BTN_FILE_X + MENU_WIDTH
-                      && my >= menu_y && my < menu_y + mh)) {
-                    e->menu_open = 0;
-                    e->needs_redraw = 1;
-                }
-            }
-
-            /* clic en la scrollbar */
-            {
-                int sb_x = e->win_w - 9; /* SCROLLBAR_W=8 + 1px borde */
-                if (mx >= sb_x) {
-                    e->scrollbar_dragging        = 1;
-                    e->scrollbar_drag_start_y    = my;
-                    e->scrollbar_drag_start_line = e->scroll_line;
-                    break;
-                }
-            }
-
-            int left = get_left_offset(e);
-            if (mx < left) {
-                handle_ftree_click(e, mx, my);
-            } else {
-                /* iniciar selección con ratón */
-                if (e->tab_count == 0) break;  /* sin tabs, nada que hacer */
-                int text_x = left + GUTTER_WIDTH + PADDING_LEFT;
-                int cw     = (e->char_w > 0 ? e->char_w : 8);
-                int vis_line = (my - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
-                if (vis_line < 0) vis_line = 0;
-                int line = e->scroll_line + vis_line;
-                int total = buf_line_count(e->buf);
-                if (line < 0)      line = 0;
-                if (line >= total) line = total - 1;
-                /* columna con scroll y limitada al largo real */
-                int vis_col = (mx - text_x + e->scroll_col * cw) / cw;
-                if (vis_col < 0) vis_col = 0;
-                size_t ls = editor_pos_from_line_col(e, line, 0);
-                size_t le = buf_line_end(e->buf, ls);
-                int line_len = (int)(le - ls);
-                if (vis_col > line_len) vis_col = line_len;
-                int col = vis_col;
-
-                editor_sel_clear(e);
-                /* fijar ancla ANTES de mover el cursor, usando las coords calculadas */
-                e->sel_anchor_line = line;
-                e->sel_anchor_col  = col;
-                e->mouse_selecting = 1;
-                size_t pos = editor_pos_from_line_col(e, line, col);
-                buf_move_to(e->buf, pos);
-                editor_sync_cursor(e);
-                editor_ensure_visible(e);
-                e->needs_redraw = 1;
-            }
-        }
-        break;
-    }
-
-    /* -- entrada de texto — va a la barra de búsqueda si está visible */
-    case SDL_EVENT_TEXT_INPUT:
-        if (e->menu_open) break;
-        if (ctrl) break;  /* ignorar cuando Ctrl esta pulsado (ej: Ctrl+A, Ctrl+C) */
+static void on_text_input(Editor *e, SDL_Event *ev, int ctrl) {
+        if (e->menu_open) return;
+        if (ctrl) return;  /* ignorar cuando Ctrl esta pulsado (ej: Ctrl+A, Ctrl+C) */
         if (e->find.visible && !e->find.bar_focused) {
             /* barra visible pero sin foco: el texto va al editor normalmente */
-            if (e->tab_count == 0) break;
+            if (e->tab_count == 0) return;
             buf_insert_str(e->buf, ev->text.text, strlen(ev->text.text));
             editor_sync_cursor(e);
             editor_update_lexer(e, e->cursor_line);
             editor_ensure_visible(e);
             e->modified = 1; e->needs_redraw = 1;
-            break;
+            return;
         }
         if (e->find.visible) {
             size_t tlen = strlen(ev->text.text);
@@ -343,25 +58,25 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 }
                 e->needs_redraw = 1;
             }
-            break;
+            return;
         }
-        if (e->tab_count == 0) break;
+        if (e->tab_count == 0) return;
         buf_insert_str(e->buf, ev->text.text, strlen(ev->text.text));
         editor_sync_cursor(e);
         editor_update_lexer(e, e->cursor_line);
         editor_ensure_visible(e);
         e->modified = 1; e->needs_redraw = 1;
-        break;
+}
 
-    case SDL_EVENT_KEY_DOWN: {
+static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
         SDL_Keycode key = ev->key.key;
 
         /* Escape cierra barras / menú */
         if (key == SDLK_ESCAPE) {
-            if (e->find.visible) { close_find_bar(e); break; }
-            if (e->menu_open)    { e->menu_open = 0; e->menu_hovered = -1; e->needs_redraw = 1; break; }
+            if (e->find.visible) { close_find_bar(e); return; }
+            if (e->menu_open)    { e->menu_open = 0; e->menu_hovered = -1; e->needs_redraw = 1; return; }
             editor_sel_clear(e); e->needs_redraw = 1;
-            break;
+            return;
         }
 
         /* -- Barra de busqueda activa: teclas especiales -- */
@@ -372,7 +87,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 if (ctrl && key == SDLK_F) {
                     e->find.bar_focused = 1;
                     e->needs_redraw = 1;
-                    break;
+                    return;
                 }
                 /* dejar caer al bloque normal del editor */
                 goto editor_keys;
@@ -385,7 +100,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 e->find.replace_sel_end   = -1;
                 e->find.replace_focused   = !e->find.replace_focused;
                 e->needs_redraw = 1;
-                break;
+                return;
             }
             if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                 if (e->find.replace_focused) {
@@ -395,7 +110,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                 } else {
                     find_jump(e);
                 }
-                break;
+                return;
             }
             if (key == SDLK_BACKSPACE) {
                 if (e->find.replace_focused == 0) {
@@ -431,10 +146,10 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                     }
                     e->needs_redraw = 1;
                 }
-                break;
+                return;
             }
             /* Ctrl+F de nuevo = siguiente resultado */
-            if (ctrl && key == SDLK_F) { find_jump(e); break; }
+            if (ctrl && key == SDLK_F) { find_jump(e); return; }
             /* Ctrl+A — seleccionar todo el texto del campo activo */
             if (ctrl && key == SDLK_A) {
                 if (e->find.replace_focused == 0) {
@@ -450,9 +165,9 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
                         e->needs_redraw = 1;
                     }
                 }
-                break;
+                return;
             }
-            break;  /* resto de teclas ignoradas mientras find esta abierto */
+            return;  /* resto de teclas ignoradas mientras find esta abierto */
         }
 
         editor_keys:
@@ -499,8 +214,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             default: break;
             }
         } else {
-            if (e->menu_open) break;
-            if (!e->buf) break;  /* sin buffer activo, ignorar teclas de edición */
+            if (e->menu_open) return;
+            if (!e->buf) return;  /* sin buffer activo, ignorar teclas de edición */
             switch (key) {
             case SDLK_UP:        move_line_up(e, shift);   break;
             case SDLK_DOWN:      move_line_down(e, shift);  break;
@@ -551,9 +266,34 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             default: break;
             }
         }
-        break;
-    }
+}
 
+void input_handle_event(Editor *e, SDL_Event *ev) {
+    SDL_Keymod mods  = SDL_GetModState();
+    int ctrl  = (mods & SDL_KMOD_CTRL)  != 0;
+    int shift = (mods & SDL_KMOD_SHIFT) != 0;
+
+    switch (ev->type) {
+    case SDL_EVENT_QUIT:
+        e->running = 0;
+        break;
+    case SDL_EVENT_WINDOW_RESIZED:
+        e->win_w = ev->window.data1;
+        e->win_h = ev->window.data2;
+        e->needs_redraw = 1;
+        break;
+    case SDL_EVENT_MOUSE_WHEEL:        on_mouse_wheel(e, ev);           break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (ev->button.button == SDL_BUTTON_LEFT) {
+            e->ftree.dragging_border = 0;
+            e->mouse_selecting       = 0;
+            e->scrollbar_dragging    = 0;
+        }
+        break;
+    case SDL_EVENT_MOUSE_MOTION:       on_mouse_motion(e, ev);          break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:  on_mouse_button_down(e, ev);     break;
+    case SDL_EVENT_TEXT_INPUT:         on_text_input(e, ev, ctrl);      break;
+    case SDL_EVENT_KEY_DOWN:           on_key_down(e, ev, ctrl, shift); break;
     default: break;
     }
 }

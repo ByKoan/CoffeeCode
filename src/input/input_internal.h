@@ -63,3 +63,8 @@ void do_replace(Editor *e);
 void open_find_bar(Editor *e);
 void close_find_bar(Editor *e);
 void toggle_sidebar(Editor *e);
+
+/* Manejadores de eventos de raton (definidos en input_mouse.c) */
+void on_mouse_wheel(Editor *e, SDL_Event *ev);
+void on_mouse_motion(Editor *e, SDL_Event *ev);
+void on_mouse_button_down(Editor *e, SDL_Event *ev);
