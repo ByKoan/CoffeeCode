@@ -6,13 +6,13 @@
 #define SDL_MAIN_HANDLED
 #endif
 
-#include "buffer.h"
-#include "lexer.h"
-#include "filetree.h"
+#include "buffer/buffer.h"
+#include "lexer/lexer.h"
+#include "filetree/filetree.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
-/* ── Constantes de UI ───────────────────────────────────────────────────── */
+/* -- Constantes de UI ----------------------------------------------------- */
 #define FONT_SIZE        16
 #define LINE_HEIGHT      20
 #define GUTTER_WIDTH     52
@@ -23,7 +23,7 @@
 #define TAB_BAR_HEIGHT   28    /* altura de la barra de pestañas */
 #define MAX_TABS         16    /* máximo de archivos abiertos    */
 
-/* ── Undo/Redo ──────────────────────────────────────────────────────────── */
+/* -- Undo/Redo ------------------------------------------------------------ */
 #define UNDO_MAX  256   /* máximo de entradas en la pila de undo */
 
 typedef enum {
@@ -47,7 +47,7 @@ typedef struct {
     int       redo_top; /* cuántas entradas se pueden hacer redo     */
 } UndoStack;
 
-/* ── Pestaña (archivo abierto) ─────────────────────────────────────────── */
+/* -- Pestaña (archivo abierto) ------------------------------------------- */
 typedef struct {
     Buffer     buf;
     LexerCache lex;
@@ -64,7 +64,7 @@ typedef struct {
     int        close_x, close_y;
 } EditorTab;
 
-/* ── Barra de búsqueda ──────────────────────────────────────────────────── */
+/* -- Barra de búsqueda ---------------------------------------------------- */
 #define FIND_BAR_MAX 256
 
 typedef struct {
@@ -92,7 +92,7 @@ typedef struct {
     int  next_btn_x, next_btn_y, next_btn_w, next_btn_h;
 } FindBar;
 
-/* ── Estado global del editor ───────────────────────────────────────────── */
+/* -- Estado global del editor --------------------------------------------- */
 typedef struct {
     /* SDL */
     SDL_Window   *window;
@@ -101,7 +101,7 @@ typedef struct {
     int           win_w, win_h;
     int           char_w;
 
-    /* ── pestañas ── */
+    /* -- pestañas -- */
     EditorTab     tabs[MAX_TABS];
     int           tab_count;
     int           active_tab;
@@ -138,16 +138,16 @@ typedef struct {
     /* explorador de carpetas lateral */
     FileTree      ftree;
 
-    /* ── NUEVO: undo/redo ──────────────────────────────────────────────── */
+    /* -- NUEVO: undo/redo ------------------------------------------------ */
     UndoStack    *undo;
 
-    /* ── NUEVO: barra de búsqueda (Ctrl+F) ────────────────────────────── */
+    /* -- NUEVO: barra de búsqueda (Ctrl+F) ------------------------------ */
     FindBar       find;
 
-    /* ── selección con ratón ───────────────────────────────────────────── */
+    /* -- selección con ratón --------------------------------------------- */
     int           mouse_selecting;   /* 1 = botón izq. pulsado sobre texto   */
 
-    /* ── scrollbar draggable ──────────────────────────────────────────── */
+    /* -- scrollbar draggable -------------------------------------------- */
     int           tab_new_btn_x;   /* botón + para nuevo tab */
     int           scrollbar_dragging;
     int           scrollbar_drag_start_y;
@@ -158,30 +158,30 @@ typedef struct {
     int           needs_redraw;
 } Editor;
 
-/* ── Ciclo de vida ──────────────────────────────────────────────────────── */
+/* -- Ciclo de vida -------------------------------------------------------- */
 int  editor_init   (Editor *e, const char *filepath);
 void editor_free   (Editor *e);
 void editor_run    (Editor *e);
 
-/* ── Lógica interna (usada entre módulos) ───────────────────────────────── */
+/* -- Lógica interna (usada entre módulos) --------------------------------- */
 void editor_update_lexer (Editor *e, int from_line);
 void editor_sync_cursor  (Editor *e);  /* actualiza cursor_line/col desde buf */
 void editor_ensure_visible(Editor *e);
 size_t editor_pos_from_line_col(Editor *e, int line, int col);
 
-/* ── NUEVO: undo/redo API (usada desde input.c) ─────────────────────────── */
+/* -- NUEVO: undo/redo API (usada desde input.c) --------------------------- */
 void editor_undo_push_insert(Editor *e, size_t pos, const char *text, size_t len);
 void editor_undo_push_delete(Editor *e, size_t pos, const char *text, size_t len);
 void editor_undo(Editor *e);
 void editor_redo(Editor *e);
 
-/* ── NUEVO: helpers de selección ─────────────────────────────────────────── */
+/* -- NUEVO: helpers de selección ------------------------------------------- */
 /* Devuelve las posiciones lógicas ordenadas del rango seleccionado.
    Retorna 0 si no hay selección activa.                                      */
 int  editor_sel_range(Editor *e, size_t *from, size_t *to);
 void editor_sel_clear(Editor *e);
 
-/* ── Tab management ──────────────────────────────────────────────────────── */
+/* -- Tab management -------------------------------------------------------- */
 void editor_tab_new   (Editor *e);
 void editor_tab_open  (Editor *e, const char *path);
 void editor_tab_close (Editor *e);

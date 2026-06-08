@@ -1,9 +1,9 @@
-#include "lexer.h"
+#include "lexer/lexer.h"
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 
-/* ── Paleta de colores (tema oscuro) ────────────────────────────────────── */
+/* -- Paleta de colores (tema oscuro) -------------------------------------- */
 const Color TOKEN_COLORS[TOK_COUNT] = {
     [TOK_DEFAULT]     = {0xCD, 0xC7, 0xBA, 0xFF},  /* blanco cálido   */
     [TOK_KEYWORD]     = {0xE0, 0x6C, 0x75, 0xFF},  /* rojo/rosa       */
@@ -16,7 +16,7 @@ const Color TOKEN_COLORS[TOK_COUNT] = {
     [TOK_PUNCTUATION] = {0xAB, 0xB2, 0xBF, 0xFF},  /* gris claro      */
 };
 
-/* ── Palabras clave de C ────────────────────────────────────────────────── */
+/* -- Palabras clave de C -------------------------------------------------- */
 static const char *KEYWORDS[] = {
     "auto","break","case","const","continue","default","do","else",
     "enum","extern","for","goto","if","inline","register","restrict",
@@ -43,7 +43,7 @@ static int is_type(const char *w, int len) {
     return 0;
 }
 
-/* ── Tokenizador por línea ──────────────────────────────────────────────── */
+/* -- Tokenizador por línea ------------------------------------------------ */
 int lexer_tokenize_line(const char *text, int len,
                         LineTokens *out, int in_block_comment)
 {
@@ -60,7 +60,7 @@ int lexer_tokenize_line(const char *text, int len,
 } while(0)
 
     while (i < len) {
-        /* ── dentro de bloque de comentario ── */
+        /* -- dentro de bloque de comentario -- */
         if (in_block_comment) {
             int start = i;
             while (i < len) {
@@ -77,21 +77,21 @@ int lexer_tokenize_line(const char *text, int len,
 
         char c = text[i];
 
-        /* ── preprocesador ── */
+        /* -- preprocesador -- */
         if (c == '#') {
             PUSH(i, len - i, TOK_PREPROCESSOR);
             i = len;
             continue;
         }
 
-        /* ── comentario de línea ── */
+        /* -- comentario de línea -- */
         if (c == '/' && i + 1 < len && text[i+1] == '/') {
             PUSH(i, len - i, TOK_COMMENT);
             i = len;
             continue;
         }
 
-        /* ── inicio de bloque de comentario ── */
+        /* -- inicio de bloque de comentario -- */
         if (c == '/' && i + 1 < len && text[i+1] == '*') {
             int start = i;
             i += 2;
@@ -108,7 +108,7 @@ int lexer_tokenize_line(const char *text, int len,
             continue;
         }
 
-        /* ── string ── */
+        /* -- string -- */
         if (c == '"' || c == '\'') {
             char delim = c;
             int start = i++;
@@ -121,7 +121,7 @@ int lexer_tokenize_line(const char *text, int len,
             continue;
         }
 
-        /* ── número ── */
+        /* -- número -- */
         if (isdigit((unsigned char)c) ||
             (c == '.' && i+1 < len && isdigit((unsigned char)text[i+1])))
         {
@@ -140,7 +140,7 @@ int lexer_tokenize_line(const char *text, int len,
             continue;
         }
 
-        /* ── identificador / palabra clave ── */
+        /* -- identificador / palabra clave -- */
         if (isalpha((unsigned char)c) || c == '_') {
             int start = i;
             while (i < len && (isalnum((unsigned char)text[i]) ||
@@ -153,21 +153,21 @@ int lexer_tokenize_line(const char *text, int len,
             continue;
         }
 
-        /* ── operadores ── */
+        /* -- operadores -- */
         if (strchr("+-*/%=<>&|^!~?:", c)) {
             PUSH(i, 1, TOK_OPERATOR);
             i++;
             continue;
         }
 
-        /* ── puntuación ── */
+        /* -- puntuación -- */
         if (strchr("(){}[];,.", c)) {
             PUSH(i, 1, TOK_PUNCTUATION);
             i++;
             continue;
         }
 
-        /* ── resto (espacio, etc.) ── */
+        /* -- resto (espacio, etc.) -- */
         i++;
     }
 
@@ -175,7 +175,7 @@ int lexer_tokenize_line(const char *text, int len,
     return in_block_comment;
 }
 
-/* ── Cache ──────────────────────────────────────────────────────────────── */
+/* -- Cache ---------------------------------------------------------------- */
 int lexer_cache_init(LexerCache *lc, int line_count) {
     lc->count = line_count;
     lc->lines = calloc((size_t)line_count, sizeof(LineTokens));

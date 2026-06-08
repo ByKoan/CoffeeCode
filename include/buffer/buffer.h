@@ -3,7 +3,7 @@
 
 /*
  * Gap Buffer con índice de líneas
- * ────────────────────────────────────────────────────────────────────────────
+ * ----------------------------------------------------------------------------
  * [ texto_izquierda | GAP....... | texto_derecha ]
  *   0 .. gap_start-1              gap_end .. size-1
  *
@@ -12,7 +12,7 @@
  * Mover cursor:       O(distancia)
  *
  * Índice de líneas (line_index)
- * ─────────────────────────────
+ * -----------------------------
  * line_index[i] = posición lógica del primer carácter de la línea i.
  * Se mantiene actualizado en cada insert/delete, lo que convierte
  * buf_line_count, buf_line_start y buf_line_col de O(n) a O(1)/O(log n).
@@ -29,7 +29,7 @@ typedef struct {
     size_t gap_start;   /* primer byte del hueco           */
     size_t gap_end;     /* primer byte TRAS el hueco       */
 
-    /* ── índice de líneas ──────────────────────────────────────────────── */
+    /* -- índice de líneas ------------------------------------------------ */
     size_t *line_index; /* line_index[i] = offset lógico del inicio de línea i */
     int     line_count; /* número de líneas (>= 1)                             */
     int     line_cap;   /* capacidad del array line_index                      */

@@ -1,4 +1,4 @@
-#include "editor.h"
+#include "editor/editor.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -7,7 +7,7 @@
 #endif
 #include <SDL3/SDL_main.h>
 
-/* ── Log a fichero: solo activo en builds Debug ─────────────────────────── */
+/* -- Log a fichero: solo activo en builds Debug --------------------------- */
 #ifdef _DEBUG
 static FILE *g_log = NULL;
 static void log_init(void) {
