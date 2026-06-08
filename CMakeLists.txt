@@ -123,25 +123,6 @@ set(SDL3TTF_HARFBUZZ  OFF CACHE BOOL "" FORCE)
 set(SDL3TTF_PLUTOSVG  OFF CACHE BOOL "" FORCE)
 add_subdirectory("${sdl3_ttf_SOURCE_DIR}" "${sdl3_ttf_BINARY_DIR}")
 
-# -- Generar font_data.h embebiendo assets/font.ttf ---------------------------
-set(FONT_TTF "${CMAKE_SOURCE_DIR}/assets/font.ttf")
-set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/include/font_data.h")
-
-# Regenera font_data.h en tiempo de build solo cuando cambian font.ttf o el
-# generador. Antes usaba 'if(NOT EXISTS)', que nunca lo regeneraba porque el
-# header está commiteado y siempre existe.
-add_custom_command(
-    OUTPUT  "${FONT_DATA_H}"
-    COMMAND ${CMAKE_COMMAND}
-            -DFONT_TTF=${FONT_TTF}
-            -DFONT_DATA_H=${FONT_DATA_H}
-            -P "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
-    DEPENDS "${FONT_TTF}" "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
-    COMMENT "Generando font_data.h desde assets/font.ttf"
-    VERBATIM
-)
-add_custom_target(coffee_font_data DEPENDS "${FONT_DATA_H}")
-
 # -- Icono (.ico en la raíz del proyecto) -------------------------------------
 # Fuentes: main.c en la raíz de src/ + cada módulo en src/<modulo>/<modulo>.c
 # CONFIGURE_DEPENDS: CMake re-escanea en cada build, así un módulo nuevo
@@ -171,8 +152,13 @@ endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
-# font_data.h debe generarse antes de compilar editor.c (que lo incluye)
-add_dependencies(CoffeeCode coffee_font_data)
+# La fuente ya no va embebida: se carga en runtime (SDL_GetBasePath()/font.ttf).
+# Copiamos font.ttf junto al ejecutable tras compilar.
+add_custom_command(TARGET CoffeeCode POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/assets/font.ttf"
+            "$<TARGET_FILE_DIR:CoffeeCode>/font.ttf"
+    COMMENT "Copiando font.ttf junto al ejecutable")
 
 # Cabeceras en include/, organizadas en subcarpetas por módulo
 # (los includes usan prefijo de módulo: #include "editor/editor.h")

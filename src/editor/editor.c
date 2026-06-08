@@ -1,7 +1,36 @@
 #include "editor_internal.h"
-#include "font_data.h"
 #include "input/input.h"
 #include "render/render.h"
+
+/**
+ * @brief Abre la fuente del editor desde disco (ya no va embebida en el binario).
+ *
+ * Orden de búsqueda: variable de entorno @c COFFEECODE_FONT, luego @c font.ttf y
+ * @c assets/font.ttf junto al ejecutable (vía @c SDL_GetBasePath), y por último
+ * relativas al directorio de trabajo. Devuelve @c NULL si no encuentra ninguna.
+ */
+static TTF_Font *load_editor_font(float size) {
+    const char *env = getenv("COFFEECODE_FONT");
+    if (env && env[0]) {
+        TTF_Font *f = TTF_OpenFont(env, size);
+        if (f) return f;
+    }
+
+    const char *base = SDL_GetBasePath();
+    if (base) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%sfont.ttf", base);
+        TTF_Font *f = TTF_OpenFont(path, size);
+        if (f) return f;
+        snprintf(path, sizeof(path), "%sassets/font.ttf", base);
+        f = TTF_OpenFont(path, size);
+        if (f) return f;
+    }
+
+    TTF_Font *f = TTF_OpenFont("assets/font.ttf", size);
+    if (f) return f;
+    return TTF_OpenFont("font.ttf", size);
+}
 
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     Buffer *b = e->buf;
@@ -135,19 +164,13 @@ int editor_init(Editor *e, const char *filepath) {
     }
 
 #ifdef _DEBUG
-    fprintf(stderr, "STEP: TTF_OpenFont\n");
+    fprintf(stderr, "STEP: load font\n");
 #endif
-    {
-        SDL_IOStream *io = SDL_IOFromConstMem(g_font_data, (Sint64)g_font_size);
-        if (!io) {
-            fprintf(stderr, "SDL_IOFromConstMem: %s\n", SDL_GetError());
-            return 0;
-        }
-        e->font = TTF_OpenFontIO(io, 1, FONT_SIZE);
-        if (!e->font) {
-            fprintf(stderr, "TTF_OpenFontIO: %s\n", SDL_GetError());
-            return 0;
-        }
+    e->font = load_editor_font(FONT_SIZE);
+    if (!e->font) {
+        fprintf(stderr, "No se pudo cargar la fuente (font.ttf). Coloca font.ttf junto al "
+                        "ejecutable o define COFFEECODE_FONT.\n");
+        return 0;
     }
 
     {
