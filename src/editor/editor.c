@@ -173,6 +173,7 @@ void editor_tab_new(Editor *e) {
     memset(t, 0, sizeof(*t));
     buf_init(&t->buf);
     lexer_cache_init(&t->lex, 1);
+    ring_init(&t->undo.entries, sizeof(UndoEntry), UNDO_MAX);
     t->filepath[0] = '\0';
     e->active_tab = idx;
     editor_tab_load_state(e);
@@ -217,11 +218,10 @@ void editor_tab_open(Editor *e, const char *path) {
 static void tab_free_resources(EditorTab *t) {
     buf_free(&t->buf);
     lexer_cache_free(&t->lex);
-    /* liberar pila de undo */
-    for (int i = 0; i < UNDO_MAX; i++) {
-        free(t->undo.entries[i].text);
-        t->undo.entries[i].text = NULL;
-    }
+    /* liberar pila de undo: primero el text de cada entrada, luego el ring */
+    for (size_t i = 0; i < ring_len(&t->undo.entries); i++)
+        free(((UndoEntry *)ring_at(&t->undo.entries, i))->text);
+    ring_free(&t->undo.entries);
 }
 
 /* Cierra el tab activo */
@@ -281,37 +281,38 @@ static void undo_entry_free(UndoEntry *ue) {
 }
 
 static void undo_discard_redo(UndoStack *us) {
-    if (us->redo_top == 0) return;
-    for (int i = 0; i < us->redo_top; i++) {
-        int idx = ((us->head - 1 - i) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
-        undo_entry_free(&us->entries[idx]);
+    /* las entradas rehacibles son las redo_top más recientes (final del ring) */
+    while (us->redo_top > 0) {
+        UndoEntry ue;
+        if (ring_pop_back(&us->entries, &ue))
+            undo_entry_free(&ue);
+        us->redo_top--;
     }
-    us->count   -= us->redo_top;
-    us->head     = ((us->head - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
-    us->redo_top = 0;
 }
 
 static void undo_push(UndoStack *us, UndoType type,
                       size_t pos, const char *text, size_t len,
                       int cl, int cc) {
     undo_discard_redo(us);
-    int idx = us->head % UNDO_MAX;
-    if (us->count == UNDO_MAX)
-        undo_entry_free(&us->entries[idx]);
 
-    us->entries[idx].type              = type;
-    us->entries[idx].pos               = pos;
-    us->entries[idx].text              = malloc(len + 1);
-    if (us->entries[idx].text) {
-        memcpy(us->entries[idx].text, text, len);
-        us->entries[idx].text[len] = '\0';
+    UndoEntry ue;
+    ue.type              = type;
+    ue.pos               = pos;
+    ue.text              = malloc(len + 1);
+    if (ue.text) {
+        memcpy(ue.text, text, len);
+        ue.text[len] = '\0';
     }
-    us->entries[idx].len               = len;
-    us->entries[idx].cursor_line_after = cl;
-    us->entries[idx].cursor_col_after  = cc;
+    ue.len               = len;
+    ue.cursor_line_after = cl;
+    ue.cursor_col_after  = cc;
 
-    us->head = (us->head + 1) % UNDO_MAX;
-    if (us->count < UNDO_MAX) us->count++;
+    /* si el ring está lleno, push sobrescribe la más antigua: liberar su text */
+    if (ring_full(&us->entries)) {
+        UndoEntry *oldest = (UndoEntry *)ring_front(&us->entries);
+        if (oldest) free(oldest->text);
+    }
+    ring_push(&us->entries, &ue);
     us->redo_top = 0;
 }
 
@@ -325,10 +326,10 @@ void editor_undo_push_delete(Editor *e, size_t pos, const char *text, size_t len
 
 void editor_undo(Editor *e) {
     UndoStack *us = e->undo;
-    if (us->count == 0 || us->count == us->redo_top) return;
+    int count = (int)ring_len(&us->entries);
+    if (count == 0 || count == us->redo_top) return;
 
-    int idx = ((us->head - 1 - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
-    UndoEntry *ue = &us->entries[idx];
+    UndoEntry *ue = (UndoEntry *)ring_at(&us->entries, (size_t)(count - 1 - us->redo_top));
 
     if (ue->type == UNDO_INSERT) {
         buf_delete_range(e->buf, ue->pos, ue->pos + ue->len);
@@ -351,8 +352,8 @@ void editor_redo(Editor *e) {
     if (us->redo_top == 0) return;
 
     us->redo_top--;
-    int idx = ((us->head - 1 - us->redo_top) % UNDO_MAX + UNDO_MAX) % UNDO_MAX;
-    UndoEntry *ue = &us->entries[idx];
+    int count = (int)ring_len(&us->entries);
+    UndoEntry *ue = (UndoEntry *)ring_at(&us->entries, (size_t)(count - 1 - us->redo_top));
 
     if (ue->type == UNDO_INSERT) {
         buf_move_to(e->buf, ue->pos);

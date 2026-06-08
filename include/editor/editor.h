@@ -9,6 +9,7 @@
 #include "buffer/buffer.h"
 #include "lexer/lexer.h"
 #include "filetree/filetree.h"
+#include "structs/ring.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
@@ -41,10 +42,8 @@ typedef struct {
 } UndoEntry;
 
 typedef struct {
-    UndoEntry entries[UNDO_MAX];
-    int       head;     /* próxima posición de escritura (circular)  */
-    int       count;    /* entradas válidas almacenadas              */
-    int       redo_top; /* cuántas entradas se pueden hacer redo     */
+    Ring entries;   /* Ring<UndoEntry> de capacidad UNDO_MAX (buffer circular) */
+    int  redo_top;  /* cuántas entradas se pueden rehacer                       */
 } UndoStack;
 
 /* -- Pestaña (archivo abierto) ------------------------------------------- */
