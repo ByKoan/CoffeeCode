@@ -4,12 +4,29 @@ project(CoffeeCode C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# compile_commands.json para indexado/autocompletado preciso en CLion, VS Code y clangd
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Tipo de build por defecto cuando no se pasa -DCMAKE_BUILD_TYPE.
+# La optimización la dicta el tipo de build (Release => -O3, Debug => -g -O0).
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Tipo de build (Debug/Release/RelWithDebInfo)" FORCE)
+endif()
+
+# Modo "native": optimiza para la microarquitectura de ESTA máquina (-march=native).
+# El binario resultante puede no ejecutar en otras CPUs. Lo activa Compile.bat native.
+option(COFFEE_NATIVE "Compilar optimizado para la CPU local (-march=native)" OFF)
+
+# Sanitizers (ASan + UBSan) en builds Debug. OFF por defecto: en TDM-GCC/Windows
+# puede no enlazar por falta de runtime; funciona en Linux o con Clang.
+option(COFFEE_SANITIZE "Activar AddressSanitizer + UBSan en Debug" OFF)
+
 # Force static everywhere — must be set before any FetchContent configures
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
 
-# ── SDL3 3.2.6 ───────────────────────────────────────────────────────────────
+# -- SDL3 3.2.6 ---------------------------------------------------------------
 set(SDL_SHARED       OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC       ON  CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
@@ -23,7 +40,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(SDL3)
 
-# ── Intercept SDL3_ttf's find_package(SDL3) via redirect ─────────────────────
+# -- Intercept SDL3_ttf's find_package(SDL3) via redirect ---------------------
 set(CMAKE_FIND_PACKAGE_REDIRECTS_DIR "${CMAKE_BINARY_DIR}/redirects")
 file(MAKE_DIRECTORY "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}")
 file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/SDL3-config.cmake" [[
@@ -43,7 +60,7 @@ set(PACKAGE_VERSION_COMPATIBLE TRUE)
 set(PACKAGE_VERSION_EXACT TRUE)
 ]])
 
-# ── SDL3_ttf 3.2.2 ───────────────────────────────────────────────────────────
+# -- SDL3_ttf 3.2.2 -----------------------------------------------------------
 # Usamos el flujo Declare+Populate+add_subdirectory para poder compilar
 # Freetype vendorizado antes de que SDL3_ttf lo busque.  CMP0169=OLD suprime
 # el warning de deprecación de FetchContent_Populate con detalles declarados.
@@ -106,22 +123,30 @@ set(SDL3TTF_HARFBUZZ  OFF CACHE BOOL "" FORCE)
 set(SDL3TTF_PLUTOSVG  OFF CACHE BOOL "" FORCE)
 add_subdirectory("${sdl3_ttf_SOURCE_DIR}" "${sdl3_ttf_BINARY_DIR}")
 
-# ── Generar font_data.h embebiendo assets/font.ttf ───────────────────────────
+# -- Generar font_data.h embebiendo assets/font.ttf ---------------------------
 set(FONT_TTF "${CMAKE_SOURCE_DIR}/assets/font.ttf")
-set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/src/font_data.h")
+set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/include/font_data.h")
 
-if(NOT EXISTS "${FONT_DATA_H}")
-    message(STATUS "Generando font_data.h desde font.ttf...")
-    execute_process(
-        COMMAND ${CMAKE_COMMAND}
+# Regenera font_data.h en tiempo de build solo cuando cambian font.ttf o el
+# generador. Antes usaba 'if(NOT EXISTS)', que nunca lo regeneraba porque el
+# header está commiteado y siempre existe.
+add_custom_command(
+    OUTPUT  "${FONT_DATA_H}"
+    COMMAND ${CMAKE_COMMAND}
             -DFONT_TTF=${FONT_TTF}
             -DFONT_DATA_H=${FONT_DATA_H}
             -P "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
-    )
-endif()
+    DEPENDS "${FONT_TTF}" "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
+    COMMENT "Generando font_data.h desde assets/font.ttf"
+    VERBATIM
+)
+add_custom_target(coffee_font_data DEPENDS "${FONT_DATA_H}")
 
-# ── Icono (.ico en la raíz del proyecto) ─────────────────────────────────────
-file(GLOB SOURCES "src/*.c")
+# -- Icono (.ico en la raíz del proyecto) -------------------------------------
+# Fuentes: main.c en la raíz de src/ + cada módulo en src/<modulo>/<modulo>.c
+# CONFIGURE_DEPENDS: CMake re-escanea en cada build, así un módulo nuevo
+# (src/<modulo>/<modulo>.c) se recoge sin reconfigurar a mano.
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.c")
 
 if(WIN32)
     set(ICON_ICO "${CMAKE_SOURCE_DIR}/assets/icono.ico")
@@ -132,6 +157,12 @@ if(WIN32)
             @ONLY
         )
         list(APPEND SOURCES "${CMAKE_BINARY_DIR}/app_configured.rc")
+        # windres no declara que el recurso depende del .ico. Lo hacemos explicito
+        # para que cambiar el icono fuerce recompilar el .rc (si no, queda cacheado).
+        set_source_files_properties(
+            "${CMAKE_BINARY_DIR}/app_configured.rc"
+            PROPERTIES OBJECT_DEPENDS "${ICON_ICO}"
+        )
         message(STATUS "Icono embebido: ${ICON_ICO}")
     else()
         message(WARNING "No se encontró icono.ico en la raíz del proyecto.")
@@ -140,11 +171,20 @@ endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
+# font_data.h debe generarse antes de compilar editor.c (que lo incluye)
+add_dependencies(CoffeeCode coffee_font_data)
+
+# Cabeceras en include/, organizadas en subcarpetas por módulo
+# (los includes usan prefijo de módulo: #include "editor/editor.h")
+target_include_directories(CoffeeCode PRIVATE "${CMAKE_SOURCE_DIR}/include")
+
 target_link_libraries(CoffeeCode PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
 
-# ── Platform ─────────────────────────────────────────────────────────────────
+# -- Platform -----------------------------------------------------------------
 if(WIN32)
-    set_target_properties(CoffeeCode PROPERTIES WIN32_EXECUTABLE TRUE)
+    # Consola visible en Debug (ver stdout/printf); ventana sin consola en el resto
+    set_target_properties(CoffeeCode PROPERTIES
+        WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>)
     if(MSVC)
         target_link_options(CoffeeCode PRIVATE /ENTRY:mainCRTStartup)
     else()
@@ -157,13 +197,74 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(CoffeeCode PRIVATE m dl pthread)
 endif()
 
-# ── Compile flags ────────────────────────────────────────────────────────────
+# -- Compile flags ------------------------------------------------------------
 if(MSVC)
     target_compile_options(CoffeeCode PRIVATE /W3 /utf-8)
     target_compile_definitions(CoffeeCode PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(COFFEE_NATIVE)
+        # MSVC no tiene -march=native; AVX2 es la aproximación razonable.
+        target_compile_options(CoffeeCode PRIVATE /arch:AVX2)
+    endif()
 else()
-    target_compile_options(CoffeeCode PRIVATE -Wall -O2
+    # Sin -O fijo: el nivel de optimización lo aporta CMAKE_BUILD_TYPE.
+    target_compile_options(CoffeeCode PRIVATE -Wall
         -Wno-unused-function
         -Wno-unused-parameter
         -Wno-stringop-truncation)
+    if(COFFEE_NATIVE)
+        target_compile_options(CoffeeCode PRIVATE -march=native -mtune=native)
+    endif()
+    # Info de depuración rica SOLO en Debug: macros (-g3), formato gdb (-ggdb3),
+    # sin optimizar (-O0), frames fiables y DWARF-4 (compatible con el gdb de CLion/MinGW).
+    target_compile_options(CoffeeCode PRIVATE
+        $<$<CONFIG:Debug>:-g3>
+        $<$<CONFIG:Debug>:-ggdb3>
+        $<$<CONFIG:Debug>:-O0>
+        $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
+        $<$<CONFIG:Debug>:-gdwarf-4>)
 endif()
+
+# Define COFFEE_DEBUG solo en builds Debug (asserts / logging condicional en el código)
+target_compile_definitions(CoffeeCode PRIVATE $<$<CONFIG:Debug>:COFFEE_DEBUG>)
+
+# Sanitizers (ASan + UBSan) en Debug cuando COFFEE_SANITIZE=ON. Antes de aplicarlos
+# se comprueba que el toolchain pueda enlazarlos (TDM-GCC/MinGW no suele traer
+# libasan): si no, se avisa y se ignoran, en vez de fallar con un error de enlace.
+if(COFFEE_SANITIZE AND NOT MSVC)
+    include(CheckLinkerFlag)
+    check_linker_flag(C "-fsanitize=address,undefined" COFFEE_SAN_LINKS)
+    if(COFFEE_SAN_LINKS)
+        target_compile_options(CoffeeCode PRIVATE
+            $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+            $<$<CONFIG:Debug>:-fno-sanitize-recover=all>)
+        target_link_options(CoffeeCode PRIVATE
+            $<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+        message(STATUS "Sanitizers: ASan+UBSan activos en Debug")
+    else()
+        message(WARNING "COFFEE_SANITIZE=ON pero el toolchain no enlaza sanitizers "
+                        "(falta libasan/libubsan). Se ignoran. Usa Clang/LLVM-MinGW "
+                        "o compila en Linux para ASan/UBSan.")
+    endif()
+endif()
+
+# -- LTO / IPO (optimización entre módulos) -----------------------------------
+# Se activa en Release y RelWithDebInfo, lo que cubre los modos release y native
+# de Compile.bat (ambos compilan con CMAKE_BUILD_TYPE=Release).
+include(CheckIPOSupported)
+check_ipo_supported(RESULT COFFEE_IPO_OK OUTPUT COFFEE_IPO_MSG)
+if(COFFEE_IPO_OK)
+    set_target_properties(CoffeeCode PROPERTIES
+        INTERPROCEDURAL_OPTIMIZATION_RELEASE        TRUE
+        INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+else()
+    message(STATUS "LTO no disponible: ${COFFEE_IPO_MSG}")
+endif()
+
+# -- Resumen de configuración -------------------------------------------------
+message(STATUS "----------------------------------------------")
+message(STATUS " CoffeeCode")
+message(STATUS "   build type   : ${CMAKE_BUILD_TYPE}")
+message(STATUS "   native       : ${COFFEE_NATIVE}")
+message(STATUS "   sanitizers   : ${COFFEE_SANITIZE}")
+message(STATUS "   LTO (Release): ${COFFEE_IPO_OK}")
+message(STATUS "----------------------------------------------")

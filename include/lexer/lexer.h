@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ── Tipos de token ─────────────────────────────────────────────────────── */
+/* -- Tipos de token ------------------------------------------------------- */
 typedef enum {
     TOK_DEFAULT = 0,
     TOK_KEYWORD,
@@ -21,7 +21,7 @@ typedef struct { uint8_t r, g, b, a; } Color;
 
 extern const Color TOKEN_COLORS[TOK_COUNT];
 
-/* ── Resultado del lexer por línea ──────────────────────────────────────── */
+/* -- Resultado del lexer por línea ---------------------------------------- */
 #define MAX_TOKENS_PER_LINE 512
 
 typedef struct {
@@ -35,7 +35,7 @@ typedef struct {
     int    count;
 } LineTokens;
 
-/* ── Cache de resaltado ─────────────────────────────────────────────────── */
+/* -- Cache de resaltado --------------------------------------------------- */
 typedef struct {
     LineTokens *lines;   /* array de LineTokens, uno por línea    */
     int         count;   /* número de líneas en cache             */

@@ -1,4 +1,4 @@
-#include "filetree.h"
+#include "filetree/filetree.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +10,7 @@
   #include <sys/stat.h>
 #endif
 
-/* ── ftree_init ─────────────────────────────────────────────────────────── */
+/* -- ftree_init ----------------------------------------------------------- */
 void ftree_init(FileTree *ft) {
     memset(ft, 0, sizeof(*ft));
     ft->open    = 0;
@@ -19,14 +19,14 @@ void ftree_init(FileTree *ft) {
     ft->entries = (FEntry *)calloc(FTREE_MAX_ENTRIES, sizeof(FEntry));
 }
 
-/* ── ftree_free ─────────────────────────────────────────────────────────── */
+/* -- ftree_free ----------------------------------------------------------- */
 void ftree_free(FileTree *ft) {
     free(ft->entries);
     ft->entries = NULL;
     ft->count   = 0;
 }
 
-/* ── Comparador para ordenar: carpetas primero, luego alfabético ─────────── */
+/* -- Comparador para ordenar: carpetas primero, luego alfabético ----------- */
 static int entry_cmp(const void *a, const void *b) {
     const FEntry *ea = (const FEntry *)a;
     const FEntry *eb = (const FEntry *)b;
@@ -35,7 +35,7 @@ static int entry_cmp(const void *a, const void *b) {
     return SDL_strcasecmp(ea->name, eb->name);
 }
 
-/* ── Insertar entradas de un directorio a partir de 'insert_at' ─────────── */
+/* -- Insertar entradas de un directorio a partir de 'insert_at' ----------- */
 /* Devuelve el número de entradas insertadas.                                 */
 static int scan_dir(FileTree *ft, const char *dirpath,
                     int depth, int insert_at)
@@ -121,7 +121,7 @@ static int scan_dir(FileTree *ft, const char *dirpath,
     return to_insert;
 }
 
-/* ── ftree_load ─────────────────────────────────────────────────────────── */
+/* -- ftree_load ----------------------------------------------------------- */
 void ftree_load(FileTree *ft, const char *dirpath) {
     ft->count  = 0;
     ft->scroll = 0;
@@ -149,7 +149,7 @@ void ftree_load(FileTree *ft, const char *dirpath) {
     ft->open = 1;
 }
 
-/* ── ftree_toggle ───────────────────────────────────────────────────────── */
+/* -- ftree_toggle --------------------------------------------------------- */
 void ftree_toggle(FileTree *ft, int index) {
     if (index < 0 || index >= ft->count) return;
     FEntry *en = &ft->entries[index];
@@ -183,7 +183,7 @@ void ftree_toggle(FileTree *ft, int index) {
     ftree_refresh_visibility(ft);
 }
 
-/* ── ftree_refresh_visibility ───────────────────────────────────────────── */
+/* -- ftree_refresh_visibility --------------------------------------------- */
 void ftree_refresh_visibility(FileTree *ft) {
     /* Recalcula visible[] usando el estado expanded[] de los padres.
        Como ya eliminamos físicamente los hijos al colapsar, todos los
@@ -192,7 +192,7 @@ void ftree_refresh_visibility(FileTree *ft) {
         ft->entries[i].visible = 1;
 }
 
-/* ── ftree_visible_count ────────────────────────────────────────────────── */
+/* -- ftree_visible_count -------------------------------------------------- */
 int ftree_visible_count(const FileTree *ft) {
     int n = 0;
     for (int i = 0; i < ft->count; i++)
@@ -200,7 +200,7 @@ int ftree_visible_count(const FileTree *ft) {
     return n;
 }
 
-/* ── ftree_nth_visible ──────────────────────────────────────────────────── */
+/* -- ftree_nth_visible ---------------------------------------------------- */
 int ftree_nth_visible(const FileTree *ft, int n) {
     int cur = 0;
     for (int i = 0; i < ft->count; i++) {

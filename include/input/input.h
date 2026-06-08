@@ -1,4 +1,4 @@
 #pragma once
-#include "editor.h"
+#include "editor/editor.h"
 
 void input_handle_event(Editor *e, SDL_Event *ev);
