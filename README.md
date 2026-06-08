@@ -67,11 +67,13 @@ Guía completa en **[doc/how_build.md](doc/how_build.md)**.
 CoffeeCode/
 ├-- CMakeLists.txt
 ├-- Compile.bat            ← build en Windows (modos release/debug/native/asan/clean)
-├-- EmbedFont.cmake        ← genera include/font_data.h embebiendo la fuente
-├-- assets/                ← logo, icono y fuente
+├-- assets/                ← logo, icono y fuente (font.ttf se carga en runtime)
 ├-- include/<modulo>/      ← cabeceras (una carpeta por modulo)
 └-- src/<modulo>/          ← fuentes  (una carpeta por modulo)
 ```
+
+> La fuente se lee de `font.ttf` en runtime (junto al ejecutable, o vía la
+> variable de entorno `COFFEECODE_FONT`); ya no va embebida en el binario.
 
 Módulos: `buffer` (gap buffer de texto), `editor` (núcleo: pestañas, undo/redo), `lexer` (resaltado), `filetree` (explorador), `input` (entrada) y `render` (renderizador). Los includes de módulo usan prefijo de carpeta, p. ej. `#include "editor/editor.h"`.
 
