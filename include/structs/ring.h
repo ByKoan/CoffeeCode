@@ -26,11 +26,11 @@
  * @brief Buffer circular de capacidad fija.
  */
 typedef struct {
-    void   *data;  /**< Buffer de @c cap*elem bytes. */
-    size_t  cap;   /**< Capacidad fija en elementos. */
-    size_t  elem;  /**< Tamaño de cada elemento en bytes. */
-    size_t  head;  /**< Índice físico del elemento más antiguo. */
-    size_t  count; /**< Número de elementos válidos (<= cap). */
+    void *data;   /**< Buffer de @c cap*elem bytes. */
+    size_t cap;   /**< Capacidad fija en elementos. */
+    size_t elem;  /**< Tamaño de cada elemento en bytes. */
+    size_t head;  /**< Índice físico del elemento más antiguo. */
+    size_t count; /**< Número de elementos válidos (<= cap). */
 } Ring;
 
 /**
@@ -90,10 +90,18 @@ void *ring_back(const Ring *r);
 void *ring_front(const Ring *r);
 
 /** @brief Número de elementos válidos. */
-static inline size_t ring_len(const Ring *r) { return r->count; }
+static inline size_t ring_len(const Ring *r) {
+    return r->count;
+}
 /** @brief Capacidad fija. */
-static inline size_t ring_cap(const Ring *r) { return r->cap; }
+static inline size_t ring_cap(const Ring *r) {
+    return r->cap;
+}
 /** @brief 1 si está lleno. */
-static inline int ring_full(const Ring *r) { return r->count == r->cap; }
+static inline int ring_full(const Ring *r) {
+    return r->count == r->cap;
+}
 /** @brief 1 si está vacío. */
-static inline int ring_empty(const Ring *r) { return r->count == 0; }
+static inline int ring_empty(const Ring *r) {
+    return r->count == 0;
+}

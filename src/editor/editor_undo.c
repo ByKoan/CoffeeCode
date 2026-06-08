@@ -3,37 +3,33 @@
 static void undo_entry_free(UndoEntry *ue) {
     free(ue->text);
     ue->text = NULL;
-    ue->len  = 0;
+    ue->len = 0;
 }
-
 
 static void undo_discard_redo(UndoStack *us) {
     /* las entradas rehacibles son las redo_top más recientes (final del ring) */
     while (us->redo_top > 0) {
         UndoEntry ue;
-        if (ring_pop_back(&us->entries, &ue))
-            undo_entry_free(&ue);
+        if (ring_pop_back(&us->entries, &ue)) undo_entry_free(&ue);
         us->redo_top--;
     }
 }
 
-
-static void undo_push(UndoStack *us, UndoType type,
-                      size_t pos, const char *text, size_t len,
+static void undo_push(UndoStack *us, UndoType type, size_t pos, const char *text, size_t len,
                       int cl, int cc) {
     undo_discard_redo(us);
 
     UndoEntry ue;
-    ue.type              = type;
-    ue.pos               = pos;
-    ue.text              = malloc(len + 1);
+    ue.type = type;
+    ue.pos = pos;
+    ue.text = malloc(len + 1);
     if (ue.text) {
         memcpy(ue.text, text, len);
         ue.text[len] = '\0';
     }
-    ue.len               = len;
+    ue.len = len;
     ue.cursor_line_after = cl;
-    ue.cursor_col_after  = cc;
+    ue.cursor_col_after = cc;
 
     /* si el ring está lleno, push sobrescribe la más antigua: liberar su text */
     if (ring_full(&us->entries)) {
@@ -44,16 +40,13 @@ static void undo_push(UndoStack *us, UndoType type,
     us->redo_top = 0;
 }
 
-
 void editor_undo_push_insert(Editor *e, size_t pos, const char *text, size_t len) {
     undo_push(e->undo, UNDO_INSERT, pos, text, len, e->cursor_line, e->cursor_col);
 }
 
-
 void editor_undo_push_delete(Editor *e, size_t pos, const char *text, size_t len) {
     undo_push(e->undo, UNDO_DELETE, pos, text, len, e->cursor_line, e->cursor_col);
 }
-
 
 void editor_undo(Editor *e) {
     UndoStack *us = e->undo;
@@ -74,10 +67,9 @@ void editor_undo(Editor *e) {
     editor_sync_cursor(e);
     editor_update_lexer(e, 0);
     editor_ensure_visible(e);
-    e->modified     = 1;
+    e->modified = 1;
     e->needs_redraw = 1;
 }
-
 
 void editor_redo(Editor *e) {
     UndoStack *us = e->undo;
@@ -98,11 +90,10 @@ void editor_redo(Editor *e) {
     editor_sync_cursor(e);
     editor_update_lexer(e, 0);
     editor_ensure_visible(e);
-    e->modified     = 1;
+    e->modified = 1;
     e->needs_redraw = 1;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * INIT / FREE / RUN
  * ═══════════════════════════════════════════════════════════════════════════ */
-

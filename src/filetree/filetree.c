@@ -1,28 +1,28 @@
 #include "filetree/filetree.h"
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
-  #include <windows.h>
+#include <windows.h>
 #else
-  #include <dirent.h>
-  #include <sys/stat.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 /* Acceso al array de entradas (Vec<FEntry>) y su tamaño como int.
    FT(ft) se re-deriva tras cada vec_reserve por si hubo realloc. */
-#define FT(ft)  ((FEntry *)(ft)->entries.data)
+#define FT(ft) ((FEntry *)(ft)->entries.data)
 #define FTN(ft) ((int)(ft)->entries.len)
 
 /* -- ftree_init ----------------------------------------------------------- */
 void ftree_init(FileTree *ft) {
     memset(ft, 0, sizeof(*ft));
-    ft->open    = 0;
-    ft->width   = FTREE_WIDTH_DEFAULT;
+    ft->open = 0;
+    ft->width = FTREE_WIDTH_DEFAULT;
     ft->hovered = -1;
     vec_init(&ft->entries, sizeof(FEntry));
-    vec_reserve(&ft->entries, FTREE_MAX_ENTRIES);  /* reserva inicial (ya no es límite) */
+    vec_reserve(&ft->entries, FTREE_MAX_ENTRIES); /* reserva inicial (ya no es límite) */
 }
 
 /* -- ftree_free ----------------------------------------------------------- */
@@ -34,19 +34,16 @@ void ftree_free(FileTree *ft) {
 static int entry_cmp(const void *a, const void *b) {
     const FEntry *ea = (const FEntry *)a;
     const FEntry *eb = (const FEntry *)b;
-    if (ea->type != eb->type)
-        return (ea->type == FTYPE_DIR) ? -1 : 1;
+    if (ea->type != eb->type) return (ea->type == FTYPE_DIR) ? -1 : 1;
     return SDL_strcasecmp(ea->name, eb->name);
 }
 
 /* -- Insertar entradas de un directorio a partir de 'insert_at' ----------- */
 /* Devuelve el número de entradas insertadas.                                 */
-static int scan_dir(FileTree *ft, const char *dirpath,
-                    int depth, int insert_at)
-{
+static int scan_dir(FileTree *ft, const char *dirpath, int depth, int insert_at) {
     /* Recogemos las entradas primero en un buffer temporal */
     FEntry tmp[1024];
-    int    tmp_count = 0;
+    int tmp_count = 0;
 
 #ifdef _WIN32
     char pattern[516];
@@ -61,11 +58,10 @@ static int scan_dir(FileTree *ft, const char *dirpath,
         memset(en, 0, sizeof(*en));
         snprintf(en->path, sizeof(en->path), "%s\\%s", dirpath, fd.cFileName);
         strncpy(en->name, fd.cFileName, sizeof(en->name) - 1);
-        en->depth    = depth;
-        en->type     = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                       ? FTYPE_DIR : FTYPE_FILE;
+        en->depth = depth;
+        en->type = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? FTYPE_DIR : FTYPE_FILE;
         en->expanded = 0;
-        en->visible  = 1;
+        en->visible = 1;
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #else
@@ -73,15 +69,15 @@ static int scan_dir(FileTree *ft, const char *dirpath,
     if (!dir) return 0;
     struct dirent *de;
     while ((de = readdir(dir)) != NULL) {
-        if (de->d_name[0] == '.') continue;  /* ocultar archivos ocultos */
+        if (de->d_name[0] == '.') continue; /* ocultar archivos ocultos */
         if (tmp_count >= 1024) break;
         FEntry *en = &tmp[tmp_count++];
         memset(en, 0, sizeof(*en));
         snprintf(en->path, sizeof(en->path), "%s/%s", dirpath, de->d_name);
         strncpy(en->name, de->d_name, sizeof(en->name) - 1);
-        en->depth    = depth;
+        en->depth = depth;
         en->expanded = 0;
-        en->visible  = 1;
+        en->visible = 1;
 
         /* Determinar tipo */
         if (de->d_type == DT_DIR) {
@@ -112,8 +108,7 @@ static int scan_dir(FileTree *ft, const char *dirpath,
     /* Crecer (sin límite fijo) y abrir hueco en insert_at */
     if (!vec_reserve(&ft->entries, (size_t)(count + to_insert))) return 0;
     if (existing_after > 0) {
-        memmove(&FT(ft)[insert_at + to_insert],
-                &FT(ft)[insert_at],
+        memmove(&FT(ft)[insert_at + to_insert], &FT(ft)[insert_at],
                 (size_t)existing_after * sizeof(FEntry));
     }
     memcpy(&FT(ft)[insert_at], tmp, (size_t)to_insert * sizeof(FEntry));
@@ -138,13 +133,14 @@ void ftree_load(FileTree *ft, const char *dirpath) {
 
     /* Usar solo el último componente del path como nombre */
     const char *sep = dirpath + strlen(dirpath);
-    while (sep > dirpath && *(sep-1) != '/' && *(sep-1) != '\\') sep--;
+    while (sep > dirpath && *(sep - 1) != '/' && *(sep - 1) != '\\')
+        sep--;
     strncpy(root->name, *sep ? sep : dirpath, sizeof(root->name) - 1);
 
-    root->depth    = 0;
-    root->type     = FTYPE_DIR;
+    root->depth = 0;
+    root->type = FTYPE_DIR;
     root->expanded = 1;
-    root->visible  = 1;
+    root->visible = 1;
     ft->entries.len = 1;
 
     /* Escanear nivel 1 */
@@ -163,12 +159,11 @@ void ftree_toggle(FileTree *ft, int index) {
         en->expanded = 0;
         int depth = en->depth;
         int j = index + 1;
-        while (j < FTN(ft) && FT(ft)[j].depth > depth) j++;
+        while (j < FTN(ft) && FT(ft)[j].depth > depth)
+            j++;
         int remove = j - index - 1;
         if (remove > 0) {
-            memmove(&FT(ft)[index + 1],
-                    &FT(ft)[j],
-                    (size_t)(FTN(ft) - j) * sizeof(FEntry));
+            memmove(&FT(ft)[index + 1], &FT(ft)[j], (size_t)(FTN(ft) - j) * sizeof(FEntry));
             ft->entries.len -= (size_t)remove;
         }
     } else {
@@ -176,7 +171,7 @@ void ftree_toggle(FileTree *ft, int index) {
          * IMPORTANTE: copiar path y depth antes de llamar a scan_dir porque
          * el memmove/realloc interno puede desplazar la entrada y dejar 'en' obsoleto. */
         char expand_path[512];
-        int  expand_depth = en->depth;
+        int expand_depth = en->depth;
         strncpy(expand_path, en->path, sizeof(expand_path) - 1);
         expand_path[sizeof(expand_path) - 1] = '\0';
         FT(ft)[index].expanded = 1;

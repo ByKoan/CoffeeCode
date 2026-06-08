@@ -18,8 +18,8 @@
  */
 #pragma once
 
-#include <stddef.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 /**
  * @brief Cadena dinámica.
@@ -27,9 +27,9 @@
  * Invariante: si @c cap @c > @c 0 entonces @c data[len]=='\0' y @c cap @c >= @c len+1.
  */
 typedef struct {
-    char   *data; /**< Buffer de caracteres terminado en @c '\0' (o @c NULL si vacío sin reservar). */
-    size_t  len;  /**< Longitud en bytes, sin contar el terminador. */
-    size_t  cap;  /**< Capacidad del buffer en bytes (incluye el terminador). */
+    char *data; /**< Buffer de caracteres terminado en @c '\0' (o @c NULL si vacío sin reservar). */
+    size_t len; /**< Longitud en bytes, sin contar el terminador. */
+    size_t cap; /**< Capacidad del buffer en bytes (incluye el terminador). */
 } Str;
 
 /**
@@ -120,4 +120,6 @@ const char *str_cstr(const Str *s);
 /**
  * @brief Longitud de la cadena en bytes (sin el terminador).
  */
-static inline size_t str_len(const Str *s) { return s->len; }
+static inline size_t str_len(const Str *s) {
+    return s->len;
+}

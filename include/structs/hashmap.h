@@ -41,16 +41,16 @@ typedef int (*EqFn)(const void *a, const void *b, size_t key_size);
  * Disposición SoA (arrays paralelos) por ranura para sondeo cache-friendly.
  */
 typedef struct {
-    void    *keys;     /**< @c cap*key_size bytes con las claves. */
-    void    *vals;     /**< @c cap*val_size bytes con los valores. */
-    size_t  *hashes;   /**< Hash cacheado de cada ranura ocupada. */
-    uint8_t *state;    /**< 0 = vacía, 1 = ocupada. */
-    size_t   cap;      /**< Número de ranuras (potencia de 2). */
-    size_t   count;    /**< Ranuras ocupadas. */
-    size_t   key_size; /**< Tamaño de clave en bytes. */
-    size_t   val_size; /**< Tamaño de valor en bytes. */
-    HashFn   hash;     /**< Función de hash. */
-    EqFn     eq;       /**< Función de igualdad. */
+    void *keys;      /**< @c cap*key_size bytes con las claves. */
+    void *vals;      /**< @c cap*val_size bytes con los valores. */
+    size_t *hashes;  /**< Hash cacheado de cada ranura ocupada. */
+    uint8_t *state;  /**< 0 = vacía, 1 = ocupada. */
+    size_t cap;      /**< Número de ranuras (potencia de 2). */
+    size_t count;    /**< Ranuras ocupadas. */
+    size_t key_size; /**< Tamaño de clave en bytes. */
+    size_t val_size; /**< Tamaño de valor en bytes. */
+    HashFn hash;     /**< Función de hash. */
+    EqFn eq;         /**< Función de igualdad. */
 } HashMap;
 
 /**
@@ -69,8 +69,8 @@ int hashmap_init(HashMap *m, size_t key_size, size_t val_size);
  * @param eq Función de igualdad, o @c NULL para comparación por bytes.
  * @return 1 en éxito, 0 si falló la reserva.
  */
-int hashmap_init_ex(HashMap *m, size_t key_size, size_t val_size,
-                    size_t initial_cap, HashFn hash, EqFn eq);
+int hashmap_init_ex(HashMap *m, size_t key_size, size_t val_size, size_t initial_cap, HashFn hash,
+                    EqFn eq);
 
 /**
  * @brief Libera toda la memoria de la tabla.
@@ -113,7 +113,9 @@ int hashmap_remove(HashMap *m, const void *key);
 /**
  * @brief Número de entradas.
  */
-static inline size_t hashmap_len(const HashMap *m) { return m->count; }
+static inline size_t hashmap_len(const HashMap *m) {
+    return m->count;
+}
 
 /**
  * @brief Itera sobre las entradas ocupadas.

@@ -25,7 +25,7 @@
 typedef struct ListNode {
     struct ListNode *prev; /**< Nodo anterior, o @c NULL si es la cabeza. */
     struct ListNode *next; /**< Nodo siguiente, o @c NULL si es la cola. */
-    max_align_t      data[]; /**< Almacenamiento del elemento (array flexible). */
+    max_align_t data[];    /**< Almacenamiento del elemento (array flexible). */
 } ListNode;
 
 /**
@@ -34,8 +34,8 @@ typedef struct ListNode {
 typedef struct {
     ListNode *head; /**< Primer nodo, o @c NULL si vacía. */
     ListNode *tail; /**< Último nodo, o @c NULL si vacía. */
-    size_t    len;  /**< Número de nodos. */
-    size_t    elem; /**< Tamaño de cada elemento en bytes. */
+    size_t len;     /**< Número de nodos. */
+    size_t elem;    /**< Tamaño de cada elemento en bytes. */
 } List;
 
 /**
@@ -101,16 +101,24 @@ int list_pop_back(List *l, void *out);
 void list_remove(List *l, ListNode *node);
 
 /** @brief Primer nodo (o @c NULL si vacía). */
-static inline ListNode *list_first(const List *l) { return l->head; }
+static inline ListNode *list_first(const List *l) {
+    return l->head;
+}
 /** @brief Último nodo (o @c NULL si vacía). */
-static inline ListNode *list_last(const List *l) { return l->tail; }
+static inline ListNode *list_last(const List *l) {
+    return l->tail;
+}
 /** @brief Número de elementos. */
-static inline size_t list_len(const List *l) { return l->len; }
+static inline size_t list_len(const List *l) {
+    return l->len;
+}
 
 /**
  * @brief Puntero al dato de un nodo.
  */
-static inline void *list_data(ListNode *n) { return (void *)n->data; }
+static inline void *list_data(ListNode *n) {
+    return (void *)n->data;
+}
 
 /**
  * @brief Acceso tipado por valor al dato de un nodo.

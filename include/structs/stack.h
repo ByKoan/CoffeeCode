@@ -61,6 +61,10 @@ int stack_pop(Stack *s, void *out);
 void *stack_peek(const Stack *s);
 
 /** @brief Número de elementos. */
-static inline size_t stack_len(const Stack *s) { return vec_len(&s->items); }
+static inline size_t stack_len(const Stack *s) {
+    return vec_len(&s->items);
+}
 /** @brief 1 si la pila está vacía. */
-static inline int stack_empty(const Stack *s) { return s->items.len == 0; }
+static inline int stack_empty(const Stack *s) {
+    return s->items.len == 0;
+}

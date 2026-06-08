@@ -1,22 +1,22 @@
 #pragma once
 /* Header PRIVADO del modulo input: macros y declaraciones compartidas. No es API publica. */
-#include "input/input.h"
 #include "editor/editor.h"
 #include "filetree/filetree.h"
+#include "input/input.h"
 #include "render/render.h"
-#include <string.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <sys/stat.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
 /* -- Geometría del menú (debe coincidir con render.c) ---------------------- */
-#define MENU_ITEM_H   26
-#define MENU_WIDTH   210
-#define MENU_ITEMS    6
-#define BTN_FILE_X    4
-#define BTN_FILE_W   90
+#define MENU_ITEM_H 26
+#define MENU_WIDTH 210
+#define MENU_ITEMS 6
+#define BTN_FILE_X 4
+#define BTN_FILE_W 90
 
 int menu_item_at(int mx, int my);
 int menu_total_h(void);
@@ -40,9 +40,9 @@ void do_backspace(Editor *e);
 void do_delete(Editor *e);
 void new_file(Editor *e);
 void save_file(Editor *e);
-void SDLCALL file_dialog_cb(void *userdata, const char * const *filelist, int filter);
+void SDLCALL file_dialog_cb(void *userdata, const char *const *filelist, int filter);
 void open_file_dialog(Editor *e);
-void SDLCALL folder_dialog_cb(void *userdata, const char * const *filelist, int filter);
+void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist, int filter);
 void open_folder_dialog(Editor *e);
 void menu_exec(Editor *e, int item);
 void handle_scroll(Editor *e, float dy);

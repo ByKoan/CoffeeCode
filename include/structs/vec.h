@@ -29,10 +29,10 @@
  * @c NULL si @c cap==0). Los elementos válidos son @c [0, len).
  */
 typedef struct {
-    void   *data; /**< Buffer contiguo de @c cap*elem bytes (o @c NULL). */
-    size_t  len;  /**< Número de elementos en uso. */
-    size_t  cap;  /**< Capacidad actual, en elementos. */
-    size_t  elem; /**< Tamaño de cada elemento, en bytes. */
+    void *data;  /**< Buffer contiguo de @c cap*elem bytes (o @c NULL). */
+    size_t len;  /**< Número de elementos en uso. */
+    size_t cap;  /**< Capacidad actual, en elementos. */
+    size_t elem; /**< Tamaño de cada elemento, en bytes. */
 } Vec;
 
 /**
@@ -149,15 +149,16 @@ void vec_set(Vec *v, size_t idx, const void *item);
  * @param i Índice en @c [0, len).
  * @return Puntero al elemento @p i.
  */
-static inline void *vec_at(const Vec *v, size_t i)
-{
+static inline void *vec_at(const Vec *v, size_t i) {
     return (char *)v->data + i * v->elem;
 }
 
 /**
  * @brief Número de elementos en uso.
  */
-static inline size_t vec_len(const Vec *v) { return v->len; }
+static inline size_t vec_len(const Vec *v) {
+    return v->len;
+}
 
 /**
  * @brief Acceso tipado por valor: equivalente a @c ((T*)v->data)[i].

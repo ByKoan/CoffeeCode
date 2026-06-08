@@ -1,12 +1,12 @@
 #include "editor_internal.h"
-#include "render/render.h"
-#include "input/input.h"
 #include "font_data.h"
+#include "input/input.h"
+#include "render/render.h"
 
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     Buffer *b = e->buf;
     int total = buf_line_count(b);
-    if (line < 0)      line = 0;
+    if (line < 0) line = 0;
     if (line >= total) line = total - 1;
 
     /* O(1): inicio de línea directo desde el índice de líneas */
@@ -17,7 +17,7 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
 
     /* clamp col al rango real */
     int line_len = (int)(line_end - line_start);
-    if (col < 0)        col = 0;
+    if (col < 0) col = 0;
     if (col > line_len) col = line_len;
 
     return line_start + (size_t)col;
@@ -30,28 +30,26 @@ void editor_sync_cursor(Editor *e) {
     int line, col;
     buf_line_col(e->buf, pos, &line, &col);
     e->cursor_line = line;
-    e->cursor_col  = col;
+    e->cursor_col = col;
 }
 
 /* -- editor_ensure_visible ------------------------------------------------- */
 
 void editor_ensure_visible(Editor *e) {
-    int left_off  = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
-    int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT) / LINE_HEIGHT;
-    int vis_cols  = (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
+    int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    int vis_lines =
+        (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT) / LINE_HEIGHT;
+    int vis_cols = (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
 
-    if (e->cursor_line < e->scroll_line)
-        e->scroll_line = e->cursor_line;
+    if (e->cursor_line < e->scroll_line) e->scroll_line = e->cursor_line;
     if (e->cursor_line >= e->scroll_line + vis_lines)
         e->scroll_line = e->cursor_line - vis_lines + 1;
 
-    if (e->cursor_col < e->scroll_col)
-        e->scroll_col = e->cursor_col;
-    if (e->cursor_col >= e->scroll_col + vis_cols)
-        e->scroll_col = e->cursor_col - vis_cols + 1;
+    if (e->cursor_col < e->scroll_col) e->scroll_col = e->cursor_col;
+    if (e->cursor_col >= e->scroll_col + vis_cols) e->scroll_col = e->cursor_col - vis_cols + 1;
 
     if (e->scroll_line < 0) e->scroll_line = 0;
-    if (e->scroll_col  < 0) e->scroll_col  = 0;
+    if (e->scroll_col < 0) e->scroll_col = 0;
 }
 
 /* -- editor_update_lexer --------------------------------------------------- */
@@ -68,11 +66,15 @@ int editor_sel_range(Editor *e, size_t *from, size_t *to) {
     if (!e->sel_active) return 0;
     size_t anchor = editor_pos_from_line_col(e, e->sel_anchor_line, e->sel_anchor_col);
     size_t cursor = buf_cursor_pos(e->buf);
-    if (anchor <= cursor) { *from = anchor; *to = cursor; }
-    else                  { *from = cursor; *to = anchor; }
+    if (anchor <= cursor) {
+        *from = anchor;
+        *to = cursor;
+    } else {
+        *from = cursor;
+        *to = anchor;
+    }
     return (*from != *to);
 }
-
 
 void editor_sel_clear(Editor *e) {
     e->sel_active = 0;
@@ -87,9 +89,9 @@ void editor_sel_clear(Editor *e) {
 
 int editor_init(Editor *e, const char *filepath) {
     memset(e, 0, sizeof(*e));
-    e->running          = 1;
-    e->needs_redraw     = 1;
-    e->menu_hovered     = -1;
+    e->running = 1;
+    e->needs_redraw = 1;
+    e->menu_hovered = -1;
     e->find.result_line = -1;
 
     /* SDL */
@@ -137,9 +139,15 @@ int editor_init(Editor *e, const char *filepath) {
 #endif
     {
         SDL_IOStream *io = SDL_IOFromConstMem(g_font_data, (Sint64)g_font_size);
-        if (!io) { fprintf(stderr, "SDL_IOFromConstMem: %s\n", SDL_GetError()); return 0; }
+        if (!io) {
+            fprintf(stderr, "SDL_IOFromConstMem: %s\n", SDL_GetError());
+            return 0;
+        }
         e->font = TTF_OpenFontIO(io, 1, FONT_SIZE);
-        if (!e->font) { fprintf(stderr, "TTF_OpenFontIO: %s\n", SDL_GetError()); return 0; }
+        if (!e->font) {
+            fprintf(stderr, "TTF_OpenFontIO: %s\n", SDL_GetError());
+            return 0;
+        }
     }
 
     {
@@ -154,10 +162,10 @@ int editor_init(Editor *e, const char *filepath) {
     /* -- Tabs -----------------------------------------------------------
      * Si se pasó un filepath, crear el tab inicial con ese archivo.
      * Si no, arrancar con tab_count = 0 (pantalla de bienvenida). */
-    e->tab_count  = 0;
+    e->tab_count = 0;
     e->active_tab = 0;
-    e->buf  = NULL;
-    e->lex  = NULL;
+    e->buf = NULL;
+    e->lex = NULL;
     e->undo = NULL;
 
     if (filepath && filepath[0]) {
@@ -180,14 +188,13 @@ void editor_free(Editor *e) {
     for (int i = 0; i < e->tab_count; i++)
         tab_free_resources(&e->tabs[i]);
     ftree_free(&e->ftree);
-    if (e->font)     TTF_CloseFont(e->font);
+    if (e->font) TTF_CloseFont(e->font);
     if (e->renderer) SDL_StopTextInput(e->window);
     if (e->renderer) SDL_DestroyRenderer(e->renderer);
-    if (e->window)   SDL_DestroyWindow(e->window);
+    if (e->window) SDL_DestroyWindow(e->window);
     TTF_Quit();
     SDL_Quit();
 }
-
 
 void editor_run(Editor *e) {
     SDL_Event ev;
@@ -208,7 +215,11 @@ void editor_run(Editor *e) {
                         EditorTab *_t = &e->tabs[e->active_tab];
                         strncpy(_t->filepath, e->filepath, 511);
                         _t->modified = 0;
-                        { struct stat _st; _t->loaded_mtime = (stat(e->filepath, &_st) == 0) ? (long)_st.st_mtime : 0; }
+                        {
+                            struct stat _st;
+                            _t->loaded_mtime =
+                                (stat(e->filepath, &_st) == 0) ? (long)_st.st_mtime : 0;
+                        }
                     }
                     e->needs_redraw = 1;
                 }
@@ -222,4 +233,3 @@ void editor_run(Editor *e) {
         }
     }
 }
-

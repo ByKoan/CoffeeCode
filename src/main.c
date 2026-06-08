@@ -12,16 +12,29 @@
 static FILE *g_log = NULL;
 static void log_init(void) {
     g_log = fopen("coffeecode_log.txt", "w");
-    if (g_log) { fprintf(g_log, "=== CoffeeCode inicio ===\n"); fflush(g_log); }
+    if (g_log) {
+        fprintf(g_log, "=== CoffeeCode inicio ===\n");
+        fflush(g_log);
+    }
 }
 static void log_msg(const char *msg) {
-    if (g_log) { fprintf(g_log, "%s\n", msg); fflush(g_log); }
+    if (g_log) {
+        fprintf(g_log, "%s\n", msg);
+        fflush(g_log);
+    }
 }
-static void log_close(void) { if (g_log) { fclose(g_log); g_log = NULL; } }
+static void log_close(void) {
+    if (g_log) {
+        fclose(g_log);
+        g_log = NULL;
+    }
+}
 #else
-static void log_init(void)            {}
-static void log_msg(const char *msg)  { (void)msg; }
-static void log_close(void)           {}
+static void log_init(void) {}
+static void log_msg(const char *msg) {
+    (void)msg;
+}
+static void log_close(void) {}
 #endif
 
 int main(int argc, char *argv[]) {
@@ -31,7 +44,11 @@ int main(int argc, char *argv[]) {
     const char *filepath = (argc > 1) ? argv[1] : NULL;
 
     Editor *e = (Editor *)calloc(1, sizeof(Editor));
-    if (!e) { log_msg("ERROR: no se pudo alojar Editor"); log_close(); return 1; }
+    if (!e) {
+        log_msg("ERROR: no se pudo alojar Editor");
+        log_close();
+        return 1;
+    }
 
     log_msg("Llamando editor_init...");
     if (!editor_init(e, filepath)) {

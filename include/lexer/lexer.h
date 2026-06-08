@@ -1,7 +1,7 @@
 #pragma once
+#include "structs/vec.h"
 #include <stddef.h>
 #include <stdint.h>
-#include "structs/vec.h"
 
 /* -- Tipos de token ------------------------------------------------------- */
 typedef enum {
@@ -18,7 +18,9 @@ typedef enum {
 } TokenType;
 
 /* Colores RGBA para cada tipo de token (ajusta a tu gusto) */
-typedef struct { uint8_t r, g, b, a; } Color;
+typedef struct {
+    uint8_t r, g, b, a;
+} Color;
 
 extern const Color TOKEN_COLORS[TOK_COUNT];
 
@@ -26,26 +28,26 @@ extern const Color TOKEN_COLORS[TOK_COUNT];
 #define MAX_TOKENS_PER_LINE 512
 
 typedef struct {
-    int       col;    /* columna de inicio (0-based) */
-    int       len;    /* longitud en caracteres      */
+    int col; /* columna de inicio (0-based) */
+    int len; /* longitud en caracteres      */
     TokenType type;
 } Token;
 
 typedef struct {
-    Token  tokens[MAX_TOKENS_PER_LINE];
-    int    count;
+    Token tokens[MAX_TOKENS_PER_LINE];
+    int count;
 } LineTokens;
 
 /* -- Cache de resaltado --------------------------------------------------- */
 typedef struct {
-    Vec lines;   /* Vec<LineTokens>: una entrada por línea de cache         */
-    Vec dirty;   /* Vec<int>: dirty[i] = 1 si la línea i debe re-tokenizarse */
+    Vec lines; /* Vec<LineTokens>: una entrada por línea de cache         */
+    Vec dirty; /* Vec<int>: dirty[i] = 1 si la línea i debe re-tokenizarse */
 } LexerCache;
 
-int  lexer_cache_init   (LexerCache *lc, int line_count);
-void lexer_cache_free   (LexerCache *lc);
-void lexer_cache_resize (LexerCache *lc, int new_count);
-void lexer_cache_dirty  (LexerCache *lc, int from_line);
+int lexer_cache_init(LexerCache *lc, int line_count);
+void lexer_cache_free(LexerCache *lc);
+void lexer_cache_resize(LexerCache *lc, int new_count);
+void lexer_cache_dirty(LexerCache *lc, int from_line);
 
 /* Accesores (inline): el cache es Vec<LineTokens> + Vec<int> */
 static inline int lexer_cache_count(const LexerCache *lc) {
@@ -64,13 +66,12 @@ static inline int *lexer_cache_dirty_at(LexerCache *lc, int i) {
  * comentario (el estado se encadena entre líneas). */
 typedef struct Highlighter {
     const char *name;
-    int (*tokenize_line)(const struct Highlighter *self,
-                         const char *text, int len,
-                         LineTokens *out, int in_block_comment);
+    int (*tokenize_line)(const struct Highlighter *self, const char *text, int len, LineTokens *out,
+                         int in_block_comment);
 } Highlighter;
 
-extern const Highlighter highlighter_c;     /* lenguaje C/C++           */
-extern const Highlighter highlighter_none;  /* texto plano (sin tokens) */
+extern const Highlighter highlighter_c;    /* lenguaje C/C++           */
+extern const Highlighter highlighter_none; /* texto plano (sin tokens) */
 
 const Highlighter *highlighter_default(void);              /* por defecto (C) */
 const Highlighter *highlighter_for_path(const char *path); /* según extensión */

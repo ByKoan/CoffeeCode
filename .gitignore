@@ -1,5 +1,7 @@
 # archivos ocultos y de configuración
 .*
+# ...pero sí trackear la config de formato del proyecto
+!.clang-format
 
 # carpetas de configuración de IDEs y entornos virtuales
 .idea

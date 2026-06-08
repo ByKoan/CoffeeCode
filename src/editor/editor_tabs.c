@@ -28,14 +28,14 @@ static long file_mtime(const char *path) {
 void editor_tab_save_state(Editor *e) {
     if (e->tab_count == 0) return;
     EditorTab *t = &e->tabs[e->active_tab];
-    t->cursor_line     = e->cursor_line;
-    t->cursor_col      = e->cursor_col;
-    t->scroll_line     = e->scroll_line;
-    t->scroll_col      = e->scroll_col;
-    t->modified        = e->modified;
-    t->sel_active      = e->sel_active;
+    t->cursor_line = e->cursor_line;
+    t->cursor_col = e->cursor_col;
+    t->scroll_line = e->scroll_line;
+    t->scroll_col = e->scroll_col;
+    t->modified = e->modified;
+    t->sel_active = e->sel_active;
     t->sel_anchor_line = e->sel_anchor_line;
-    t->sel_anchor_col  = e->sel_anchor_col;
+    t->sel_anchor_col = e->sel_anchor_col;
 }
 
 /* Apunta e->buf/lex/undo al tab activo y restaura los escalares.
@@ -45,10 +45,10 @@ static void editor_tab_load_state(Editor *e) {
     EditorTab *t = &e->tabs[e->active_tab];
 
     /* -- punteros directos al almacenamiento del tab -- */
-    e->buf  = &t->buf;
-    e->lex  = &t->lex;
+    e->buf = &t->buf;
+    e->lex = &t->lex;
     e->undo = &t->undo;
-    e->hl   = t->hl;
+    e->hl = t->hl;
 
     /* -- recarga eficiente ----------------------------------------------
      * Solo si el tab tiene ruta, NO está modificado y el mtime del
@@ -68,20 +68,22 @@ static void editor_tab_load_state(Editor *e) {
             lexer_cache_init(&t->lex, total > 0 ? total : 1);
 
             /* reset de cursor/scroll al inicio tras recarga externa */
-            t->cursor_line = 0; t->cursor_col = 0;
-            t->scroll_line = 0; t->scroll_col = 0;
+            t->cursor_line = 0;
+            t->cursor_col = 0;
+            t->scroll_line = 0;
+            t->scroll_col = 0;
         }
     }
 
     /* -- escalares -- */
-    e->cursor_line     = t->cursor_line;
-    e->cursor_col      = t->cursor_col;
-    e->scroll_line     = t->scroll_line;
-    e->scroll_col      = t->scroll_col;
-    e->modified        = t->modified;
-    e->sel_active      = t->sel_active;
+    e->cursor_line = t->cursor_line;
+    e->cursor_col = t->cursor_col;
+    e->scroll_line = t->scroll_line;
+    e->scroll_col = t->scroll_col;
+    e->modified = t->modified;
+    e->sel_active = t->sel_active;
     e->sel_anchor_line = t->sel_anchor_line;
-    e->sel_anchor_col  = t->sel_anchor_col;
+    e->sel_anchor_col = t->sel_anchor_col;
     strncpy(e->filepath, t->filepath, sizeof(e->filepath) - 1);
 }
 
@@ -113,7 +115,7 @@ void editor_tab_open(Editor *e, const char *path) {
             if (i == e->active_tab) return;
             editor_tab_save_state(e);
             e->active_tab = i;
-            editor_tab_load_state(e);   /* hace recarga si mtime cambió */
+            editor_tab_load_state(e); /* hace recarga si mtime cambió */
             editor_update_lexer(e, 0);
             e->needs_redraw = 1;
             return;
@@ -168,19 +170,20 @@ void editor_tab_close(Editor *e) {
 
     if (e->tab_count == 0) {
         /* sin tabs: apuntar a NULL — render_frame lo gestiona */
-        e->buf  = NULL;
-        e->lex  = NULL;
+        e->buf = NULL;
+        e->lex = NULL;
         e->undo = NULL;
-        e->hl   = NULL;
-        e->active_tab      = 0;
-        e->filepath[0]     = '\0';
-        e->modified        = 0;
-        e->cursor_line     = 0; e->cursor_col  = 0;
-        e->scroll_line     = 0; e->scroll_col  = 0;
+        e->hl = NULL;
+        e->active_tab = 0;
+        e->filepath[0] = '\0';
+        e->modified = 0;
+        e->cursor_line = 0;
+        e->cursor_col = 0;
+        e->scroll_line = 0;
+        e->scroll_col = 0;
         editor_sel_clear(e);
     } else {
-        if (e->active_tab >= e->tab_count)
-            e->active_tab = e->tab_count - 1;
+        if (e->active_tab >= e->tab_count) e->active_tab = e->tab_count - 1;
         editor_tab_load_state(e);
         editor_update_lexer(e, 0);
         editor_sync_cursor(e);
@@ -194,7 +197,7 @@ void editor_tab_switch(Editor *e, int i) {
     if (i < 0 || i >= e->tab_count || i == e->active_tab) return;
     editor_tab_save_state(e);
     e->active_tab = i;
-    editor_tab_load_state(e);   /* recarga si mtime cambió y no hay cambios */
+    editor_tab_load_state(e); /* recarga si mtime cambió y no hay cambios */
     editor_update_lexer(e, 0);
     editor_sync_cursor(e);
     e->needs_redraw = 1;
@@ -203,4 +206,3 @@ void editor_tab_switch(Editor *e, int i) {
 /* ═══════════════════════════════════════════════════════════════════════════
  * UNDO / REDO
  * ═══════════════════════════════════════════════════════════════════════════ */
-

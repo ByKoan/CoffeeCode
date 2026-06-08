@@ -1,7 +1,7 @@
 #include "buffer/buffer.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 /* ══════════════════════════════════════════════════════════════════════════
  * ÍNDICE DE LÍNEAS  (Vec<size_t>)
@@ -15,7 +15,7 @@
  * ══════════════════════════════════════════════════════════════════════════ */
 
 /** Puntero al array de offsets (se re-deriva tras cada posible realloc). */
-#define LI(b)      ((size_t *)(b)->lines.data)
+#define LI(b) ((size_t *)(b)->lines.data)
 /** Número de líneas como int (la API pública usa int). */
 #define LICOUNT(b) ((int)(b)->lines.len)
 
@@ -47,8 +47,7 @@ static int li_rebuild(Buffer *b) {
 static void li_after_insert(Buffer *b, size_t pos, const char *text, size_t len) {
     int count = LICOUNT(b);
     for (int i = 0; i < count; i++)
-        if (LI(b)[i] > pos)
-            LI(b)[i] += len;
+        if (LI(b)[i] > pos) LI(b)[i] += len;
 
     for (size_t k = 0; k < len; k++) {
         if (text[k] == '\n') {
@@ -56,11 +55,13 @@ static void li_after_insert(Buffer *b, size_t pos, const char *text, size_t len)
             count = LICOUNT(b);
             int ins = count;
             for (int i = 1; i < count; i++) {
-                if (LI(b)[i] > new_start) { ins = i; break; }
+                if (LI(b)[i] > new_start) {
+                    ins = i;
+                    break;
+                }
             }
             if (!vec_reserve(&b->lines, (size_t)count + 1)) return;
-            memmove(&LI(b)[ins + 1], &LI(b)[ins],
-                    (size_t)(count - ins) * sizeof(size_t));
+            memmove(&LI(b)[ins + 1], &LI(b)[ins], (size_t)(count - ins) * sizeof(size_t));
             LI(b)[ins] = new_start;
             b->lines.len = (size_t)(count + 1);
         }
@@ -80,7 +81,7 @@ static void li_after_delete(Buffer *b, size_t from, size_t to) {
         size_t s = LI(b)[i];
         /* una línea (s>0) desaparece si se borra su '\n' precedente (en s-1),
            lo que ocurre exactamente cuando from < s <= to. */
-        if (s > from && s <= to) continue;          /* borrar */
+        if (s > from && s <= to) continue; /* borrar */
         LI(b)[wr++] = (s > to) ? s - del : s;
     }
     b->lines.len = (size_t)wr;
@@ -99,7 +100,7 @@ static size_t gap_size(const Buffer *b) {
 static int ensure_gap(Buffer *b, size_t need) {
     if (gap_size(b) >= need) return 1;
 
-    size_t new_gap  = need + BUFFER_GAP_MIN;
+    size_t new_gap = need + BUFFER_GAP_MIN;
     size_t old_size = b->size;
     size_t new_size = old_size + new_gap - gap_size(b);
 
@@ -108,12 +109,10 @@ static int ensure_gap(Buffer *b, size_t need) {
     b->data = nd;
 
     size_t right_len = old_size - b->gap_end;
-    memmove(b->data + new_size - right_len,
-            b->data + b->gap_end,
-            right_len);
+    memmove(b->data + new_size - right_len, b->data + b->gap_end, right_len);
 
     b->gap_end = new_size - right_len;
-    b->size    = new_size;
+    b->size = new_size;
     return 1;
 }
 
@@ -123,18 +122,14 @@ static void move_gap_to(Buffer *b, size_t pos) {
 
     if (pos < cur) {
         size_t len = cur - pos;
-        memmove(b->data + b->gap_end - len,
-                b->data + pos,
-                len);
+        memmove(b->data + b->gap_end - len, b->data + pos, len);
         b->gap_start = pos;
-        b->gap_end  -= len;
+        b->gap_end -= len;
     } else {
         size_t len = pos - cur;
-        memmove(b->data + cur,
-                b->data + b->gap_end,
-                len);
-        b->gap_start  = pos;
-        b->gap_end   += len;
+        memmove(b->data + cur, b->data + b->gap_end, len);
+        b->gap_start = pos;
+        b->gap_end += len;
     }
 }
 
@@ -147,15 +142,17 @@ static size_t phys(const Buffer *b, size_t pos) {
 int buf_init(Buffer *b) {
     b->data = malloc(BUFFER_INIT_SIZE);
     if (!b->data) return 0;
-    b->size      = BUFFER_INIT_SIZE;
+    b->size = BUFFER_INIT_SIZE;
     b->gap_start = 0;
-    b->gap_end   = BUFFER_INIT_SIZE;
+    b->gap_end = BUFFER_INIT_SIZE;
 
     vec_init(&b->lines, sizeof(size_t));
     if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
-        free(b->data); b->data = NULL; return 0;
+        free(b->data);
+        b->data = NULL;
+        return 0;
     }
-    LI(b)[0]     = 0;
+    LI(b)[0] = 0;
     b->lines.len = 1;
     return 1;
 }
@@ -203,7 +200,7 @@ void buf_delete_after(Buffer *b) {
 void buf_delete_range(Buffer *b, size_t from, size_t to) {
     size_t len = buf_length(b);
     if (from > len) from = len;
-    if (to   > len) to   = len;
+    if (to > len) to = len;
     if (from >= to) return;
 
     li_after_delete(b, from, to);
@@ -214,7 +211,7 @@ void buf_delete_range(Buffer *b, size_t from, size_t to) {
 size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out) {
     size_t len = buf_length(b);
     if (from > len) from = len;
-    if (to   > len) to   = len;
+    if (to > len) to = len;
     if (from >= to) return 0;
 
     size_t n = to - from;
@@ -267,7 +264,7 @@ int buf_line_count(const Buffer *b) {
 /* O(1) — offset de inicio de la línea `line` (con clamp a rango válido) */
 size_t buf_line_offset(const Buffer *b, int line) {
     int n = LICOUNT(b);
-    if (line < 0)  line = 0;
+    if (line < 0) line = 0;
     if (line >= n) line = n - 1;
     return LI(b)[line];
 }
@@ -280,8 +277,11 @@ size_t buf_line_start(const Buffer *b, size_t pos) {
     int lo = 0, hi = LICOUNT(b) - 1, best = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        if (LI(b)[mid] <= pos) { best = mid; lo = mid + 1; }
-        else                    hi = mid - 1;
+        if (LI(b)[mid] <= pos) {
+            best = mid;
+            lo = mid + 1;
+        } else
+            hi = mid - 1;
     }
     return LI(b)[best];
 }
@@ -293,11 +293,14 @@ int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
     int lo = 0, hi = LICOUNT(b) - 1, ln = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        if (LI(b)[mid] <= pos) { ln = mid; lo = mid + 1; }
-        else                    hi = mid - 1;
+        if (LI(b)[mid] <= pos) {
+            ln = mid;
+            lo = mid + 1;
+        } else
+            hi = mid - 1;
     }
     *line = ln;
-    *col  = (int)(pos - LI(b)[ln]);
+    *col = (int)(pos - LI(b)[ln]);
     return 1;
 }
 
@@ -306,7 +309,8 @@ int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
  */
 size_t buf_line_end(const Buffer *b, size_t pos) {
     size_t len = buf_length(b);
-    while (pos < len && buf_char_at(b, pos) != '\n') pos++;
+    while (pos < len && buf_char_at(b, pos) != '\n')
+        pos++;
     return pos;
 }
 
@@ -323,7 +327,7 @@ int buf_load_file(Buffer *b, const char *path) {
     /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza */
     free(b->data);
     b->data = NULL;
-    if (b->lines.elem == 0)          /* defensivo: por si nunca se inicializó */
+    if (b->lines.elem == 0) /* defensivo: por si nunca se inicializó */
         vec_init(&b->lines, sizeof(size_t));
 
     if (fsize <= 0) {
@@ -331,44 +335,47 @@ int buf_load_file(Buffer *b, const char *path) {
         /* Buffer vacío */
         b->data = malloc(BUFFER_INIT_SIZE);
         if (!b->data) return 0;
-        b->size      = BUFFER_INIT_SIZE;
+        b->size = BUFFER_INIT_SIZE;
         b->gap_start = 0;
-        b->gap_end   = BUFFER_INIT_SIZE;
+        b->gap_end = BUFFER_INIT_SIZE;
         if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
-            free(b->data); b->data = NULL; return 0;
+            free(b->data);
+            b->data = NULL;
+            return 0;
         }
-        LI(b)[0]     = 0;
+        LI(b)[0] = 0;
         b->lines.len = 1;
         return 1;
     }
 
     /* Alojar exactamente lo necesario + hueco mínimo */
     b->data = malloc((size_t)fsize + BUFFER_GAP_MIN);
-    if (!b->data) { fclose(f); return 0; }
+    if (!b->data) {
+        fclose(f);
+        return 0;
+    }
 
     size_t nread = fread(b->data, 1, (size_t)fsize, f);
     fclose(f);
 
     b->gap_start = nread;
-    b->gap_end   = nread + BUFFER_GAP_MIN;
-    b->size      = nread + BUFFER_GAP_MIN;
+    b->gap_end = nread + BUFFER_GAP_MIN;
+    b->size = nread + BUFFER_GAP_MIN;
     memset(b->data + nread, 0, BUFFER_GAP_MIN);
 
-    b->lines.len = 0;                 /* li_rebuild lo rellena */
-    return li_rebuild(b);             /* construir índice en una pasada O(n) */
+    b->lines.len = 0;     /* li_rebuild lo rellena */
+    return li_rebuild(b); /* construir índice en una pasada O(n) */
 }
 
 int buf_save_file(const Buffer *b, const char *path) {
     FILE *f = fopen(path, "wb");
     if (!f) return 0;
 
-    if (b->gap_start > 0)
-        fwrite(b->data, 1, b->gap_start, f);
+    if (b->gap_start > 0) fwrite(b->data, 1, b->gap_start, f);
 
     size_t right_start = b->gap_end;
-    size_t right_len   = b->size - b->gap_end;
-    if (right_len > 0)
-        fwrite(b->data + right_start, 1, right_len, f);
+    size_t right_len = b->size - b->gap_end;
+    if (right_len > 0) fwrite(b->data + right_start, 1, right_len, f);
 
     fclose(f);
     return 1;

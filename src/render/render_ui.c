@@ -3,21 +3,13 @@
 #include <string.h>
 
 /* Menú "Archivo" */
-#define MENU_ITEM_H     26
-#define MENU_WIDTH     210
-#define MENU_ITEMS      6
+#define MENU_ITEM_H 26
+#define MENU_WIDTH 210
+#define MENU_ITEMS 6
 
-static const char *MENU_LABELS[MENU_ITEMS] = {
-    "Nuevo",
-    "Abrir archivo...",
-    "Abrir carpeta...",
-    NULL,
-    "Guardar",
-    "Autoguardado"
-};
-static const char *MENU_HINTS[MENU_ITEMS] = {
-    "Ctrl+N", "Ctrl+O", "Ctrl+K", NULL, "Ctrl+S", NULL
-};
+static const char *MENU_LABELS[MENU_ITEMS] = {"Nuevo", "Abrir archivo...", "Abrir carpeta...",
+                                              NULL,    "Guardar",          "Autoguardado"};
+static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL, "Ctrl+S", NULL};
 
 /* -- Navbar --------------------------------------------------------------- */
 void render_navbar(Editor *e) {
@@ -56,7 +48,8 @@ void render_navbar(Editor *e) {
     char nav_title[600];
     if (e->filepath[0]) {
         const char *fname = e->filepath + strlen(e->filepath);
-        while (fname > e->filepath && *(fname-1) != '/' && *(fname-1) != '\\') fname--;
+        while (fname > e->filepath && *(fname - 1) != '/' && *(fname - 1) != '\\')
+            fname--;
         snprintf(nav_title, sizeof(nav_title), "CoffeeCode \xe2\x80\x94 %s", fname);
     } else {
         snprintf(nav_title, sizeof(nav_title), "CoffeeCode");
@@ -70,7 +63,7 @@ void render_navbar(Editor *e) {
 
     if (e->modified) {
         set_color(r, 0xE0, 0x6C, 0x75, 0xFF);
-        SDL_FRect dot = {(float)(cx + tw + 6), (float)(ty + FONT_SIZE/2 - 3), 6, 6};
+        SDL_FRect dot = {(float)(cx + tw + 6), (float)(ty + FONT_SIZE / 2 - 3), 6, 6};
         SDL_RenderFillRect(r, &dot);
     }
 }
@@ -86,8 +79,7 @@ void render_menu(Editor *e) {
         total_h += MENU_LABELS[i] ? MENU_ITEM_H : 8;
 
     set_color(r, 0x00, 0x00, 0x00, 0x60);
-    SDL_FRect shadow = {(float)(mx+3), (float)(my+3),
-                        (float)MENU_WIDTH, (float)total_h};
+    SDL_FRect shadow = {(float)(mx + 3), (float)(my + 3), (float)MENU_WIDTH, (float)total_h};
     SDL_RenderFillRect(r, &shadow);
 
     set_color(r, COL_MENU_BG);
@@ -95,20 +87,18 @@ void render_menu(Editor *e) {
     SDL_RenderFillRect(r, &bg);
 
     set_color(r, COL_MENU_BORDER);
-    SDL_FRect borders[4] = {
-        {(float)mx, (float)my, (float)MENU_WIDTH, 1},
-        {(float)mx, (float)(my+total_h-1), (float)MENU_WIDTH, 1},
-        {(float)mx, (float)my, 1, (float)total_h},
-        {(float)(mx+MENU_WIDTH-1), (float)my, 1, (float)total_h}
-    };
-    for (int i = 0; i < 4; i++) SDL_RenderFillRect(r, &borders[i]);
+    SDL_FRect borders[4] = {{(float)mx, (float)my, (float)MENU_WIDTH, 1},
+                            {(float)mx, (float)(my + total_h - 1), (float)MENU_WIDTH, 1},
+                            {(float)mx, (float)my, 1, (float)total_h},
+                            {(float)(mx + MENU_WIDTH - 1), (float)my, 1, (float)total_h}};
+    for (int i = 0; i < 4; i++)
+        SDL_RenderFillRect(r, &borders[i]);
 
     int iy = my;
     for (int i = 0; i < MENU_ITEMS; i++) {
         if (!MENU_LABELS[i]) {
             set_color(r, COL_MENU_SEP);
-            SDL_FRect s = {(float)(mx+8), (float)(iy+4),
-                           (float)(MENU_WIDTH-16), 1};
+            SDL_FRect s = {(float)(mx + 8), (float)(iy + 4), (float)(MENU_WIDTH - 16), 1};
             SDL_RenderFillRect(r, &s);
             iy += 8;
             continue;
@@ -116,8 +106,8 @@ void render_menu(Editor *e) {
 
         if (e->menu_hovered == i) {
             set_color(r, COL_MENU_HOVER);
-            SDL_FRect hi = {(float)(mx+1), (float)iy,
-                            (float)(MENU_WIDTH-2), (float)MENU_ITEM_H};
+            SDL_FRect hi = {(float)(mx + 1), (float)iy, (float)(MENU_WIDTH - 2),
+                            (float)MENU_ITEM_H};
             SDL_RenderFillRect(r, &hi);
         }
 
@@ -150,8 +140,7 @@ void render_menu(Editor *e) {
 
 /* -- Barra de búsqueda ----------------------------------------------------- */
 /* -- Tab bar --------------------------------------------------------------- */
-void render_tabbar(Editor *e)
-{
+void render_tabbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
     int bar_y = NAVBAR_HEIGHT;
     int bar_h = TAB_BAR_HEIGHT;
@@ -187,7 +176,7 @@ void render_tabbar(Editor *e)
         int close_w = 16;
         int pad = 10;
         int tab_w = tw + close_w + pad * 2 + 4;
-        if (tab_w < 80)  tab_w = 80;
+        if (tab_w < 80) tab_w = 80;
         if (tab_w > 200) tab_w = 200;
 
         /* guardar posición para click detection */
@@ -228,7 +217,8 @@ void render_tabbar(Editor *e)
         /* punto de modificado */
         if (t->modified) {
             set_color(r, 0xE0, 0x90, 0x40, 255);
-            SDL_FRect dot = {(float)(tx + pad + text_max_w + 2), (float)(ty2 + FONT_SIZE/2 - 3), 5, 5};
+            SDL_FRect dot = {(float)(tx + pad + text_max_w + 2), (float)(ty2 + FONT_SIZE / 2 - 3),
+                             5, 5};
             SDL_RenderFillRect(r, &dot);
         }
 
@@ -254,9 +244,7 @@ void render_tabbar(Editor *e)
 }
 
 /* -- Atajos visuales como badges de teclado ------------------------ */
-static void render_shortcut_badge(Editor *e, const char *key, const char *label,
-                                  int *x, int y)
-{
+static void render_shortcut_badge(Editor *e, const char *key, const char *label, int *x, int y) {
     SDL_Renderer *r = e->renderer;
 
     /* medir texto de la tecla */
@@ -274,13 +262,12 @@ static void render_shortcut_badge(Editor *e, const char *key, const char *label,
 
     /* borde del badge */
     set_color(r, 0x52, 0x5A, 0x6E, 0xFF);
-    SDL_FRect borders[4] = {
-        {(float)*x, (float)y, (float)badge_w, 1},
-        {(float)*x, (float)(y + badge_h - 1), (float)badge_w, 1},
-        {(float)*x, (float)y, 1, (float)badge_h},
-        {(float)(*x + badge_w - 1), (float)y, 1, (float)badge_h}
-    };
-    for (int i = 0; i < 4; i++) SDL_RenderFillRect(r, &borders[i]);
+    SDL_FRect borders[4] = {{(float)*x, (float)y, (float)badge_w, 1},
+                            {(float)*x, (float)(y + badge_h - 1), (float)badge_w, 1},
+                            {(float)*x, (float)y, 1, (float)badge_h},
+                            {(float)(*x + badge_w - 1), (float)y, 1, (float)badge_h}};
+    for (int i = 0; i < 4; i++)
+        SDL_RenderFillRect(r, &borders[i]);
 
     /* sombra inferior del badge (efecto 3D) */
     set_color(r, 0x1A, 0x1D, 0x23, 0xFF);
@@ -299,8 +286,7 @@ static void render_shortcut_badge(Editor *e, const char *key, const char *label,
     }
 }
 
-void render_shortcuts(Editor *e)
-{
+void render_shortcuts(Editor *e) {
     /* offset dinámico según panel lateral */
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
 
@@ -312,24 +298,21 @@ void render_shortcuts(Editor *e)
 
     /* Fondo de la banda de atajos — solo en el área del editor (no sobre el panel) */
     set_color(e->renderer, 0x1E, 0x21, 0x28, 0xFF);
-    SDL_FRect band = {(float)left_offset, (float)(sep_y + 1),
-                      (float)(e->win_w - left_offset), (float)(SHORTCUT_HEIGHT - 1)};
+    SDL_FRect band = {(float)left_offset, (float)(sep_y + 1), (float)(e->win_w - left_offset),
+                      (float)(SHORTCUT_HEIGHT - 1)};
     SDL_RenderFillRect(e->renderer, &band);
 
     /* Renderizar cada atajo como badge + etiqueta, partiendo desde left_offset */
     int badge_y = sep_y + (SHORTCUT_HEIGHT - FONT_SIZE) / 2 - 2;
     int x = left_offset + 10;
 
-    struct { const char *key; const char *label; } shortcuts[] = {
-        {"Ctrl+F",  "Buscar"},
-        {"Ctrl+B",  "Panel"},
-        {"Ctrl+D",  "Duplicar"},
-        {"Ctrl+L",  "Sel. línea"},
-        {"Ctrl+/",  "Comentar"},
-        {"Ctrl+Z",  "Undo"},
-        {"Ctrl+Y",  "Redo"},
-        {"Ctrl+S",  "Guardar"},
-        {"Ctrl+N",  "Nuevo"},
+    struct {
+        const char *key;
+        const char *label;
+    } shortcuts[] = {
+        {"Ctrl+F", "Buscar"},     {"Ctrl+B", "Panel"},    {"Ctrl+D", "Duplicar"},
+        {"Ctrl+L", "Sel. línea"}, {"Ctrl+/", "Comentar"}, {"Ctrl+Z", "Undo"},
+        {"Ctrl+Y", "Redo"},       {"Ctrl+S", "Guardar"},  {"Ctrl+N", "Nuevo"},
     };
     int n = (int)(sizeof(shortcuts) / sizeof(shortcuts[0]));
 
@@ -340,11 +323,10 @@ void render_shortcuts(Editor *e)
 }
 
 /* -- Scrollbar vertical --------------------------------------------- */
-void render_scrollbar(Editor *e, int left_offset)
-{
+void render_scrollbar(Editor *e, int left_offset) {
     SDL_Renderer *r = e->renderer;
-    int total_lines   = buf_line_count(e->buf);
-    int text_height   = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
+    int total_lines = buf_line_count(e->buf);
+    int text_height = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
     int visible_lines = text_height / LINE_HEIGHT;
 
     /* solo mostrar si hay contenido que se sale */
@@ -360,18 +342,17 @@ void render_scrollbar(Editor *e, int left_offset)
     SDL_RenderFillRect(r, &track);
 
     /* tamaño y posición del thumb */
-    float ratio       = (float)visible_lines / (float)total_lines;
-    int thumb_h       = (int)(sb_h * ratio);
+    float ratio = (float)visible_lines / (float)total_lines;
+    int thumb_h = (int)(sb_h * ratio);
     if (thumb_h < 20) thumb_h = 20;
 
-    int max_scroll    = total_lines - visible_lines;
+    int max_scroll = total_lines - visible_lines;
     float scroll_frac = (max_scroll > 0) ? (float)e->scroll_line / (float)max_scroll : 0.0f;
-    int thumb_y       = sb_y + (int)(scroll_frac * (sb_h - thumb_h));
+    int thumb_y = sb_y + (int)(scroll_frac * (sb_h - thumb_h));
 
     /* thumb */
     set_color(r, 0x42, 0x48, 0x5A, 0xFF);
-    SDL_FRect thumb = {(float)(sb_x + 1), (float)thumb_y,
-                       (float)(SCROLLBAR_W - 2), (float)thumb_h};
+    SDL_FRect thumb = {(float)(sb_x + 1), (float)thumb_y, (float)(SCROLLBAR_W - 2), (float)thumb_h};
     SDL_RenderFillRect(r, &thumb);
 
     /* borde izquierdo de la pista */
