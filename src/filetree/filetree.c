@@ -10,20 +10,24 @@
   #include <sys/stat.h>
 #endif
 
+/* Acceso al array de entradas (Vec<FEntry>) y su tamaño como int.
+   FT(ft) se re-deriva tras cada vec_reserve por si hubo realloc. */
+#define FT(ft)  ((FEntry *)(ft)->entries.data)
+#define FTN(ft) ((int)(ft)->entries.len)
+
 /* -- ftree_init ----------------------------------------------------------- */
 void ftree_init(FileTree *ft) {
     memset(ft, 0, sizeof(*ft));
     ft->open    = 0;
     ft->width   = FTREE_WIDTH_DEFAULT;
     ft->hovered = -1;
-    ft->entries = (FEntry *)calloc(FTREE_MAX_ENTRIES, sizeof(FEntry));
+    vec_init(&ft->entries, sizeof(FEntry));
+    vec_reserve(&ft->entries, FTREE_MAX_ENTRIES);  /* reserva inicial (ya no es límite) */
 }
 
 /* -- ftree_free ----------------------------------------------------------- */
 void ftree_free(FileTree *ft) {
-    free(ft->entries);
-    ft->entries = NULL;
-    ft->count   = 0;
+    vec_free(&ft->entries);
 }
 
 /* -- Comparador para ordenar: carpetas primero, luego alfabético ----------- */
@@ -40,8 +44,6 @@ static int entry_cmp(const void *a, const void *b) {
 static int scan_dir(FileTree *ft, const char *dirpath,
                     int depth, int insert_at)
 {
-    if (ft->count >= FTREE_MAX_ENTRIES) return 0;
-
     /* Recogemos las entradas primero en un buffer temporal */
     FEntry tmp[1024];
     int    tmp_count = 0;
@@ -100,36 +102,37 @@ static int scan_dir(FileTree *ft, const char *dirpath,
     /* Ordenar: carpetas primero, luego alfabético */
     qsort(tmp, (size_t)tmp_count, sizeof(FEntry), entry_cmp);
 
-    /* Insertar en ft->entries en la posición insert_at */
     int to_insert = tmp_count;
-    /* Asegurar que insert_at + to_insert + existing_after <= FTREE_MAX_ENTRIES */
-    int existing_after = ft->count - insert_at;
-    if (existing_after < 0) existing_after = 0;
-    int available = FTREE_MAX_ENTRIES - ft->count;
-    if (to_insert > available) to_insert = available;
     if (to_insert <= 0) return 0;
 
-    /* Desplazar entradas existentes hacia adelante */
+    int count = FTN(ft);
+    int existing_after = count - insert_at;
+    if (existing_after < 0) existing_after = 0;
+
+    /* Crecer (sin límite fijo) y abrir hueco en insert_at */
+    if (!vec_reserve(&ft->entries, (size_t)(count + to_insert))) return 0;
     if (existing_after > 0) {
-        memmove(&ft->entries[insert_at + to_insert],
-                &ft->entries[insert_at],
+        memmove(&FT(ft)[insert_at + to_insert],
+                &FT(ft)[insert_at],
                 (size_t)existing_after * sizeof(FEntry));
     }
-    memcpy(&ft->entries[insert_at], tmp, (size_t)to_insert * sizeof(FEntry));
-    ft->count += to_insert;
+    memcpy(&FT(ft)[insert_at], tmp, (size_t)to_insert * sizeof(FEntry));
+    ft->entries.len = (size_t)(count + to_insert);
 
     return to_insert;
 }
 
 /* -- ftree_load ----------------------------------------------------------- */
 void ftree_load(FileTree *ft, const char *dirpath) {
-    ft->count  = 0;
     ft->scroll = 0;
     ft->hovered = -1;
     strncpy(ft->root_path, dirpath, sizeof(ft->root_path) - 1);
 
+    if (!vec_reserve(&ft->entries, 1)) return;
+    ft->entries.len = 0;
+
     /* Entrada raíz */
-    FEntry *root = &ft->entries[0];
+    FEntry *root = FT(ft);
     memset(root, 0, sizeof(*root));
     strncpy(root->path, dirpath, sizeof(root->path) - 1);
 
@@ -142,7 +145,7 @@ void ftree_load(FileTree *ft, const char *dirpath) {
     root->type     = FTYPE_DIR;
     root->expanded = 1;
     root->visible  = 1;
-    ft->count = 1;
+    ft->entries.len = 1;
 
     /* Escanear nivel 1 */
     scan_dir(ft, dirpath, 1, 1);
@@ -151,8 +154,8 @@ void ftree_load(FileTree *ft, const char *dirpath) {
 
 /* -- ftree_toggle --------------------------------------------------------- */
 void ftree_toggle(FileTree *ft, int index) {
-    if (index < 0 || index >= ft->count) return;
-    FEntry *en = &ft->entries[index];
+    if (index < 0 || index >= FTN(ft)) return;
+    FEntry *en = &FT(ft)[index];
     if (en->type != FTYPE_DIR) return;
 
     if (en->expanded) {
@@ -160,23 +163,23 @@ void ftree_toggle(FileTree *ft, int index) {
         en->expanded = 0;
         int depth = en->depth;
         int j = index + 1;
-        while (j < ft->count && ft->entries[j].depth > depth) j++;
+        while (j < FTN(ft) && FT(ft)[j].depth > depth) j++;
         int remove = j - index - 1;
         if (remove > 0) {
-            memmove(&ft->entries[index + 1],
-                    &ft->entries[j],
-                    (size_t)(ft->count - j) * sizeof(FEntry));
-            ft->count -= remove;
+            memmove(&FT(ft)[index + 1],
+                    &FT(ft)[j],
+                    (size_t)(FTN(ft) - j) * sizeof(FEntry));
+            ft->entries.len -= (size_t)remove;
         }
     } else {
         /* Expandir: escanear y añadir hijos justo después.
          * IMPORTANTE: copiar path y depth antes de llamar a scan_dir porque
-         * el memmove interno puede desplazar la entrada y dejar 'en' obsoleto. */
+         * el memmove/realloc interno puede desplazar la entrada y dejar 'en' obsoleto. */
         char expand_path[512];
         int  expand_depth = en->depth;
         strncpy(expand_path, en->path, sizeof(expand_path) - 1);
         expand_path[sizeof(expand_path) - 1] = '\0';
-        ft->entries[index].expanded = 1;
+        FT(ft)[index].expanded = 1;
         scan_dir(ft, expand_path, expand_depth + 1, index + 1);
     }
 
@@ -185,26 +188,28 @@ void ftree_toggle(FileTree *ft, int index) {
 
 /* -- ftree_refresh_visibility --------------------------------------------- */
 void ftree_refresh_visibility(FileTree *ft) {
-    /* Recalcula visible[] usando el estado expanded[] de los padres.
-       Como ya eliminamos físicamente los hijos al colapsar, todos los
+    /* Como ya eliminamos físicamente los hijos al colapsar, todos los
        que quedan en el array son visibles. */
-    for (int i = 0; i < ft->count; i++)
-        ft->entries[i].visible = 1;
+    int n = FTN(ft);
+    for (int i = 0; i < n; i++)
+        FT(ft)[i].visible = 1;
 }
 
 /* -- ftree_visible_count -------------------------------------------------- */
 int ftree_visible_count(const FileTree *ft) {
     int n = 0;
-    for (int i = 0; i < ft->count; i++)
-        if (ft->entries[i].visible) n++;
+    int total = FTN(ft);
+    for (int i = 0; i < total; i++)
+        if (FT(ft)[i].visible) n++;
     return n;
 }
 
 /* -- ftree_nth_visible ---------------------------------------------------- */
 int ftree_nth_visible(const FileTree *ft, int n) {
     int cur = 0;
-    for (int i = 0; i < ft->count; i++) {
-        if (ft->entries[i].visible) {
+    int total = FTN(ft);
+    for (int i = 0; i < total; i++) {
+        if (FT(ft)[i].visible) {
             if (cur == n) return i;
             cur++;
         }

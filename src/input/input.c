@@ -83,10 +83,10 @@ static void handle_ftree_click(Editor *e, int mx, int my) {
 
     /* Encontrar la entrada visible número actual_row */
     int vis = 0;
-    for (int i = 0; i < ft->count; i++) {
-        if (!ft->entries[i].visible) continue;
+    for (int i = 0; i < ftree_count(ft); i++) {
+        if (!ftree_entry(ft, i)->visible) continue;
         if (vis == actual_row) {
-            FEntry *en = &ft->entries[i];
+            FEntry *en = ftree_entry(ft, i);
             if (en->type == FTYPE_DIR) {
                 ftree_toggle(ft, i);
             } else {
@@ -117,8 +117,8 @@ static void handle_ftree_hover(Editor *e, int mx, int my) {
     int actual_row = row + ft->scroll;
 
     int vis = 0, found = -1;
-    for (int i = 0; i < ft->count; i++) {
-        if (!ft->entries[i].visible) continue;
+    for (int i = 0; i < ftree_count(ft); i++) {
+        if (!ftree_entry(ft, i)->visible) continue;
         if (vis == actual_row) { found = i; break; }
         vis++;
     }

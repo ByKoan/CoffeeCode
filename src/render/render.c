@@ -287,8 +287,8 @@ static void render_filetree(Editor *e) {
     if (ft->scroll < 0)         ft->scroll = 0;
 
     int drawn = 0;
-    for (int i = 0; i < ft->count && drawn < visible_rows + ft->scroll; i++) {
-        FEntry *en = &ft->entries[i];
+    for (int i = 0; i < ftree_count(ft) && drawn < visible_rows + ft->scroll; i++) {
+        FEntry *en = ftree_entry(ft, i);
         if (!en->visible) continue;
         int vis_idx = drawn++;
         if (vis_idx < ft->scroll) continue;

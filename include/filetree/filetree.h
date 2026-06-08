@@ -1,6 +1,7 @@
 #pragma once
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
+#include "structs/vec.h"
 
 /* -- Dimensiones del panel ------------------------------------------------- */
 #define FTREE_WIDTH_DEFAULT  220   /* ancho cuando está visible               */
@@ -35,8 +36,7 @@ typedef struct {
     int      width;                       /* ancho actual en px               */
     int      scroll;                      /* líneas desplazadas               */
     int      hovered;                     /* índice bajo el cursor, -1=ninguno*/
-    int      count;                       /* número de entradas totales       */
-    FEntry  *entries;                     /* array en heap (FTREE_MAX_ENTRIES)*/
+    Vec      entries;                     /* Vec<FEntry>: entradas del árbol  */
     char     root_path[512];             /* carpeta raíz cargada             */
 
     /* arrastrar el borde para redimensionar */
@@ -67,3 +67,11 @@ int ftree_nth_visible(const FileTree *ft, int n);
 
 /* Cuenta cuántas entradas son visibles */
 int ftree_visible_count(const FileTree *ft);
+
+/* Accesores: `entries` es ahora un Vec<FEntry> (sin límite fijo) */
+static inline int ftree_count(const FileTree *ft) {
+    return (int)ft->entries.len;
+}
+static inline FEntry *ftree_entry(const FileTree *ft, int i) {
+    return (FEntry *)vec_at(&ft->entries, (size_t)i);
+}
