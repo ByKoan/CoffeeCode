@@ -76,7 +76,7 @@ static int get_line_text(Editor *e, int line, char *out, int max) {
     const Buffer *b = e->buf;
     if (line < 0 || line >= buf_line_count(b)) { out[0] = '\0'; return 0; }
 
-    size_t start = buf_line_start(b, b->line_index[line]);
+    size_t start = buf_line_offset(b, line);
     size_t total = buf_length(b);
     int col = 0;
 
@@ -829,7 +829,7 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
     if (to_col == 0 && to_line > from_line) {
         paint_to_line = to_line - 1;
         /* col_end para esa línea = longitud + 1 (incluye \n visual) */
-        size_t ls = e->buf->line_index[paint_to_line];
+        size_t ls = buf_line_offset(e->buf, paint_to_line);
         size_t le = buf_line_end(e->buf, ls);
         paint_to_col = (int)(le - ls) + 1;
     }
@@ -846,7 +846,7 @@ static void render_selection(Editor *e, int left_offset, int text_top, int visib
             col_end = paint_to_col;
         } else {
             /* toda la línea hasta el final + 1 para incluir el \n visualmente */
-            size_t ls = e->buf->line_index[li];
+            size_t ls = buf_line_offset(e->buf, li);
             size_t le = buf_line_end(e->buf, ls);
             col_end = (int)(le - ls) + 1;
         }

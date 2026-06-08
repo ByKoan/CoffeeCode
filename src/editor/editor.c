@@ -36,8 +36,8 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     if (line < 0)      line = 0;
     if (line >= total) line = total - 1;
 
-    /* O(1): inicio de línea directo desde line_index */
-    size_t line_start = b->line_index[line];
+    /* O(1): inicio de línea directo desde el índice de líneas */
+    size_t line_start = buf_line_offset(b, line);
 
     /* fin de línea sin incluir \n: O(longitud de línea) */
     size_t line_end = buf_line_end(b, line_start);

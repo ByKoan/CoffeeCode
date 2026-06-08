@@ -1,5 +1,6 @@
 #pragma once
 #include <stddef.h>
+#include "structs/vec.h"
 
 /*
  * Gap Buffer con índice de líneas
@@ -30,9 +31,8 @@ typedef struct {
     size_t gap_end;     /* primer byte TRAS el hueco       */
 
     /* -- índice de líneas ------------------------------------------------ */
-    size_t *line_index; /* line_index[i] = offset lógico del inicio de línea i */
-    int     line_count; /* número de líneas (>= 1)                             */
-    int     line_cap;   /* capacidad del array line_index                      */
+    Vec    lines;       /* Vec<size_t>: lines[i] = offset lógico del inicio
+                           de la línea i (>= 1 entrada; lines[0] == 0).        */
 } Buffer;
 
 /* ciclo de vida */
@@ -64,6 +64,7 @@ int    buf_line_col  (const Buffer *b, size_t pos, int *line, int *col);
 size_t buf_line_start(const Buffer *b, size_t pos);  /* inicio de la línea   */
 size_t buf_line_end  (const Buffer *b, size_t pos);  /* fin de la línea      */
 int    buf_line_count(const Buffer *b);
+size_t buf_line_offset(const Buffer *b, int line);   /* offset de inicio de la línea `line` (O(1)) */
 
 /* carga / guarda */
 int    buf_load_file (Buffer *b, const char *path);

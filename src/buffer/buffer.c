@@ -4,29 +4,20 @@
 #include <stdio.h>
 
 /* ══════════════════════════════════════════════════════════════════════════
- * ÍNDICE DE LÍNEAS
+ * ÍNDICE DE LÍNEAS  (Vec<size_t>)
  * --------------------------------------------------------------------------
- * line_index[i] = posición lógica del primer byte de la línea i.
- * Invariante: line_index[0] == 0 siempre.
+ * b->lines es un vector dinámico de offsets: lines[i] = posición lógica del
+ * primer byte de la línea i. Invariante: lines[0] == 0 y siempre hay >= 1.
  *
- * Ventaja clave: buf_line_count, buf_line_start y buf_line_col pasan de
- * O(n) a O(1), eliminando el cuello de botella al abrir/editar archivos
- * grandes.  El índice se reconstruye en O(n) solo al cargar el archivo;
- * en cada insert/delete se actualiza de forma incremental en O(líneas
- * afectadas), que es O(1) para cambios en una sola posición.
+ * Antes era un array crecido a mano (line_index/line_count/line_cap); ahora
+ * reutiliza el vector genérico (structs/vec). El acceso en caliente usa la
+ * macro LI(b) (puntero al array) re-leído tras cada realloc, sin coste extra.
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/* Asegura capacidad para `need` entradas en el índice */
-static int li_reserve(Buffer *b, int need) {
-    if (need <= b->line_cap) return 1;
-    int new_cap = b->line_cap * 2;
-    if (new_cap < need) new_cap = need + 64;
-    size_t *nd = realloc(b->line_index, (size_t)new_cap * sizeof(size_t));
-    if (!nd) return 0;
-    b->line_index = nd;
-    b->line_cap   = new_cap;
-    return 1;
-}
+/** Puntero al array de offsets (se re-deriva tras cada posible realloc). */
+#define LI(b)      ((size_t *)(b)->lines.data)
+/** Número de líneas como int (la API pública usa int). */
+#define LICOUNT(b) ((int)(b)->lines.len)
 
 /*
  * Reconstruye el índice completo en una sola pasada O(n).
@@ -35,16 +26,15 @@ static int li_reserve(Buffer *b, int need) {
 static int li_rebuild(Buffer *b) {
     size_t len = buf_length(b);
 
-    /* Primera línea siempre en offset 0 */
-    if (!li_reserve(b, 1)) return 0;
-    b->line_index[0] = 0;
-    b->line_count    = 1;
+    if (!vec_reserve(&b->lines, 1)) return 0;
+    LI(b)[0] = 0;
+    b->lines.len = 1;
 
     for (size_t i = 0; i < len; i++) {
         if (buf_char_at(b, i) == '\n') {
-            if (!li_reserve(b, b->line_count + 1)) return 0;
-            b->line_index[b->line_count] = i + 1;
-            b->line_count++;
+            if (!vec_reserve(&b->lines, b->lines.len + 1)) return 0;
+            LI(b)[b->lines.len] = i + 1;
+            b->lines.len++;
         }
     }
     return 1;
@@ -52,51 +42,49 @@ static int li_rebuild(Buffer *b) {
 
 /*
  * Actualiza el índice tras insertar `len` bytes en la posición lógica `pos`.
- * Si alguno de los bytes es '\n', se añade la entrada correspondiente.
- * Las entradas posteriores al punto de inserción se desplazan +len.
+ * Desplaza +len las entradas posteriores y añade una por cada '\n' insertado.
  */
 static void li_after_insert(Buffer *b, size_t pos, const char *text, size_t len) {
-    /* 1. Desplazar todas las entradas > pos */
-    for (int i = 0; i < b->line_count; i++)
-        if (b->line_index[i] > pos)
-            b->line_index[i] += len;
+    int count = LICOUNT(b);
+    for (int i = 0; i < count; i++)
+        if (LI(b)[i] > pos)
+            LI(b)[i] += len;
 
-    /* 2. Insertar nuevas entradas para cada '\n' en el texto insertado */
     for (size_t k = 0; k < len; k++) {
         if (text[k] == '\n') {
             size_t new_start = pos + k + 1;
-            /* Encontrar posición de inserción (mantener orden) */
-            int ins = b->line_count;
-            for (int i = 1; i < b->line_count; i++) {
-                if (b->line_index[i] > new_start) { ins = i; break; }
+            count = LICOUNT(b);
+            int ins = count;
+            for (int i = 1; i < count; i++) {
+                if (LI(b)[i] > new_start) { ins = i; break; }
             }
-            if (!li_reserve(b, b->line_count + 1)) return;
-            memmove(&b->line_index[ins + 1], &b->line_index[ins],
-                    (size_t)(b->line_count - ins) * sizeof(size_t));
-            b->line_index[ins] = new_start;
-            b->line_count++;
+            if (!vec_reserve(&b->lines, (size_t)count + 1)) return;
+            memmove(&LI(b)[ins + 1], &LI(b)[ins],
+                    (size_t)(count - ins) * sizeof(size_t));
+            LI(b)[ins] = new_start;
+            b->lines.len = (size_t)(count + 1);
         }
     }
 }
 
 /*
  * Actualiza el índice tras borrar el rango lógico [from, to).
- * Elimina entradas de línea dentro del rango y ajusta las posteriores.
+ * Elimina las entradas que caen dentro y ajusta -del las posteriores.
  */
 static void li_after_delete(Buffer *b, size_t from, size_t to) {
     size_t del = to - from;
+    int count = LICOUNT(b);
 
-    /* Eliminar entradas cuyo inicio cae dentro de [from, to) */
     int wr = 0;
-    for (int i = 0; i < b->line_count; i++) {
-        size_t s = b->line_index[i];
+    for (int i = 0; i < count; i++) {
+        size_t s = LI(b)[i];
         if (s >= from && s < to) continue;          /* borrar */
-        b->line_index[wr++] = (s >= to) ? s - del : s;
+        LI(b)[wr++] = (s >= to) ? s - del : s;
     }
-    b->line_count = wr;
-    if (b->line_count == 0) {
-        b->line_index[0] = 0;
-        b->line_count    = 1;
+    b->lines.len = (size_t)wr;
+    if (b->lines.len == 0) {
+        LI(b)[0] = 0;
+        b->lines.len = 1;
     }
 }
 
@@ -161,22 +149,20 @@ int buf_init(Buffer *b) {
     b->gap_start = 0;
     b->gap_end   = BUFFER_INIT_SIZE;
 
-    b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
-    if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
-    b->line_cap      = LINE_INDEX_INIT;
-    b->line_index[0] = 0;
-    b->line_count    = 1;
+    vec_init(&b->lines, sizeof(size_t));
+    if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
+        free(b->data); b->data = NULL; return 0;
+    }
+    LI(b)[0]     = 0;
+    b->lines.len = 1;
     return 1;
 }
 
 void buf_free(Buffer *b) {
     free(b->data);
-    free(b->line_index);
+    vec_free(&b->lines);
     b->data = NULL;
-    b->line_index = NULL;
     b->size = b->gap_start = b->gap_end = 0;
-    b->line_count = 0;
-    b->line_cap   = 0;
 }
 
 /* -- edición -------------------------------------------------------------- */
@@ -273,38 +259,43 @@ size_t buf_cursor_pos(const Buffer *b) {
 
 /* O(1) — sólo consulta el índice */
 int buf_line_count(const Buffer *b) {
-    return b->line_count;
+    return LICOUNT(b);
+}
+
+/* O(1) — offset de inicio de la línea `line` (con clamp a rango válido) */
+size_t buf_line_offset(const Buffer *b, int line) {
+    int n = LICOUNT(b);
+    if (line < 0)  line = 0;
+    if (line >= n) line = n - 1;
+    return LI(b)[line];
 }
 
 /*
- * buf_line_start: O(1)
- * Busca con búsqueda binaria en el índice qué línea contiene `pos`,
- * y devuelve el offset de inicio de esa línea.
+ * buf_line_start: O(log n)
+ * Búsqueda binaria del mayor índice de línea cuyo start <= pos.
  */
 size_t buf_line_start(const Buffer *b, size_t pos) {
-    /* Búsqueda binaria: mayor índice de línea cuyo start <= pos */
-    int lo = 0, hi = b->line_count - 1, best = 0;
+    int lo = 0, hi = LICOUNT(b) - 1, best = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        if (b->line_index[mid] <= pos) { best = mid; lo = mid + 1; }
-        else                            hi = mid - 1;
+        if (LI(b)[mid] <= pos) { best = mid; lo = mid + 1; }
+        else                    hi = mid - 1;
     }
-    return b->line_index[best];
+    return LI(b)[best];
 }
 
 /*
- * buf_line_col: O(col) — itera solo desde el inicio de la línea, no desde 0
+ * buf_line_col: O(log n) para la línea + O(1) para la columna
  */
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
-    /* Búsqueda binaria para encontrar la línea */
-    int lo = 0, hi = b->line_count - 1, ln = 0;
+    int lo = 0, hi = LICOUNT(b) - 1, ln = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        if (b->line_index[mid] <= pos) { ln = mid; lo = mid + 1; }
-        else                            hi = mid - 1;
+        if (LI(b)[mid] <= pos) { ln = mid; lo = mid + 1; }
+        else                    hi = mid - 1;
     }
     *line = ln;
-    *col  = (int)(pos - b->line_index[ln]);
+    *col  = (int)(pos - LI(b)[ln]);
     return 1;
 }
 
@@ -327,10 +318,11 @@ int buf_load_file(Buffer *b, const char *path) {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    /* Liberar estado anterior */
+    /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza */
     free(b->data);
     b->data = NULL;
-    /* Conservar line_index si ya existe; li_rebuild lo rellenará */
+    if (b->lines.elem == 0)          /* defensivo: por si nunca se inicializó */
+        vec_init(&b->lines, sizeof(size_t));
 
     if (fsize <= 0) {
         fclose(f);
@@ -340,13 +332,11 @@ int buf_load_file(Buffer *b, const char *path) {
         b->size      = BUFFER_INIT_SIZE;
         b->gap_start = 0;
         b->gap_end   = BUFFER_INIT_SIZE;
-        if (!b->line_index) {
-            b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
-            if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
-            b->line_cap = LINE_INDEX_INIT;
+        if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
+            free(b->data); b->data = NULL; return 0;
         }
-        b->line_index[0] = 0;
-        b->line_count    = 1;
+        LI(b)[0]     = 0;
+        b->lines.len = 1;
         return 1;
     }
 
@@ -362,16 +352,8 @@ int buf_load_file(Buffer *b, const char *path) {
     b->size      = nread + BUFFER_GAP_MIN;
     memset(b->data + nread, 0, BUFFER_GAP_MIN);
 
-    /* Inicializar line_index si no existe */
-    if (!b->line_index) {
-        b->line_index = malloc(LINE_INDEX_INIT * sizeof(size_t));
-        if (!b->line_index) { free(b->data); b->data = NULL; return 0; }
-        b->line_cap = LINE_INDEX_INIT;
-    }
-    b->line_count = 0;
-
-    /* Construir índice en una sola pasada — O(n) */
-    return li_rebuild(b);
+    b->lines.len = 0;                 /* li_rebuild lo rellena */
+    return li_rebuild(b);             /* construir índice en una pasada O(n) */
 }
 
 int buf_save_file(const Buffer *b, const char *path) {
