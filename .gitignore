@@ -1,2 +1,41 @@
-/build
+# archivos ocultos y de configuración
+.*
+
+# carpetas de configuración de IDEs y entornos virtuales
+.idea
+.xmake
+.vscode
+.venv
+
+# certificados y claves privadas
+*.pem
+
+# Carpeta de documentación generada por Doxygen
+./doc/doxygen_doc
+doxygen_doc
+
+
+# Archivos de bytecode compilados
+*.a
+*.exe
+*.o
+*.elf
+*.gch
+*.obj
+*.dll
+
+# Archivos temp de agentes de AI
+claude*
+chatgpt*
+copilot*
+deepseck*
+
+# Archivos de build
+build*
+cmake-*
+
+# Temporeales
 /test/programa_grande.py
+tem*
+temp*
+tmp*
