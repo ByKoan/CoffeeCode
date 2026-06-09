@@ -34,14 +34,14 @@ typedef enum {
     TOK_OPERATOR,     /* operador (+ - * / = < >...)                */
     TOK_PUNCTUATION,  /* puntuación (paréntesis, llaves, ; , ...)   */
     TOK_COUNT         /* nº de tipos (centinela para dimensionar)   */
-} TokenType;
+} LexTokenType;
 
 /** @brief Color RGBA de 8 bits por canal (ajusta el tema a tu gusto). */
 typedef struct {
     uint8_t r, g, b, a;
 } Color;
 
-/** @brief Tabla de colores indexada por ::TokenType (definida en lexer.c). */
+/** @brief Tabla de colores indexada por ::LexTokenType (definida en lexer.c). */
 extern const Color TOKEN_COLORS[TOK_COUNT];
 
 /* -- Resultado del lexer por línea ---------------------------------------- */
@@ -60,7 +60,7 @@ extern const Color TOKEN_COLORS[TOK_COUNT];
 typedef struct {
     int col; /* columna de inicio (0-based) */
     int len; /* longitud en caracteres      */
-    TokenType type;
+    LexTokenType type;
 } Token;
 
 /** @brief Conjunto de tokens resultante de tokenizar una línea. */

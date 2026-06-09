@@ -167,6 +167,30 @@ void editor_update_lexer(Editor *e, int from_line) {
     int total = buf_line_count(e->buf);
     lexer_cache_resize(e->lex, total);
     lexer_cache_dirty(e->lex, from_line);
+
+    /* Notificar al servidor LSP del cambio de contenido.
+     * Solo se notifica si hay un cliente LSP activo para la pestaña actual.
+     * La solicitud de tokens semánticos se hace de forma "perezosa": solo si
+     * from_line == 0 (recarga completa) para no saturar el servidor con cada
+     * pulsación de tecla. La actualización continua se delega al sistema de
+     * dirty lines; los tokens LSP se refresca en cada recarga o guardado. */
+    if (e->tab_count > 0) {
+        EditorTab *t = &e->tabs[e->active_tab];
+        if (t->lsp_active && t->lsp.initialized) {
+            size_t txt_len = buf_length(e->buf);
+            char *txt = (char *)malloc(txt_len + 1);
+            if (txt) {
+                buf_get_text(e->buf, 0, txt_len, txt);
+                txt[txt_len] = '\0';
+                lsp_change(&t->lsp, txt);
+                free(txt);
+                /* Solicitar tokens solo en recargas completas para no bloquear
+                 * el hilo principal en cada keystroke */
+                if (from_line == 0)
+                    lsp_tokens_full(&t->lsp);
+            }
+        }
+    }
 }
 
 /**
@@ -387,6 +411,63 @@ void editor_free(Editor *e) {
  */
 #define CURSOR_BLINK_MS 530  /* medio periodo del parpadeo del cursor (ms) */
 
+/**
+ * @brief Sondea las instalaciones LSP en curso y arranca el servidor cuando
+ *        el instalador termina con exito.
+ *
+ * Se llama una vez por frame desde editor_run(). Para cada pestana con una
+ * instalacion en curso (lsp_install.status == LSP_INSTALL_RUNNING) llama a
+ * lsp_install_poll(). Si la instalacion termino bien, reintenta lsp_start()
+ * y arranca el cliente LSP normalmente.
+ *
+ * @param e Editor.
+ */
+static void editor_poll_lsp_install(Editor *e) {
+    for (int i = 0; i < e->tab_count; i++) {
+        EditorTab *t = &e->tabs[i];
+        if (t->lsp_active) continue; /* ya tiene LSP activo */
+        if (t->lsp_install.status != LSP_INSTALL_RUNNING) continue;
+
+        LspInstallStatus st = lsp_install_poll(&t->lsp_install);
+
+        if (st == LSP_INSTALL_DONE) {
+            /* Instalacion completada: intentar arrancar el servidor LSP */
+            const char *lang = lsp_language_id_for_path(t->filepath);
+            const char *cmd  = lang ? lsp_server_cmd_for_language(lang) : NULL;
+            if (cmd && t->filepath[0]) {
+                char ws_uri[512], ws_path[512];
+                strncpy(ws_path, t->filepath, sizeof(ws_path) - 1);
+                char *sep = strrchr(ws_path, '/');
+#ifdef _WIN32
+                char *sep2 = strrchr(ws_path, '\\');
+                if (!sep || (sep2 && sep2 > sep)) sep = sep2;
+#endif
+                if (sep) *sep = '\0';
+                else strncpy(ws_path, ".", sizeof(ws_path) - 1);
+                path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
+
+                if (lsp_start(&t->lsp, cmd, ws_uri)) {
+                    size_t txt_len = buf_length(&t->buf);
+                    char *txt = (char *)malloc(txt_len + 1);
+                    if (txt) {
+                        buf_get_text(&t->buf, 0, txt_len, txt);
+                        txt[txt_len] = '\0';
+                        lsp_open(&t->lsp, t->filepath, lang, txt);
+                        free(txt);
+                        lsp_tokens_full(&t->lsp);
+                        t->lsp_active = 1;
+                        /* Forzar re-tokenizado de todas las lineas */
+                        lexer_cache_dirty(&t->lex, 0);
+                        e->needs_redraw = 1;
+                    }
+                }
+            }
+        }
+        /* Si fallo (LSP_INSTALL_FAILED) simplemente no se hace nada:
+         * el editor sigue funcionando con el resaltado estatico. */
+    }
+}
+
 void editor_run(Editor *e) {
     SDL_Event ev;
     while (e->running) {
@@ -426,6 +507,9 @@ void editor_run(Editor *e) {
                 e->autosave_last_ms = now;
             }
         }
+
+        /* Sondear instalaciones LSP en curso */
+        editor_poll_lsp_install(e);
 
         /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
          * Solo se marca needs_redraw cuando cambia el estado, evitando

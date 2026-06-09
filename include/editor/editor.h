@@ -9,6 +9,8 @@
 #include "buffer/buffer.h"
 #include "filetree/filetree.h"
 #include "lexer/lexer.h"
+#include "lsp/lsp.h"
+#include "lsp/lsp_install.h"
 #include "structs/ring.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -58,6 +60,9 @@ typedef struct {
     LexerCache lex;        /* cache de tokens por línea (resaltado)          */
     UndoStack undo;        /* pila de undo/redo de esta pestaña              */
     const Highlighter *hl; /* resaltador según el lenguaje del archivo */
+    LspClient lsp;         /* cliente LSP para este archivo (puede estar inactivo) */
+    int lsp_active;        /* 1 si el cliente LSP está iniciado y en uso */
+    LspInstallJob lsp_install; /* trabajo de instalación automática (si procede) */
     char filepath[512];    /* ruta del archivo, o "" si es nuevo sin guardar */
     int modified;          /* 1 si hay cambios sin guardar                   */
     long loaded_mtime; /* mtime del fichero en la última carga desde disco */

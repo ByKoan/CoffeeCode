@@ -359,6 +359,27 @@ static void render_empty_screen(Editor *e) {
  * @param e Editor (lexer, buffer y resaltador activos).
  */
 static void update_lexer_cache(Editor *e) {
+    /* Si la pestaña activa tiene un cliente LSP con tokens válidos, usarlos
+     * directamente en lugar del tokenizador estático. El LSP proporciona
+     * resaltado semántico preciso para cualquier lenguaje soportado. */
+    EditorTab *active_tab =
+        (e->tab_count > 0) ? &e->tabs[e->active_tab] : NULL;
+    int use_lsp = (active_tab && active_tab->lsp_active &&
+                   active_tab->lsp.cache.ready);
+
+    if (use_lsp) {
+        /* Rellenar la cache del lexer con los tokens semánticos LSP */
+        for (int li = 0; li < lexer_cache_count(e->lex); li++) {
+            if (*lexer_cache_dirty_at(e->lex, li)) {
+                lsp_fill_line_tokens(&active_tab->lsp, li,
+                                     lexer_cache_line(e->lex, li));
+                *lexer_cache_dirty_at(e->lex, li) = 0;
+            }
+        }
+        return;
+    }
+
+    /* Fallback: tokenizador estático propio (C/texto plano) */
     int in_block = 0; /* ¿venimos dentro de un comentario de bloque? */
     for (int li = 0; li < lexer_cache_count(e->lex); li++) {
         /* línea pendiente de re-resaltar */
