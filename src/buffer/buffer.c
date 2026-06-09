@@ -1,3 +1,11 @@
+/**
+ * @file buffer.c
+ * @brief Gap buffer de texto con índice de líneas (Vec<size_t>).
+ *
+ * El gap buffer da insert/delete O(1) amortizado en el cursor; el índice de
+ * líneas (offset del primer byte de cada línea) da conteo O(1) y posición
+ * O(log n) por línea, manteniéndose en sincronía tras cada edición.
+ */
 #include "buffer/buffer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,14 +147,15 @@ static size_t phys(const Buffer *b, size_t pos) {
 
 /* -- ciclo de vida -------------------------------------------------------- */
 
-int buf_init(Buffer *b) {
+/** Deja el buffer como uno vacío (texto vacío e índice con la línea 0).
+ *  Asume que b->lines ya está inicializado (vec_init). */
+static int buf_set_empty(Buffer *b) {
     b->data = malloc(BUFFER_INIT_SIZE);
     if (!b->data) return 0;
     b->size = BUFFER_INIT_SIZE;
     b->gap_start = 0;
     b->gap_end = BUFFER_INIT_SIZE;
 
-    vec_init(&b->lines, sizeof(size_t));
     if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
         free(b->data);
         b->data = NULL;
@@ -155,6 +164,11 @@ int buf_init(Buffer *b) {
     LI(b)[0] = 0;
     b->lines.len = 1;
     return 1;
+}
+
+int buf_init(Buffer *b) {
+    vec_init(&b->lines, sizeof(size_t));
+    return buf_set_empty(b);
 }
 
 void buf_free(Buffer *b) {
@@ -269,11 +283,8 @@ size_t buf_line_offset(const Buffer *b, int line) {
     return LI(b)[line];
 }
 
-/*
- * buf_line_start: O(log n)
- * Búsqueda binaria del mayor índice de línea cuyo start <= pos.
- */
-size_t buf_line_start(const Buffer *b, size_t pos) {
+/** Índice de la línea que contiene @p pos (mayor start <= pos). O(log n). */
+static int li_line_of(const Buffer *b, size_t pos) {
     int lo = 0, hi = LICOUNT(b) - 1, best = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
@@ -283,22 +294,17 @@ size_t buf_line_start(const Buffer *b, size_t pos) {
         } else
             hi = mid - 1;
     }
-    return LI(b)[best];
+    return best;
 }
 
-/*
- * buf_line_col: O(log n) para la línea + O(1) para la columna
- */
+/** Offset de inicio de la línea que contiene @p pos. O(log n). */
+size_t buf_line_start(const Buffer *b, size_t pos) {
+    return LI(b)[li_line_of(b, pos)];
+}
+
+/** Calcula (line, col) de la posición @p pos. O(log n). @return 1 siempre. */
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
-    int lo = 0, hi = LICOUNT(b) - 1, ln = 0;
-    while (lo <= hi) {
-        int mid = lo + (hi - lo) / 2;
-        if (LI(b)[mid] <= pos) {
-            ln = mid;
-            lo = mid + 1;
-        } else
-            hi = mid - 1;
-    }
+    int ln = li_line_of(b, pos);
     *line = ln;
     *col = (int)(pos - LI(b)[ln]);
     return 1;
@@ -332,20 +338,7 @@ int buf_load_file(Buffer *b, const char *path) {
 
     if (fsize <= 0) {
         fclose(f);
-        /* Buffer vacío */
-        b->data = malloc(BUFFER_INIT_SIZE);
-        if (!b->data) return 0;
-        b->size = BUFFER_INIT_SIZE;
-        b->gap_start = 0;
-        b->gap_end = BUFFER_INIT_SIZE;
-        if (!vec_reserve(&b->lines, LINE_INDEX_INIT)) {
-            free(b->data);
-            b->data = NULL;
-            return 0;
-        }
-        LI(b)[0] = 0;
-        b->lines.len = 1;
-        return 1;
+        return buf_set_empty(b); /* archivo vacío */
     }
 
     /* Alojar exactamente lo necesario + hueco mínimo */
