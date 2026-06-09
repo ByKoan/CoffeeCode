@@ -38,24 +38,16 @@ jobs:
         run: ctest --test-dir build-tests --output-on-failure
 
   # ---------------------------------------------------------------------------
-  # Compilación de la aplicación completa (con SDL3/SDL3_ttf vendorizados) en
-  # Linux y Windows, para detectar roturas de build. Los tests se desactivan
-  # aquí porque ya los cubre el job anterior.
+  # Build de la app en Linux (GCC). SDL3 se compila desde fuente, así que hacen
+  # falta las cabeceras de X11/Wayland y audio.
   # ---------------------------------------------------------------------------
-  build:
-    name: Build app (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+  build-linux:
+    name: Build app (Linux / GCC)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # SDL3 se compila desde fuente: en Linux necesita las cabeceras de
-      # X11/Wayland y audio. En Windows el SDK de MSVC ya las trae.
-      - name: Instalar dependencias de SDL (Linux)
-        if: runner.os == 'Linux'
+      - name: Instalar dependencias de SDL
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -68,4 +60,35 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOFFEE_BUILD_TESTS=OFF
 
       - name: Compilar
-        run: cmake --build build --config Release -j
+        run: cmake --build build -j
+
+  # ---------------------------------------------------------------------------
+  # Build de la app en Windows con MinGW-w64 (GCC), el mismo toolchain que se usa
+  # en local (TDM-GCC). Se instala vía MSYS2; usamos su shell para todos los
+  # pasos de build.
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build app (Windows / MinGW)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar MinGW-w64 (MSYS2)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Configurar
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCOFFEE_BUILD_TESTS=OFF
+
+      - name: Compilar
+        run: cmake --build build -j
