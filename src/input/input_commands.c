@@ -26,6 +26,18 @@
  * mismo callback (@c file_dialog_cb / @c folder_dialog_cb) que usa la ruta
  * Windows, manteniendo la lógica uniforme.
  */
+/* El diálogo moderno IFileOpenDialog requiere que las cabeceras de Windows
+ * expongan la API de Vista+: hay que fijar _WIN32_WINNT/NTDDI_VERSION ANTES de
+ * cualquier include (windows.h llega indirectamente vía SDL). */
+#if defined(_WIN32)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600 /* Windows Vista */
+#endif
+#ifndef NTDDI_VERSION
+#define NTDDI_VERSION 0x06000000 /* NTDDI_VISTA */
+#endif
+#endif
+
 #include "input_internal.h"
 
 #if !(defined(_WIN32))
@@ -476,10 +488,123 @@ static void linux_open_dialog(Editor *e, int is_folder) {
 
 #endif /* !_WIN32 */
 
+/* ── Implementación Windows: IFileOpenDialog moderno (Common Item Dialog) ──
+ * SDL 3.2.6 usa en Windows los diálogos LEGACY: GetOpenFileNameW para archivo y
+ * SHBrowseForFolderW para carpeta (la "pantalla de árbol" poco usable). Aquí se
+ * usa en su lugar el diálogo MODERNO estilo Explorador de Windows
+ * (@c IFileOpenDialog), lanzado en un hilo aparte para no bloquear el bucle
+ * principal — igual que la ruta de Linux. El resultado se entrega a los mismos
+ * callbacks ::file_dialog_cb / ::folder_dialog_cb. */
+#if defined(_WIN32)
+#define COBJMACROS
+#include <objbase.h>
+#include <shobjidl.h>
+#include <windows.h>
+
+typedef struct {
+    Editor *editor;
+    int is_folder; /* 0 = archivo, 1 = carpeta */
+} WinDialogData;
+
+/** HWND nativo de la ventana SDL (para que el diálogo sea modal a ella). */
+static HWND win_native_hwnd(Editor *e) {
+    return (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(e->window),
+                                        SDL_PROP_WINDOW_WIN32_HWND_POINTER,
+                                        NULL);
+}
+
+/** Hilo que abre el diálogo moderno y entrega la ruta elegida al callback. */
+static int win_dialog_thread(void *ud) {
+    WinDialogData *d = (WinDialogData *)ud;
+    Editor *e = d->editor;
+    int is_folder = d->is_folder;
+    SDL_free(d);
+
+    char utf8[4096] = {0};
+    int got = 0;
+
+    HRESULT hr =
+        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    int co_ok = SUCCEEDED(hr);
+
+    IFileOpenDialog *dlg = NULL;
+    if (SUCCEEDED(CoCreateInstance(&CLSID_FileOpenDialog, NULL,
+                                   CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog,
+                                   (void **)&dlg))) {
+        /* Opciones: solo elementos del sistema de archivos; FOS_PICKFOLDERS
+         * convierte el diálogo en selector de CARPETAS (estilo Explorador). */
+        DWORD opts = 0;
+        IFileOpenDialog_GetOptions(dlg, &opts);
+        opts |= FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
+        if (is_folder) opts |= FOS_PICKFOLDERS;
+        IFileOpenDialog_SetOptions(dlg, opts);
+
+        if (!is_folder) {
+            COMDLG_FILTERSPEC filt[] = {
+                {L"Archivos de código",
+                 L"*.c;*.h;*.cpp;*.hpp;*.py;*.js;*.ts;*.rs;*.go;*.java;*.txt;"
+                 L"*.md;*.json;*.toml;*.yaml;*.yml"},
+                {L"Todos los archivos", L"*.*"}};
+            IFileOpenDialog_SetFileTypes(dlg, 2, filt);
+        }
+
+        if (SUCCEEDED(IFileOpenDialog_Show(dlg, win_native_hwnd(e)))) {
+            IShellItem *item = NULL;
+            if (SUCCEEDED(IFileOpenDialog_GetResult(dlg, &item))) {
+                PWSTR wpath = NULL;
+                if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH,
+                                                        &wpath))) {
+                    /* ruta wchar -> UTF-8 (lo que usa el resto del editor) */
+                    if (WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8,
+                                            (int)sizeof utf8, NULL, NULL) > 0)
+                        got = 1;
+                    CoTaskMemFree(wpath);
+                }
+                IShellItem_Release(item);
+            }
+        }
+        IFileOpenDialog_Release(dlg);
+    }
+    if (co_ok) CoUninitialize();
+
+    const char *list[2] = {utf8, NULL};
+    const char *const *res = got ? list : NULL; /* NULL = cancelado */
+    if (is_folder)
+        folder_dialog_cb(e, res, 0);
+    else
+        file_dialog_cb(e, res, 0);
+    return 0;
+}
+
+/** Lanza el diálogo moderno en un hilo desvinculado (no bloquea el editor). */
+static void win_open_dialog(Editor *e, int is_folder) {
+    WinDialogData *d = (WinDialogData *)SDL_malloc(sizeof(*d));
+    if (!d) {
+        if (is_folder)
+            folder_dialog_cb(e, NULL, 0);
+        else
+            file_dialog_cb(e, NULL, 0);
+        return;
+    }
+    d->editor = e;
+    d->is_folder = is_folder;
+    SDL_Thread *t = SDL_CreateThread(win_dialog_thread, "cc_dialog", d);
+    if (!t) {
+        SDL_free(d);
+        if (is_folder)
+            folder_dialog_cb(e, NULL, 0);
+        else
+            file_dialog_cb(e, NULL, 0);
+        return;
+    }
+    SDL_DetachThread(t); /* se limpia solo al terminar */
+}
+#endif /* _WIN32 */
+
 /**
  * @brief Lanza (asíncronamente) el diálogo nativo para abrir un archivo.
  *
- * En Windows usa @c SDL_ShowOpenFileDialog (Win32 nativo, asíncrono).
+ * En Windows usa el diálogo moderno @c IFileOpenDialog (::win_open_dialog).
  * En Linux lanza ::linux_open_dialog, que abre un @c GtkFileChooserDialog
  * desde un hilo secundario y entrega el resultado a ::file_dialog_cb.
  *
@@ -487,12 +612,7 @@ static void linux_open_dialog(Editor *e, int is_folder) {
  */
 void open_file_dialog(Editor *e) {
 #if defined(_WIN32)
-    SDL_DialogFileFilter filters[] = {
-        {"Archivos de código",
-         "c;h;cpp;hpp;py;js;ts;rs;go;java;txt;md;json;toml;yaml;yml"},
-        {"Todos los archivos", "*"}};
-    SDL_ShowOpenFileDialog(file_dialog_cb, e, e->window, filters, 2, NULL,
-                           false);
+    win_open_dialog(e, 0);
 #else
     linux_open_dialog(e, 0);
 #endif
@@ -501,15 +621,15 @@ void open_file_dialog(Editor *e) {
 /**
  * @brief Lanza (asíncronamente) el diálogo nativo para abrir una carpeta.
  *
- * En Windows usa @c SDL_ShowOpenFolderDialog (Win32 nativo, asíncrono).
- * En Linux lanza ::linux_open_dialog, que abre un @c GtkFileChooserDialog
- * desde un hilo secundario y entrega el resultado a ::folder_dialog_cb.
+ * En Windows usa el diálogo moderno @c IFileOpenDialog con @c FOS_PICKFOLDERS
+ * (::win_open_dialog), en lugar del @c SHBrowseForFolder legacy de SDL.
+ * En Linux lanza ::linux_open_dialog (GtkFileChooserDialog).
  *
  * @param e Editor.
  */
 void open_folder_dialog(Editor *e) {
 #if defined(_WIN32)
-    SDL_ShowOpenFolderDialog(folder_dialog_cb, e, e->window, NULL, false);
+    win_open_dialog(e, 1);
 #else
     linux_open_dialog(e, 1);
 #endif

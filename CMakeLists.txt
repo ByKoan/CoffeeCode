@@ -158,7 +158,9 @@ if(WIN32)
     else()
         target_link_options(CoffeeCode PRIVATE -Wl,--entry,mainCRTStartup)
     endif()
-    target_link_libraries(CoffeeCode PRIVATE winmm imm32 version setupapi)
+    # ole32/uuid/shell32: diálogos nativos modernos (IFileOpenDialog)
+    target_link_libraries(CoffeeCode PRIVATE winmm imm32 version setupapi
+                                             ole32 uuid shell32)
 endif()
 
 if(UNIX AND NOT APPLE)
