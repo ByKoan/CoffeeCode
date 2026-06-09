@@ -7,6 +7,7 @@
 #endif
 
 #include "buffer/buffer.h"
+#include "encoding/encoding.h"
 #include "filetree/filetree.h"
 #include "fonts/fonts.h"
 #include "lexer/lexer.h"
@@ -71,6 +72,7 @@ typedef struct {
     char filepath[512]; /* ruta del archivo, o "" si es nuevo sin guardar */
     int modified;       /* 1 si hay cambios sin guardar                   */
     long loaded_mtime;  /* mtime del fichero en la última carga desde disco */
+    TextEncoding encoding;       /* codificación con la que se carga/guarda */
     int cursor_line, cursor_col; /* posición del cursor guardada            */
     int scroll_line, scroll_col; /* desplazamiento de la vista guardado     */
     int sel_active;              /* 1 si la selección está activa           */
@@ -140,8 +142,9 @@ typedef struct {
     int sel_anchor_col;  /* columna del ancla                          */
 
     /* archivo */
-    char filepath[512]; /* ruta del archivo de la pestaña activa         */
-    int modified;       /* 1 si hay cambios sin guardar                  */
+    char filepath[512];    /* ruta del archivo de la pestaña activa      */
+    int modified;          /* 1 si hay cambios sin guardar               */
+    TextEncoding encoding; /* codificación de la pestaña activa (espejo) */
 
     /* navbar / menú archivo */
     int menu_open;    /* 1 = desplegable visible */

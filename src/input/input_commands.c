@@ -93,10 +93,41 @@ void new_file(Editor *e) {
  *
  * @param e Editor.
  */
+/**
+ * @brief Escribe el buffer (UTF-8) en @p path codificado en @c e->encoding.
+ *
+ * El buffer siempre está en UTF-8; aquí se codifica a la codificación de la
+ * pestaña (ANSI, UTF-16…) antes de escribir los bytes a disco.
+ *
+ * @return 1 si se escribió; 0 si falló (reserva, codificación o apertura).
+ */
+static int save_buffer_encoded(Editor *e, const char *path) {
+    size_t n = buf_length(e->buf);
+    char *utf8 = malloc(n ? n : 1);
+    if (!utf8) return 0;
+    if (n) buf_get_text(e->buf, 0, n, utf8); /* volcar el texto UTF-8 */
+
+    unsigned char *bytes = NULL;
+    size_t blen = 0;
+    int enc_ok = encoding_encode(e->encoding, utf8, n, &bytes, &blen);
+    free(utf8);
+    if (!enc_ok) return 0;
+
+    FILE *f = fopen(path, "wb"); /* binario: escribir los bytes tal cual */
+    if (!f) {
+        free(bytes);
+        return 0;
+    }
+    if (blen) fwrite(bytes, 1, blen, f);
+    fclose(f);
+    free(bytes);
+    return 1;
+}
+
 void save_file(Editor *e) {
     if (!e->filepath[0])
         strncpy(e->filepath, "untitled.c", sizeof(e->filepath) - 1);
-    if (!buf_save_file(e->buf, e->filepath)) {
+    if (!save_buffer_encoded(e, e->filepath)) {
         e->needs_redraw = 1;
         return;
     }

@@ -301,9 +301,17 @@ static void draw_status_bar(Editor *e, const char *text) {
     fill_rect(r, 0, y, e->win_w, STATUS_HEIGHT); /* fondo de la barra */
     set_color_c(r, e->theme.col_status_sep);
     fill_rect(r, 0, y, e->win_w, 1); /* separador superior de 1 px */
-    /* centrado vertical: (alto barra - alto fuente) / 2 */
-    draw_text_c(e, text, 0, y + (STATUS_HEIGHT - e->font_size) / 2,
-                e->theme.txt_status);
+    int ty = y + (STATUS_HEIGHT - e->font_size) / 2; /* centrado vertical */
+    draw_text_c(e, text, 0, ty, e->theme.txt_status);
+
+    /* Codificación, alineada a la derecha y clicable (abre el selector). */
+    const char *enc = encoding_name(e->encoding);
+    int ew = 0, eh = 0;
+    TTF_GetStringSize(e->font, enc, 0, &ew, &eh);
+    int ex = e->win_w - ew - 14;
+    draw_text_c(e, enc, ex, ty, e->theme.txt_status);
+    Rect encbox = {ex - 10, y, e->win_w - (ex - 10), STATUS_HEIGHT};
+    ui_put(&e->ui, UI_STATUS_ENC, encbox);
 }
 
 /**

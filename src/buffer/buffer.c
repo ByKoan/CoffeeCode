@@ -618,6 +618,32 @@ size_t buf_line_end(const Buffer *b, size_t pos) {
  * @return 1 si se cargó (o el archivo estaba vacío); 0 si no se pudo
  * abrir/alojar.
  */
+int buf_load_mem(Buffer *b, const char *data, size_t len) {
+    /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza
+     */
+    free(b->data);
+    b->data = NULL;
+    if (b->lines.elem == 0) /* defensivo: por si nunca se inicializó */
+        vec_init(&b->lines, sizeof(size_t));
+
+    if (len == 0) return buf_set_empty(b); /* contenido vacío */
+
+    /* Alojar exactamente lo necesario + hueco mínimo */
+    b->data = malloc(len + BUFFER_GAP_MIN);
+    if (!b->data) return 0;
+    memcpy(b->data, data, len);
+
+    /* El texto ocupa [0, len); el hueco va detrás. Cursor al final del texto.
+     */
+    b->gap_start = len;
+    b->gap_end = len + BUFFER_GAP_MIN;
+    b->size = len + BUFFER_GAP_MIN;
+    memset(b->data + len, 0, BUFFER_GAP_MIN); /* limpiar el hueco (higiene) */
+
+    b->lines.len = 0;     /* li_rebuild lo rellena */
+    return li_rebuild(b); /* construir índice en una pasada O(n) */
+}
+
 int buf_load_file(Buffer *b, const char *path) {
     FILE *f = fopen(path, "rb"); /* binario: no traducir saltos de línea */
     if (!f) return 0;
@@ -627,37 +653,22 @@ int buf_load_file(Buffer *b, const char *path) {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza
-     */
-    free(b->data);
-    b->data = NULL;
-    if (b->lines.elem == 0) /* defensivo: por si nunca se inicializó */
-        vec_init(&b->lines, sizeof(size_t));
-
     if (fsize <= 0) {
         fclose(f);
-        return buf_set_empty(b); /* archivo vacío */
+        return buf_load_mem(b, NULL, 0); /* archivo vacío */
     }
 
-    /* Alojar exactamente lo necesario + hueco mínimo */
-    b->data = malloc((size_t)fsize + BUFFER_GAP_MIN);
-    if (!b->data) {
+    char *tmp = malloc((size_t)fsize);
+    if (!tmp) {
         fclose(f);
         return 0;
     }
-
-    size_t nread = fread(b->data, 1, (size_t)fsize, f);
+    size_t nread = fread(tmp, 1, (size_t)fsize, f);
     fclose(f);
 
-    /* El texto ocupa [0, nread); el hueco va detrás. Cursor al final del texto.
-     */
-    b->gap_start = nread;
-    b->gap_end = nread + BUFFER_GAP_MIN;
-    b->size = nread + BUFFER_GAP_MIN;
-    memset(b->data + nread, 0, BUFFER_GAP_MIN); /* limpiar el hueco (higiene) */
-
-    b->lines.len = 0;     /* li_rebuild lo rellena */
-    return li_rebuild(b); /* construir índice en una pasada O(n) */
+    int ok = buf_load_mem(b, tmp, nread); /* copia los bytes tal cual */
+    free(tmp);
+    return ok;
 }
 
 /**

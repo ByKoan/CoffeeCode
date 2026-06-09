@@ -54,6 +54,7 @@ typedef enum {
     UI_PREF_FONTSZ_DEC, /**< Stepper tamaño de fuente: −.             */
     UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
     UI_PREF_FONT_LIST,  /**< Área de la lista de fuentes (para la rueda). */
+    UI_STATUS_ENC,      /**< Codificación en la barra de estado (clic).  */
     UI_ID_COUNT
 } UiId;
 

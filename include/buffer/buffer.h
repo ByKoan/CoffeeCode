@@ -85,5 +85,7 @@ int buf_line_count(const Buffer *b);                /* nº de líneas (O(1))  */
 size_t buf_line_offset(const Buffer *b, int line);
 
 /* carga / guarda */
-int buf_load_file(Buffer *b, const char *path);       /* carga archivo; 1/0 */
+int buf_load_file(Buffer *b, const char *path); /* carga archivo; 1/0 */
+/* carga el contenido desde memoria (texto ya decodificado); 1/0 */
+int buf_load_mem(Buffer *b, const char *data, size_t len);
 int buf_save_file(const Buffer *b, const char *path); /* guarda archivo; 1/0 */

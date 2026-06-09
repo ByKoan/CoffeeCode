@@ -34,6 +34,40 @@ static long file_mtime(const char *path) {
 }
 
 /**
+ * @brief Lee @p path del disco, detecta su codificación y la decodifica a UTF-8
+ *        en el buffer de la pestaña.
+ *
+ * El buffer del editor siempre trabaja en UTF-8; aquí se convierte el contenido
+ * del archivo (sea ANSI, UTF-16…) a UTF-8 al cargar. Devuelve la codificación
+ * detectada para guardarla en la pestaña (se usará al volver a guardar).
+ *
+ * @param t    Pestaña destino (su buffer se reemplaza).
+ * @param path Ruta del archivo.
+ * @return La codificación detectada (UTF-8 si el archivo no se pudo leer).
+ */
+static TextEncoding tab_load_decoded(EditorTab *t, const char *path) {
+    size_t rawlen = 0;
+    void *raw = SDL_LoadFile(path, &rawlen); /* bytes crudos del archivo */
+    if (!raw) {
+        buf_load_mem(&t->buf, NULL, 0); /* sin archivo: buffer vacío */
+        return ENC_UTF8;
+    }
+    TextEncoding enc =
+        encoding_detect((const unsigned char *)raw, rawlen, NULL);
+    char *utf8 = NULL;
+    size_t utf8len = 0;
+    if (encoding_decode(enc, (const unsigned char *)raw, rawlen, &utf8,
+                        &utf8len)) {
+        buf_load_mem(&t->buf, utf8, utf8len);
+        free(utf8);
+    } else {
+        buf_load_mem(&t->buf, NULL, 0); /* fallo de decodificación */
+    }
+    SDL_free(raw);
+    return enc;
+}
+
+/**
  * @brief Inicializa una pestaña nueva y vacía: buffer de texto y pila de undo.
  *
  * Deja todos los escalares a cero (cursor, scroll, flags) y construye las dos
@@ -72,6 +106,7 @@ void editor_tab_save_state(Editor *e) {
     t->sel_active = e->sel_active;
     t->sel_anchor_line = e->sel_anchor_line;
     t->sel_anchor_col = e->sel_anchor_col;
+    t->encoding = e->encoding;
 }
 
 /**
@@ -114,7 +149,7 @@ static void editor_tab_load_state(Editor *e) {
             /* el fichero cambió fuera del editor: re-leer desde cero */
             buf_free(&t->buf);
             buf_init(&t->buf);
-            buf_load_file(&t->buf, t->filepath);
+            t->encoding = tab_load_decoded(t, t->filepath);
             t->loaded_mtime = current_mtime; /* recordar el nuevo mtime */
 
             /* la cache del lexer ya no vale: rehacerla al nº de líneas actual
@@ -138,6 +173,7 @@ static void editor_tab_load_state(Editor *e) {
     e->sel_active = t->sel_active;
     e->sel_anchor_line = t->sel_anchor_line;
     e->sel_anchor_col = t->sel_anchor_col;
+    e->encoding = t->encoding;
     strncpy(e->filepath, t->filepath, sizeof(e->filepath) - 1);
 }
 
@@ -203,7 +239,7 @@ void editor_tab_open(Editor *e, const char *path) {
     int idx = e->tab_count++;
     EditorTab *t = &e->tabs[idx];
     tab_init(t);
-    buf_load_file(&t->buf, path);       /* leer el contenido del disco */
+    t->encoding = tab_load_decoded(t, path); /* leer y decodificar a UTF-8 */
     t->loaded_mtime = file_mtime(path); /* recordar su mtime para recargas */
     strncpy(t->filepath, path, sizeof(t->filepath) - 1);
     int total = buf_line_count(&t->buf);
@@ -218,7 +254,7 @@ void editor_tab_open(Editor *e, const char *path) {
     /* Arrancar cliente LSP si hay servidor disponible para este lenguaje */
     {
         const char *lang = lsp_language_id_for_path(path);
-        const char *cmd  = lang ? lsp_server_cmd_for_language(lang) : NULL;
+        const char *cmd = lang ? lsp_server_cmd_for_language(lang) : NULL;
         if (cmd) {
             /* Construir URI del workspace (directorio del archivo) */
             char ws_uri[512];
@@ -230,8 +266,10 @@ void editor_tab_open(Editor *e, const char *path) {
             if (!last_sep || (last_sep2 && last_sep2 > last_sep))
                 last_sep = last_sep2;
 #endif
-            if (last_sep) *last_sep = '\0';
-            else strncpy(ws_path, ".", sizeof(ws_path) - 1);
+            if (last_sep)
+                *last_sep = '\0';
+            else
+                strncpy(ws_path, ".", sizeof(ws_path) - 1);
             path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
 
             if (lsp_server_available(lang)) {
@@ -249,9 +287,10 @@ void editor_tab_open(Editor *e, const char *path) {
                     }
                 }
             } else {
-                /* No esta instalado: lanzar instalacion automatica en background.
-                 * El bucle principal sondeara lsp_install_poll() cada frame y,
-                 * cuando termine, reintentara lsp_start() automaticamente. */
+                /* No esta instalado: lanzar instalacion automatica en
+                 * background. El bucle principal sondeara lsp_install_poll()
+                 * cada frame y, cuando termine, reintentara lsp_start()
+                 * automaticamente. */
                 lsp_install_async(&t->lsp_install, lang);
             }
         }
