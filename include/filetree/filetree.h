@@ -17,14 +17,17 @@
 /* -- Tipo de entrada ------------------------------------------------------- */
 typedef enum { FTYPE_DIR = 0, FTYPE_FILE = 1 } FEntryType;
 
-/* -- Una entrada del árbol ------------------------------------------------- */
+/* -- Una entrada del árbol -------------------------------------------------
+ * Cada entrada es un archivo o carpeta del árbol "aplanado". La jerarquía se
+ * representa solo con `depth`: los hijos de una carpeta son las entradas que la
+ * siguen en el vector con depth mayor. */
 typedef struct {
-    char path[512]; /* ruta absoluta                               */
-    char name[256]; /* nombre de archivo / carpeta                 */
-    int depth;      /* profundidad (0 = raíz)                      */
-    FEntryType type;
-    int expanded; /* 1 si el directorio está expandido           */
-    int visible;  /* 1 si debe pintarse (padres expandidos)      */
+    char path[512];  /* ruta absoluta                               */
+    char name[256];  /* nombre de archivo / carpeta                 */
+    int depth;       /* profundidad (0 = raíz)                      */
+    FEntryType type; /* FTYPE_DIR o FTYPE_FILE                      */
+    int expanded;    /* 1 si el directorio está expandido           */
+    int visible;     /* 1 si debe pintarse (padres expandidos)      */
 } FEntry;
 
 /* -- Estado del explorador ------------------------------------------------- */
@@ -37,9 +40,9 @@ typedef struct {
     char root_path[512]; /* carpeta raíz cargada             */
 
     /* arrastrar el borde para redimensionar */
-    int dragging_border;
-    int drag_start_x;
-    int drag_start_w;
+    int dragging_border; /* 1 mientras se arrastra el borde derecho   */
+    int drag_start_x;    /* X del ratón al empezar a arrastrar (px)   */
+    int drag_start_w;    /* ancho del panel al empezar a arrastrar    */
 } FileTree;
 
 /* -- API pública ----------------------------------------------------------- */
