@@ -533,6 +533,8 @@ void menu_exec(Editor *e, int item) {
     case MENU_AUTOSAVE:
         e->autosave = !e->autosave;
         if (e->autosave) e->autosave_last_ms = SDL_GetTicks();
+        e->settings.autosave = e->autosave; /* persistir el cambio */
+        settings_save(&e->settings);
         break;
     default: break;
     }

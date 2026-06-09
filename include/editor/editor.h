@@ -12,6 +12,7 @@
 #include "lsp/lsp.h"
 #include "lsp/lsp_install.h"
 #include "render/ui_hit.h"
+#include "settings/settings.h"
 #include "structs/ring.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -175,6 +176,10 @@ typedef struct {
     /* geometría de los controles de UI del último frame (hit-test compartido
      * entre render e input; ver render/ui_hit.h). */
     UiRegistry ui;
+
+    /* preferencias persistentes (tema, fuente, tab, autoguardado...) */
+    Settings settings;
+    int settings_open; /* 1 = mostrando la pantalla de preferencias */
 } Editor;
 
 /* -- Ciclo de vida -------------------------------------------------------- */

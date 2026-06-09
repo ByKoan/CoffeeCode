@@ -186,8 +186,7 @@ void editor_update_lexer(Editor *e, int from_line) {
                 free(txt);
                 /* Solicitar tokens solo en recargas completas para no bloquear
                  * el hilo principal en cada keystroke */
-                if (from_line == 0)
-                    lsp_tokens_full(&t->lsp);
+                if (from_line == 0) lsp_tokens_full(&t->lsp);
             }
         }
     }
@@ -274,8 +273,13 @@ int editor_init(Editor *e, const char *filepath) {
     e->needs_redraw = 1;
     e->menu_hovered = -1;
     e->find.result_line = -1;
-    e->cursor_visible = 1;          /* cursor visible al arrancar */
+    e->cursor_visible = 1;               /* cursor visible al arrancar */
     e->cursor_blink_ms = SDL_GetTicks(); /* iniciar timer del parpadeo */
+
+    /* preferencias persistentes: cargarlas y aplicar las que afectan al estado
+     * inicial (las demás las leen render/input directamente de e->settings). */
+    settings_load(&e->settings);
+    e->autosave = e->settings.autosave;
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -406,10 +410,11 @@ void editor_free(Editor *e) {
  *     marcando needs_redraw cuando cambia de estado para no dibujar de más.
  *   - Se redibuja si algo cambió (needs_redraw activo).
  *
- * Así la app mantiene respuesta inmediata ante entrada del usuario Y animaciones
- * fluidas (cursor parpadeante) sin quemar CPU cuando no hay actividad.
+ * Así la app mantiene respuesta inmediata ante entrada del usuario Y
+ * animaciones fluidas (cursor parpadeante) sin quemar CPU cuando no hay
+ * actividad.
  */
-#define CURSOR_BLINK_MS 530  /* medio periodo del parpadeo del cursor (ms) */
+#define CURSOR_BLINK_MS 530 /* medio periodo del parpadeo del cursor (ms) */
 
 /**
  * @brief Sondea las instalaciones LSP en curso y arranca el servidor cuando
@@ -433,7 +438,7 @@ static void editor_poll_lsp_install(Editor *e) {
         if (st == LSP_INSTALL_DONE) {
             /* Instalacion completada: intentar arrancar el servidor LSP */
             const char *lang = lsp_language_id_for_path(t->filepath);
-            const char *cmd  = lang ? lsp_server_cmd_for_language(lang) : NULL;
+            const char *cmd = lang ? lsp_server_cmd_for_language(lang) : NULL;
             if (cmd && t->filepath[0]) {
                 char ws_uri[512], ws_path[512];
                 strncpy(ws_path, t->filepath, sizeof(ws_path) - 1);
@@ -442,8 +447,10 @@ static void editor_poll_lsp_install(Editor *e) {
                 char *sep2 = strrchr(ws_path, '\\');
                 if (!sep || (sep2 && sep2 > sep)) sep = sep2;
 #endif
-                if (sep) *sep = '\0';
-                else strncpy(ws_path, ".", sizeof(ws_path) - 1);
+                if (sep)
+                    *sep = '\0';
+                else
+                    strncpy(ws_path, ".", sizeof(ws_path) - 1);
                 path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
 
                 if (lsp_start(&t->lsp, cmd, ws_uri)) {
@@ -473,7 +480,8 @@ void editor_run(Editor *e) {
     while (e->running) {
         /* Esperar un evento hasta 16 ms (= 1 frame a 60 Hz).
          * Si llega antes, procesarlo; si no, el timeout fuerza la siguiente
-         * iteración garantizando que siempre revisamos el blink y redibujamos. */
+         * iteración garantizando que siempre revisamos el blink y redibujamos.
+         */
         if (SDL_WaitEventTimeout(&ev, 16)) {
             input_handle_event(e, &ev);
             /* Drenar el resto de la cola sin bloquear */
@@ -530,4 +538,3 @@ void editor_run(Editor *e) {
         }
     }
 }
-
