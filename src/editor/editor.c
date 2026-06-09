@@ -32,6 +32,7 @@ static TTF_Font *load_editor_font(float size) {
     return TTF_OpenFont("font.ttf", size);
 }
 
+/** Posición lógica del (line, col) dado, con clamp al rango real del buffer. */
 size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     Buffer *b = e->buf;
     int total = buf_line_count(b);
@@ -52,8 +53,7 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     return line_start + (size_t)col;
 }
 
-/* -- editor_sync_cursor ---------------------------------------------------- */
-
+/** Recalcula (cursor_line, cursor_col) desde la posición lógica del buffer. */
 void editor_sync_cursor(Editor *e) {
     size_t pos = buf_cursor_pos(e->buf);
     int line, col;
@@ -62,8 +62,7 @@ void editor_sync_cursor(Editor *e) {
     e->cursor_col = col;
 }
 
-/* -- editor_ensure_visible ------------------------------------------------- */
-
+/** Ajusta el scroll para que el cursor quede dentro del área visible. */
 void editor_ensure_visible(Editor *e) {
     int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines =
@@ -81,16 +80,14 @@ void editor_ensure_visible(Editor *e) {
     if (e->scroll_col < 0) e->scroll_col = 0;
 }
 
-/* -- editor_update_lexer --------------------------------------------------- */
-
+/** Redimensiona la cache del lexer y marca sucias las líneas desde @p from_line. */
 void editor_update_lexer(Editor *e, int from_line) {
     int total = buf_line_count(e->buf);
     lexer_cache_resize(e->lex, total);
     lexer_cache_dirty(e->lex, from_line);
 }
 
-/* -- Selección ------------------------------------------------------------- */
-
+/** Rango lógico [from, to) de la selección. @return 1 si hay selección no vacía. */
 int editor_sel_range(Editor *e, size_t *from, size_t *to) {
     if (!e->sel_active) return 0;
     size_t anchor = editor_pos_from_line_col(e, e->sel_anchor_line, e->sel_anchor_col);
@@ -105,6 +102,7 @@ int editor_sel_range(Editor *e, size_t *from, size_t *to) {
     return (*from != *to);
 }
 
+/** Desactiva la selección actual. */
 void editor_sel_clear(Editor *e) {
     e->sel_active = 0;
 }
