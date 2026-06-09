@@ -346,7 +346,8 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
 
     if (e->menu_open) { /* menú desplegado: actualizar el item resaltado */
         int prev = e->menu_hovered;
-        e->menu_hovered = menu_item_at(mouse_x, mouse_y);
+        e->menu_hovered =
+            ui_hit_idx(&e->ui, UI_LIST_MENU_ITEM, mouse_x, mouse_y);
         if (e->menu_hovered != prev) e->needs_redraw = 1; /* solo si cambió */
     }
 
@@ -538,7 +539,7 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
      * con el rango de la tab bar; sin esta guarda, click_tabbar absorbería
      * los clics sobre los items del menú antes de llegar aquí. */
     if (e->menu_open) {
-        int item = menu_item_at(mx, my);
+        int item = ui_hit_idx(&e->ui, UI_LIST_MENU_ITEM, mx, my);
         /* clic en un item: ejecutarlo */
         if (item >= 0)
             menu_exec(e, item);
@@ -557,9 +558,8 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* Botón "Archivo" en la navbar */
-    if (my >= 0 && my < NAVBAR_HEIGHT && mx >= BTN_FILE_X &&
-        mx < BTN_FILE_X + BTN_FILE_W) {
+    /* Botón "Archivo" en la navbar (geometría registrada por render) */
+    if (ui_hit(&e->ui, UI_BTN_FILE, mx, my)) {
         e->menu_open = 1; /* abrir el menú desplegable */
         e->menu_hovered = -1;
         e->needs_redraw = 1;

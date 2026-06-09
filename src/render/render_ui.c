@@ -144,6 +144,10 @@ void render_navbar(Editor *e) {
     }
     int btn_w = cached_btn_w;
 
+    /* registrar el botón "Archivo" (ocupa toda la altura de la navbar) para que
+     * input abra el menú con ui_hit(UI_BTN_FILE). */
+    ui_put(&e->ui, UI_BTN_FILE, (Rect){NAV_BTN_X, 0, btn_w, NAVBAR_HEIGHT});
+
     if (e->menu_open) { /* botón resaltado mientras el menú está desplegado */
         set_color(r, COL_NAVBAR_BTN);
         fill_rect(r, NAV_BTN_X, NAV_BTN_Y, btn_w, btn_h);
@@ -217,6 +221,10 @@ void render_menu(Editor *e) {
             item_y += MENU_SEP_H;
             continue;
         }
+
+        /* registrar el item (pulsable) para el hit-test por índice */
+        ui_put_idx(&e->ui, UI_LIST_MENU_ITEM, i,
+                   (Rect){menu_x, item_y, MENU_WIDTH, MENU_ITEM_H});
 
         if (e->menu_hovered == i) { /* fondo de resaltado bajo el ratón */
             set_color(r, COL_MENU_HOVER);
