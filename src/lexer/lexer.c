@@ -1,9 +1,14 @@
+/**
+ * @file lexer.c
+ * @brief Tokenizador para el resaltado de sintaxis de C y cache de tokens por
+ *        línea, más los resaltadores enchufables (interfaz Highlighter).
+ */
 #include "lexer/lexer.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* -- Paleta de colores (tema oscuro) -------------------------------------- */
+/** Paleta de colores de los tokens (tema oscuro). */
 const Color TOKEN_COLORS[TOK_COUNT] = {
     [TOK_DEFAULT] = {0xCD, 0xC7, 0xBA, 0xFF},      /* blanco cálido   */
     [TOK_KEYWORD] = {0xE0, 0x6C, 0x75, 0xFF},      /* rojo/rosa       */
@@ -16,7 +21,6 @@ const Color TOKEN_COLORS[TOK_COUNT] = {
     [TOK_PUNCTUATION] = {0xAB, 0xB2, 0xBF, 0xFF},  /* gris claro      */
 };
 
-/* -- Palabras clave de C -------------------------------------------------- */
 static const char *KEYWORDS[] = {"auto",   "break",  "case",     "const",    "continue", "default",
                                  "do",     "else",   "enum",     "extern",   "for",      "goto",
                                  "if",     "inline", "register", "restrict", "return",   "sizeof",
@@ -27,18 +31,30 @@ static const char *TYPES[] = {
     "void",    "bool",    "size_t",  "ptrdiff_t", "intptr_t", "uintptr_t", "int8_t", "int16_t",
     "int32_t", "int64_t", "uint8_t", "uint16_t",  "uint32_t", "uint64_t",  "FILE",   NULL};
 
-static int is_keyword(const char *w, int len) {
-    for (int i = 0; KEYWORDS[i]; i++)
-        if ((int)strlen(KEYWORDS[i]) == len && strncmp(w, KEYWORDS[i], (size_t)len) == 0) return 1;
-    return 0;
-}
-static int is_type(const char *w, int len) {
-    for (int i = 0; TYPES[i]; i++)
-        if ((int)strlen(TYPES[i]) == len && strncmp(w, TYPES[i], (size_t)len) == 0) return 1;
+/** ¿Está la palabra @p w (de @p len caracteres) en la lista terminada en NULL? */
+static int in_word_list(const char *const *list, const char *w, int len) {
+    for (int i = 0; list[i]; i++)
+        if ((int)strlen(list[i]) == len && strncmp(w, list[i], (size_t)len) == 0) return 1;
     return 0;
 }
 
-/* -- Tokenizador por línea ------------------------------------------------ */
+/** Avanza @p *i hasta pasar el cierre @c *\/. @return 1 si el bloque sigue abierto. */
+static int scan_to_comment_end(const char *text, int len, int *i) {
+    while (*i < len) {
+        if (*i + 1 < len && text[*i] == '*' && text[*i + 1] == '/') {
+            *i += 2;
+            return 0; /* comentario cerrado */
+        }
+        (*i)++;
+    }
+    return 1; /* sigue abierto al final de la línea */
+}
+
+/**
+ * @brief Tokeniza una línea de C en @p out.
+ * @param in_block_comment 1 si la línea empieza dentro de un bloque de comentario.
+ * @return 1 si la línea termina aún dentro de un bloque de comentario.
+ */
 static int lexer_tokenize_line(const char *text, int len, LineTokens *out, int in_block_comment) {
     out->count = 0;
     int i = 0;
@@ -54,56 +70,37 @@ static int lexer_tokenize_line(const char *text, int len, LineTokens *out, int i
     } while (0)
 
     while (i < len) {
-        /* -- dentro de bloque de comentario -- */
+        /* continuación de un bloque de comentario abierto en líneas previas */
         if (in_block_comment) {
             int start = i;
-            while (i < len) {
-                if (i + 1 < len && text[i] == '*' && text[i + 1] == '/') {
-                    i += 2;
-                    in_block_comment = 0;
-                    break;
-                }
-                i++;
-            }
+            in_block_comment = scan_to_comment_end(text, len, &i);
             PUSH(start, i - start, TOK_COMMENT);
             continue;
         }
 
         char c = text[i];
 
-        /* -- preprocesador -- */
-        if (c == '#') {
+        if (c == '#') { /* preprocesador: hasta el fin de línea */
             PUSH(i, len - i, TOK_PREPROCESSOR);
             i = len;
             continue;
         }
 
-        /* -- comentario de línea -- */
-        if (c == '/' && i + 1 < len && text[i + 1] == '/') {
+        if (c == '/' && i + 1 < len && text[i + 1] == '/') { /* comentario de línea */
             PUSH(i, len - i, TOK_COMMENT);
             i = len;
             continue;
         }
 
-        /* -- inicio de bloque de comentario -- */
-        if (c == '/' && i + 1 < len && text[i + 1] == '*') {
+        if (c == '/' && i + 1 < len && text[i + 1] == '*') { /* inicio de bloque */
             int start = i;
             i += 2;
-            in_block_comment = 1;
-            while (i < len) {
-                if (i + 1 < len && text[i] == '*' && text[i + 1] == '/') {
-                    i += 2;
-                    in_block_comment = 0;
-                    break;
-                }
-                i++;
-            }
+            in_block_comment = scan_to_comment_end(text, len, &i);
             PUSH(start, i - start, TOK_COMMENT);
             continue;
         }
 
-        /* -- string -- */
-        if (c == '"' || c == '\'') {
+        if (c == '"' || c == '\'') { /* string o carácter */
             char delim = c;
             int start = i++;
             while (i < len) {
@@ -121,12 +118,10 @@ static int lexer_tokenize_line(const char *text, int len, LineTokens *out, int i
             continue;
         }
 
-        /* -- número -- */
         if (isdigit((unsigned char)c) ||
-            (c == '.' && i + 1 < len && isdigit((unsigned char)text[i + 1]))) {
+            (c == '.' && i + 1 < len && isdigit((unsigned char)text[i + 1]))) { /* número */
             int start = i;
-            /* hex */
-            if (c == '0' && i + 1 < len && (text[i + 1] == 'x' || text[i + 1] == 'X')) {
+            if (c == '0' && i + 1 < len && (text[i + 1] == 'x' || text[i + 1] == 'X')) { /* hex */
                 i += 2;
                 while (i < len && isxdigit((unsigned char)text[i]))
                     i++;
@@ -141,44 +136,42 @@ static int lexer_tokenize_line(const char *text, int len, LineTokens *out, int i
             continue;
         }
 
-        /* -- identificador / palabra clave -- */
-        if (isalpha((unsigned char)c) || c == '_') {
+        if (isalpha((unsigned char)c) || c == '_') { /* identificador / palabra clave / tipo */
             int start = i;
             while (i < len && (isalnum((unsigned char)text[i]) || text[i] == '_'))
                 i++;
             int wlen = i - start;
             TokenType t = TOK_DEFAULT;
-            if (is_keyword(text + start, wlen))
+            if (in_word_list(KEYWORDS, text + start, wlen))
                 t = TOK_KEYWORD;
-            else if (is_type(text + start, wlen))
+            else if (in_word_list(TYPES, text + start, wlen))
                 t = TOK_TYPE;
             PUSH(start, wlen, t);
             continue;
         }
 
-        /* -- operadores -- */
-        if (strchr("+-*/%=<>&|^!~?:", c)) {
+        if (strchr("+-*/%=<>&|^!~?:", c)) { /* operador */
             PUSH(i, 1, TOK_OPERATOR);
             i++;
             continue;
         }
 
-        /* -- puntuación -- */
-        if (strchr("(){}[];,.", c)) {
+        if (strchr("(){}[];,.", c)) { /* puntuación */
             PUSH(i, 1, TOK_PUNCTUATION);
             i++;
             continue;
         }
 
-        /* -- resto (espacio, etc.) -- */
-        i++;
+        i++; /* resto (espacios, etc.) */
     }
 
 #undef PUSH
     return in_block_comment;
 }
 
-/* -- Cache ---------------------------------------------------------------- */
+/* ── Cache de tokens por línea ────────────────────────────────────────────── */
+
+/** Inicializa la cache con @p line_count líneas, todas marcadas sucias. */
 int lexer_cache_init(LexerCache *lc, int line_count) {
     if (line_count < 1) line_count = 1;
     vec_init(&lc->lines, sizeof(LineTokens));
@@ -187,7 +180,7 @@ int lexer_cache_init(LexerCache *lc, int line_count) {
     if (!vec_resize(&lc->lines, (size_t)line_count)) return 0;
     if (!vec_resize(&lc->dirty, (size_t)line_count)) return 0;
     for (int i = 0; i < line_count; i++)
-        *(int *)vec_at(&lc->dirty, (size_t)i) = 1; /* todo sucio al inicio */
+        *(int *)vec_at(&lc->dirty, (size_t)i) = 1;
     return 1;
 }
 
@@ -196,6 +189,7 @@ void lexer_cache_free(LexerCache *lc) {
     vec_free(&lc->dirty);
 }
 
+/** Ajusta la cache a @p new_count líneas (las nuevas quedan sucias). */
 void lexer_cache_resize(LexerCache *lc, int new_count) {
     if (new_count < 1) new_count = 1;
     int old = (int)lc->lines.len;
@@ -204,9 +198,10 @@ void lexer_cache_resize(LexerCache *lc, int new_count) {
     vec_resize(&lc->lines, (size_t)new_count); /* nuevas LineTokens a cero (count=0) */
     vec_resize(&lc->dirty, (size_t)new_count);
     for (int i = old; i < new_count; i++)
-        *(int *)vec_at(&lc->dirty, (size_t)i) = 1; /* líneas nuevas: sucias */
+        *(int *)vec_at(&lc->dirty, (size_t)i) = 1;
 }
 
+/** Marca como sucias todas las líneas desde @p from_line hasta el final. */
 void lexer_cache_dirty(LexerCache *lc, int from_line) {
     int n = (int)lc->dirty.len;
     for (int i = from_line; i < n; i++)
@@ -215,7 +210,7 @@ void lexer_cache_dirty(LexerCache *lc, int from_line) {
 
 /* ── Interfaz Highlighter (resaltadores enchufables) ──────────────────────── */
 
-/* Resaltador de C: delega en el tokenizador de arriba. */
+/** Resaltador de C: delega en el tokenizador de arriba. */
 static int hl_c_tokenize(const Highlighter *self, const char *text, int len, LineTokens *out,
                          int in_block) {
     (void)self;
@@ -223,7 +218,7 @@ static int hl_c_tokenize(const Highlighter *self, const char *text, int len, Lin
 }
 const Highlighter highlighter_c = {"C", hl_c_tokenize};
 
-/* Resaltador nulo: texto plano, sin tokens (render usa el color por defecto). */
+/** Resaltador nulo: texto plano, sin tokens (render usa el color por defecto). */
 static int hl_none_tokenize(const Highlighter *self, const char *text, int len, LineTokens *out,
                             int in_block) {
     (void)self;
@@ -235,7 +230,7 @@ static int hl_none_tokenize(const Highlighter *self, const char *text, int len, 
 }
 const Highlighter highlighter_none = {"texto", hl_none_tokenize};
 
-/* Comparación de extensión case-insensitive (sin depender de SDL/POSIX). */
+/** Comparación de extensión case-insensitive (sin depender de SDL/POSIX). */
 static int ext_eq(const char *a, const char *b) {
     for (; *a && *b; a++, b++)
         if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
