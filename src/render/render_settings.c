@@ -25,8 +25,8 @@
 
 /** Y para centrar verticalmente texto de @c FONT_SIZE en una fila de alto @p h.
  */
-static int row_text_y(int row_y, int h) {
-    return row_y + (h - FONT_SIZE) / 2;
+static int row_text_y(Editor *e, int row_y, int h) {
+    return row_y + (h - e->font_size) / 2;
 }
 
 /**
@@ -37,7 +37,7 @@ static int row_text_y(int row_y, int h) {
  */
 static void pref_toggle(Editor *e, UiId id, int x, int y, int w,
                         const char *label, int on) {
-    draw_text_c(e, label, x, row_text_y(y, PREF_ROW_H),
+    draw_text_c(e, label, x, row_text_y(e, y, PREF_ROW_H),
                 e->theme.tokens[TOK_DEFAULT]);
     Rect box = {x + w - PREF_CTRL_W, y + 6, PREF_CTRL_W, PREF_ROW_H - 12};
     ui_button(e, id, box, on ? "Activado" : "Desactivado",
@@ -52,7 +52,7 @@ static void pref_toggle(Editor *e, UiId id, int x, int y, int w,
  */
 static void pref_stepper(Editor *e, UiId dec, UiId inc, int x, int y, int w,
                          const char *label, int value) {
-    draw_text_c(e, label, x, row_text_y(y, PREF_ROW_H),
+    draw_text_c(e, label, x, row_text_y(e, y, PREF_ROW_H),
                 e->theme.tokens[TOK_DEFAULT]);
 
     int by = y + (PREF_ROW_H - PREF_STEP_BTN) / 2;
@@ -69,7 +69,7 @@ static void pref_stepper(Editor *e, UiId dec, UiId inc, int x, int y, int w,
     TTF_GetStringSize(e->font, val, 0, &vw, &vh);
     int gap_x = dec_box.x + PREF_STEP_BTN;
     int gap_w = inc_box.x - gap_x;
-    draw_text_c(e, val, gap_x + (gap_w - vw) / 2, row_text_y(y, PREF_ROW_H),
+    draw_text_c(e, val, gap_x + (gap_w - vw) / 2, row_text_y(e, y, PREF_ROW_H),
                 e->theme.col_ftree_file);
 }
 
@@ -89,7 +89,7 @@ static int pref_section(Editor *e, int x, int y, const char *title) {
  */
 static void pref_choice(Editor *e, UiId id, int x, int y, int w,
                         const char *label, const char *value) {
-    draw_text_c(e, label, x, row_text_y(y, PREF_ROW_H),
+    draw_text_c(e, label, x, row_text_y(e, y, PREF_ROW_H),
                 e->theme.tokens[TOK_DEFAULT]);
     Rect box = {x + w - PREF_CTRL_W, y + 6, PREF_CTRL_W, PREF_ROW_H - 12};
     ui_button(e, id, box, value, &e->theme.style_button, UI_NORMAL);
@@ -107,7 +107,7 @@ void render_settings_view(Editor *e) {
     Rect back = {12, 8, 110, PREF_HEADER_H - 16};
     ui_button(e, UI_PREF_BACK, back, "< Volver", &e->theme.style_button,
               UI_NORMAL);
-    draw_text_c(e, "Preferencias", 140, row_text_y(0, PREF_HEADER_H),
+    draw_text_c(e, "Preferencias", 140, row_text_y(e, 0, PREF_HEADER_H),
                 e->theme.tokens[TOK_DEFAULT]);
 
     /* -- Columna de contenido centrada (ancho acotado) -- */
@@ -120,6 +120,9 @@ void render_settings_view(Editor *e) {
     y = pref_section(e, x, y, "Apariencia");
     pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
                 theme_name(e->settings.theme));
+    y += PREF_ROW_H;
+    pref_stepper(e, UI_PREF_FONTSZ_DEC, UI_PREF_FONTSZ_INC, x, y, col_w,
+                 "Tamano de fuente", e->settings.font_size);
     y += PREF_ROW_H + 12;
 
     /* -- Sección Editor -- */

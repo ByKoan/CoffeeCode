@@ -80,7 +80,8 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
 
     /* fila en pantalla: quitar navbar + pestañas y dividir por el alto de línea
      */
-    int visual_line = (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+    int visual_line =
+        (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / e->line_height;
     if (visual_line < 0) visual_line = 0;  /* clic sobre las barras → fila 0 */
     int ln = e->scroll_line + visual_line; /* fila visible → línea real      */
     int total = buf_line_count(e->buf);
@@ -263,7 +264,7 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
                       STATUS_HEIGHT - SHORTCUT_HEIGHT;
     int total_lines = buf_line_count(e->buf);
     /* líneas que caben en pantalla */
-    int visible_lines = text_height / LINE_HEIGHT;
+    int visible_lines = text_height / e->line_height;
     int max_scroll = total_lines - visible_lines; /* scroll máximo alcanzable */
     if (max_scroll < 0) max_scroll = 0; /* todo cabe: no hay scroll     */
 
@@ -513,6 +514,14 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         settings_save(s);
     } else if (ui_hit(&e->ui, UI_PREF_TABW_INC, mx, my)) {
         if (s->tab_width < SETTINGS_TAB_MAX) s->tab_width++;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_FONTSZ_DEC, mx, my)) {
+        if (s->font_size > SETTINGS_FONT_MIN) s->font_size--;
+        editor_reload_font(e); /* recargar la fuente al nuevo tamaño */
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_FONTSZ_INC, mx, my)) {
+        if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
+        editor_reload_font(e);
         settings_save(s);
     }
     e->needs_redraw = 1;

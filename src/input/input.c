@@ -283,7 +283,7 @@ static void dedent_line(Editor *e) {
  * @return Número aproximado de líneas que caben en el área de edición.
  */
 static int page_lines(Editor *e) {
-    return (e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT) / LINE_HEIGHT;
+    return (e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT) / e->line_height;
 }
 
 /**

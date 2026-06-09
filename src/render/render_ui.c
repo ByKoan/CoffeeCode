@@ -131,7 +131,7 @@ void render_navbar(Editor *e) {
               e->menu_open ? UI_ACTIVE : UI_NORMAL);
 
     /* Y para centrar verticalmente el título y el punto de "modificado". */
-    int text_y = NAV_BTN_Y + (btn_h - FONT_SIZE) / 2;
+    int text_y = NAV_BTN_Y + (btn_h - e->font_size) / 2;
 
     /* Título: "CoffeeCode" y, si hay archivo, " — nombre" (\xe2\x80\x94 es el
      * guión largo "—" codificado en UTF-8). */
@@ -153,7 +153,8 @@ void render_navbar(Editor *e) {
 
     if (e->modified) { /* punto rojo de "hay cambios sin guardar" */
         set_color_c(r, e->theme.col_modified_dot);
-        fill_rect(r, title_x + title_w + 6, text_y + FONT_SIZE / 2 - 3, 6, 6);
+        fill_rect(r, title_x + title_w + 6, text_y + e->font_size / 2 - 3, 6,
+                  6);
     }
 }
 
@@ -209,7 +210,7 @@ void render_menu(Editor *e) {
         }
 
         int text_y =
-            item_y + (MENU_ITEM_H - FONT_SIZE) / 2; /* centrado vertical */
+            item_y + (MENU_ITEM_H - e->font_size) / 2; /* centrado vertical */
 
         /* Item "Autoguardado": tic (✓, \xe2\x9c\x93 en UTF-8) si está activo */
         if (i == MENU_AUTOSAVE_ITEM && e->autosave)
@@ -293,7 +294,7 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     /* Nombre: se acota el dibujo a un rectángulo de clip para que no rebose el
      * botón de cerrar; SDL recorta cualquier píxel fuera de "clip". */
     int text_max_w = tab_w - TAB_CLOSE_W - TAB_PAD * 2 - TAB_TEXT_EXTRA;
-    int text_y = bar_y + (bar_h - FONT_SIZE) / 2;
+    int text_y = bar_y + (bar_h - e->font_size) / 2;
     SDL_Rect clip = {tx + TAB_PAD, bar_y, text_max_w, bar_h};
     SDL_SetRenderClipRect(r, &clip); /* activar recorte */
     if (active)
@@ -307,8 +308,9 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
 
     if (t->modified) { /* punto de "cambios sin guardar" */
         set_color_c(r, e->theme.col_tab_mod_dot);
-        fill_rect(r, tx + TAB_PAD + text_max_w + 2, text_y + FONT_SIZE / 2 - 3,
-                  TAB_MOD_DOT_SZ, TAB_MOD_DOT_SZ);
+        fill_rect(r, tx + TAB_PAD + text_max_w + 2,
+                  text_y + e->font_size / 2 - 3, TAB_MOD_DOT_SZ,
+                  TAB_MOD_DOT_SZ);
     }
 
     /* Botón × de cerrar (más visible en la activa); se guarda su posición */
@@ -353,7 +355,7 @@ void render_tabbar(Editor *e) {
     /* Botón + (nueva pestaña), justo después de la última */
     set_color_c(r, e->theme.col_tabbar_bg);
     fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
-    draw_text_c(e, "+", tx + 7, bar_y + (bar_h - FONT_SIZE) / 2,
+    draw_text_c(e, "+", tx + 7, bar_y + (bar_h - e->font_size) / 2,
                 e->theme.txt_tab_new);
     /* registrar el botón "+" para el hit-test */
     ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
@@ -379,7 +381,7 @@ static void draw_shortcut_badge(Editor *e, const char *key, const char *label,
     int key_w = 0, key_h = 0;
     TTF_GetStringSize(e->font, key, 0, &key_w, &key_h); /* medir la tecla */
     int badge_w = key_w + BADGE_PAD_X * 2; /* recuadro = texto + padding */
-    int badge_h = FONT_SIZE + BADGE_PAD_Y * 2;
+    int badge_h = e->font_size + BADGE_PAD_Y * 2;
 
     set_color_c(r, e->theme.col_badge_bg);
     fill_rect(r, *x, y, badge_w, badge_h); /* fondo del recuadro */
@@ -437,7 +439,7 @@ void render_shortcuts(Editor *e) {
         {"Ctrl+Y", "Redo"},     {"Ctrl+S", "Guardar"},
         {"Ctrl+N", "Nuevo"},
     };
-    int badge_y = sep_y + (SHORTCUT_HEIGHT - FONT_SIZE) / 2 -
+    int badge_y = sep_y + (SHORTCUT_HEIGHT - e->font_size) / 2 -
                   2;                         /* Y centrada de los badges */
     int x = left_offset + SHORTCUT_LEFT_PAD; /* X de partida */
     for (int i = 0; i < (int)(sizeof(SHORTCUTS) / sizeof(SHORTCUTS[0])); i++) {
@@ -467,7 +469,7 @@ void render_scrollbar(Editor *e, int left_offset) {
     int total_lines = buf_line_count(e->buf);
     int text_height =
         e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
-    int visible_lines = text_height / LINE_HEIGHT;
+    int visible_lines = text_height / e->line_height;
 
     if (total_lines <= visible_lines) return; /* todo cabe: sin scrollbar */
 

@@ -13,8 +13,8 @@
 /* Rangos válidos para los ajustes numéricos (se recortan al cargar). */
 #define SETTINGS_TAB_MIN 1
 #define SETTINGS_TAB_MAX 16
-#define SETTINGS_FONT_MIN 8
-#define SETTINGS_FONT_MAX 48
+#define SETTINGS_FONT_MIN 10
+#define SETTINGS_FONT_MAX 24
 
 /** Preferencias del editor. */
 typedef struct {

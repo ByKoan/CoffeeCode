@@ -52,8 +52,8 @@
  * @param row_y Coordenada Y (arriba) de la fila/campo.
  * @return Coordenada Y donde empezar a dibujar el texto centrado.
  */
-static int field_text_y(int row_y) {
-    return row_y + (FB_FIELD_H - FONT_SIZE) / 2;
+static int field_text_y(Editor *e, int row_y) {
+    return row_y + (FB_FIELD_H - e->font_size) / 2;
 }
 
 /**
@@ -154,7 +154,7 @@ static void draw_field_text(Editor *e, int field_x, int row_y,
     /* Añadir "|" al final si toca mostrar el cursor en este instante de
      * parpadeo. */
     snprintf(buf, sizeof(buf), "%s%s", content, show_caret ? "|" : "");
-    draw_text_c(e, buf, field_x + FB_TEXT_PAD, field_text_y(row_y),
+    draw_text_c(e, buf, field_x + FB_TEXT_PAD, field_text_y(e, row_y),
                 e->theme.fb_txt_field);
 }
 
@@ -199,8 +199,8 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     ui_button(e, UI_FIND_PREV, prev_box, "↑", &e->theme.style_button,
               UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
-    draw_text_c(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
-                e->theme.fb_txt_counter);
+    draw_text_c(e, counter, prev_x + arrow_w + FB_NAV_GAP,
+                field_text_y(e, row_y), e->theme.fb_txt_counter);
     ui_button(e, UI_FIND_NEXT, next_box, "↓", &e->theme.style_button,
               UI_NORMAL);
 }
@@ -275,7 +275,7 @@ void render_find_bar(Editor *e) {
     stroke_rect(r, bar_x, bar_y, bar_w, bar_h);
 
     /* -- Fila 1: Buscar -- */
-    draw_text_c(e, "Buscar:", label_x, field_text_y(row1_y),
+    draw_text_c(e, "Buscar:", label_x, field_text_y(e, row1_y),
                 e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row1_y, search_field_w,
                    search_focused); /* caja del campo */
@@ -294,11 +294,11 @@ void render_find_bar(Editor *e) {
     } else if (fb->query_len > 0 && fb->match_count == 0) {
         draw_text_c(e, "Sin resultados",
                     field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
-                    field_text_y(row1_y), e->theme.fb_txt_noresult);
+                    field_text_y(e, row1_y), e->theme.fb_txt_noresult);
     }
 
     /* -- Fila 2: Reemplazar -- */
-    draw_text_c(e, "Reemplazar:", label_x, field_text_y(row2_y),
+    draw_text_c(e, "Reemplazar:", label_x, field_text_y(e, row2_y),
                 e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row2_y, replace_field_w,
                    replace_focused); /* caja del campo */

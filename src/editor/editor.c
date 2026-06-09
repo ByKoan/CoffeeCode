@@ -37,7 +37,12 @@
  *         El llamante es dueño del puntero y debe cerrarlo con @c
  * TTF_CloseFont.
  */
-static TTF_Font *load_editor_font(float size) {
+static TTF_Font *load_editor_font(float size, const char *path) {
+    /* 1) ruta explícita elegida en preferencias (settings.font_path) */
+    if (path && path[0]) {
+        TTF_Font *f = TTF_OpenFont(path, size);
+        if (f) return f;
+    }
     /* getenv: si el usuario definió COFFEECODE_FONT, esa fuente tiene
      * prioridad. */
     const char *env = getenv("COFFEECODE_FONT");
@@ -66,6 +71,25 @@ static TTF_Font *load_editor_font(float size) {
     TTF_Font *f = TTF_OpenFont("assets/font.ttf", size);
     if (f) return f;
     return TTF_OpenFont("font.ttf", size);
+}
+
+void editor_reload_font(Editor *e) {
+    /* Cargar la nueva fuente en una variable temporal: si falla (ruta inválida
+     * o tamaño imposible) se conserva la actual y no se rompe el editor. */
+    TTF_Font *nf =
+        load_editor_font(e->settings.font_size, e->settings.font_path);
+    if (!nf) return;
+
+    if (e->font) TTF_CloseFont(e->font);
+    e->font = nf;
+    e->font_size = e->settings.font_size;
+    e->line_height = e->settings.font_size + 4;
+
+    /* Re-medir el ancho de carácter de la fuente nueva. */
+    int w = 0, h = 0;
+    TTF_GetStringSize(e->font, "M", 1, &w, &h);
+    e->char_w = w > 0 ? w : e->font_size / 2;
+    e->needs_redraw = 1;
 }
 
 /**
@@ -135,7 +159,7 @@ void editor_ensure_visible(Editor *e) {
     int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT -
                      SHORTCUT_HEIGHT) /
-                    LINE_HEIGHT;
+                    e->line_height;
     int vis_cols =
         (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
 
@@ -332,7 +356,9 @@ int editor_init(Editor *e, const char *filepath) {
 #ifdef _DEBUG
     fprintf(stderr, "STEP: load font\n");
 #endif
-    e->font = load_editor_font(FONT_SIZE);
+    e->font_size = e->settings.font_size;
+    e->line_height = e->settings.font_size + 4; /* alto de línea (16 -> 20) */
+    e->font = load_editor_font(e->font_size, e->settings.font_path);
     if (!e->font) {
         fprintf(
             stderr,
@@ -349,7 +375,7 @@ int editor_init(Editor *e, const char *filepath) {
         int w = 0, h = 0;
         TTF_GetStringSize(e->font, "M", 1, &w, &h);
         e->char_w =
-            w > 0 ? w : FONT_SIZE / 2; /* fallback si la medida fallara */
+            w > 0 ? w : e->font_size / 2; /* fallback si la medida fallara */
     }
 
     /* -- Panel explorador de archivos -- */

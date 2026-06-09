@@ -43,7 +43,7 @@ static void draw_toggle_button(Editor *e, int x, int y, const char *glyph) {
     fill_rect(e->renderer, x, y, FTREE_TOGGLE_BTN_W, FTREE_TOGGLE_BTN_H);
     /* Glifo centrado verticalmente (alto del botón menos alto de fuente,
      * mitad). */
-    draw_text_c(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - FONT_SIZE) / 2,
+    draw_text_c(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - e->font_size) / 2,
                 e->theme.ftree_txt_root);
     /* registrar para el hit-test: input usa ui_hit(UI_TOGGLE_TREE) en vez de
      * recalcular esta misma geometría. */
@@ -106,7 +106,7 @@ static void draw_tree_entry(Editor *e, const FEntry *en, int row_y, int panel_w,
     }
 
     /* texto centrado en la fila */
-    int text_y = row_y + (FTREE_ITEM_H - FONT_SIZE) / 2;
+    int text_y = row_y + (FTREE_ITEM_H - e->font_size) / 2;
     /* indentación según profundidad */
     int x = FTREE_PAD + en->depth * FTREE_INDENT;
     if (en->type == FTYPE_DIR)
@@ -200,7 +200,7 @@ void render_filetree(Editor *e) {
     else
         snprintf(root_label, sizeof(root_label), " CoffeeCode");
     draw_text_c(e, root_label, panel_x + FTREE_PAD,
-                header_y + (FTREE_HEADER_H - FONT_SIZE) / 2,
+                header_y + (FTREE_HEADER_H - e->font_size) / 2,
                 e->theme.ftree_txt_root);
 
     /* Ajustar el scroll al rango válido [0, max_scroll] según filas que caben.

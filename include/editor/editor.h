@@ -19,8 +19,8 @@
 #include <SDL3_ttf/SDL_ttf.h>
 
 /* -- Constantes de UI ----------------------------------------------------- */
-#define FONT_SIZE 16
-#define LINE_HEIGHT 20
+/* El tamaño de fuente y el alto de línea son AHORA runtime (e->font_size /
+ * e->line_height), derivados de las preferencias; ya no son constantes. */
 #define GUTTER_WIDTH 52
 #define PADDING_LEFT 8
 #define STATUS_HEIGHT 24
@@ -112,6 +112,8 @@ typedef struct {
     TTF_Font *font;         /* fuente monoespaciada cargada en runtime  */
     int win_w, win_h;       /* tamaño de la ventana en píxeles          */
     int char_w;             /* ancho de un carácter en px (monoespaciada) */
+    int font_size;          /* tamaño de la fuente en px (de settings)  */
+    int line_height;        /* alto de línea del área de texto en px     */
 
     /* -- pestañas -- */
     EditorTab tabs[MAX_TABS]; /* archivos abiertos (array fijo)         */
@@ -191,6 +193,9 @@ typedef struct {
 int editor_init(Editor *e, const char *filepath);
 void editor_free(Editor *e);
 void editor_run(Editor *e);
+/* Recarga la fuente desde las preferencias (settings.font_path/font_size) y
+ * recalcula char_w/line_height. Mantiene la fuente actual si la nueva falla. */
+void editor_reload_font(Editor *e);
 
 /* -- Lógica interna (usada entre módulos) --------------------------------- */
 void editor_update_lexer(Editor *e, int from_line);

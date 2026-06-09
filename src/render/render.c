@@ -258,7 +258,7 @@ void render_selection(Editor *e, int left_offset, int text_top,
         if (vi < 0 || vi >= visible_lines)
             continue; /* línea fuera de la vista */
 
-        int y = text_top + vi * LINE_HEIGHT;
+        int y = text_top + vi * e->line_height;
         /* primera línea: empieza en from_col; resto: desde la columna 0 */
         int col_start = (li == from_line) ? from_col : 0;
         /* última línea: termina en paint_to_col; resto: hasta el ancho visual
@@ -273,7 +273,7 @@ void render_selection(Editor *e, int left_offset, int text_top,
         if (x_end < x_start)
             x_end = x_start + e->char_w; /* asegurar ancho mínimo */
 
-        fill_rect(r, x_start, y, x_end - x_start, LINE_HEIGHT);
+        fill_rect(r, x_start, y, x_end - x_start, e->line_height);
     }
 }
 
@@ -296,7 +296,7 @@ static void draw_status_bar(Editor *e, const char *text) {
     set_color_c(r, e->theme.col_status_sep);
     fill_rect(r, 0, y, e->win_w, 1); /* separador superior de 1 px */
     /* centrado vertical: (alto barra - alto fuente) / 2 */
-    draw_text_c(e, text, 0, y + (STATUS_HEIGHT - FONT_SIZE) / 2,
+    draw_text_c(e, text, 0, y + (STATUS_HEIGHT - e->font_size) / 2,
                 e->theme.txt_status);
 }
 
@@ -339,11 +339,11 @@ static void render_empty_screen(Editor *e) {
 
     /* título dos líneas por encima del centro; cada pista una línea más abajo
      */
-    draw_text_c(e, title, center_x - title_w / 2, mid_y - LINE_HEIGHT * 2,
+    draw_text_c(e, title, center_x - title_w / 2, mid_y - e->line_height * 2,
                 e->theme.txt_welcome_title);
     for (int i = 0; i < 3; i++)
-        draw_text_c(e, hints[i], center_x - hint_w / 2, mid_y + LINE_HEIGHT * i,
-                    e->theme.txt_welcome_hint);
+        draw_text_c(e, hints[i], center_x - hint_w / 2,
+                    mid_y + e->line_height * i, e->theme.txt_welcome_hint);
 
     draw_status_bar(e, "  CoffeeCode");
     /* mostrar el frame (render_frame ya retornó) */
@@ -441,7 +441,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
     /* texto expandido */
     int line_len = get_line_text(e, li, line_buf, sizeof(line_buf));
     /* centrado vertical en la fila */
-    int text_y = y + (LINE_HEIGHT - FONT_SIZE) / 2;
+    int text_y = y + (e->line_height - e->font_size) / 2;
 
     if (!(li < lexer_cache_count(e->lex) &&
           lexer_cache_line(e->lex, li)->count > 0)) {
@@ -533,7 +533,7 @@ static void render_text_area(Editor *e, int left_offset, int text_top,
     for (int vi = 0; vi < visible_lines; vi++) {
         int li = e->scroll_line + vi; /* línea lógica de esta fila */
         if (li >= total_lines) break; /* no hay más texto */
-        render_text_line(e, li, text_top + vi * LINE_HEIGHT, text_x);
+        render_text_line(e, li, text_top + vi * e->line_height, text_x);
     }
 }
 
@@ -561,9 +561,10 @@ static void render_gutter(Editor *e, int left_offset, int text_top,
         char num[16];
         /* 1-based, alineado a la derecha */
         snprintf(num, sizeof(num), "%4d", li + 1);
-        int y = text_top + vi * LINE_HEIGHT;
+        int y = text_top + vi * e->line_height;
         draw_text_c(e, num, left_offset + GUTTER_NUM_PAD,
-                    y + (LINE_HEIGHT - FONT_SIZE) / 2, e->theme.txt_gutter_num);
+                    y + (e->line_height - e->font_size) / 2,
+                    e->theme.txt_gutter_num);
     }
 }
 
@@ -593,10 +594,10 @@ static void render_cursor(Editor *e, int left_offset, int text_top,
         return; /* fuera de vista */
 
     int cx = left_offset + GUTTER_WIDTH + PADDING_LEFT + vis_col * e->char_w;
-    int cy = text_top + vis_line * LINE_HEIGHT;
+    int cy = text_top + vis_line * e->line_height;
     set_color_c(e->renderer, e->theme.col_cursor);
     /* barra vertical del cursor */
-    fill_rect(e->renderer, cx, cy, CURSOR_W, LINE_HEIGHT);
+    fill_rect(e->renderer, cx, cy, CURSOR_W, e->line_height);
 }
 
 /**
@@ -635,7 +636,7 @@ void render_frame(Editor *e) {
     /* alto del área de texto = ventana menos las bandas de UI */
     int text_height = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT -
                       STATUS_HEIGHT - SHORTCUT_HEIGHT;
-    int visible_lines = text_height / LINE_HEIGHT; /* filas que caben */
+    int visible_lines = text_height / e->line_height; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
     set_color_c(r, e->theme.col_bg);
@@ -655,8 +656,8 @@ void render_frame(Editor *e) {
         int vi_cursor = e->cursor_line - e->scroll_line;
         if (vi_cursor >= 0 && vi_cursor < visible_lines) {
             set_color_c(r, e->theme.col_cursor_line);
-            fill_rect(r, 0, text_top + vi_cursor * LINE_HEIGHT, e->win_w,
-                      LINE_HEIGHT);
+            fill_rect(r, 0, text_top + vi_cursor * e->line_height, e->win_w,
+                      e->line_height);
         }
     }
 
