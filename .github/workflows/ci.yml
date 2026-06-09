@@ -1,0 +1,71 @@
+name: CI
+
+# Ejecuta los tests y compila la aplicación en cada push a las ramas
+# principales y en cada pull request.
+on:
+  push:
+    branches: [production, development]
+  pull_request:
+
+# Cancela ejecuciones antiguas del mismo ref si llega una nueva.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tests unitarios. No compila la app ni SDL (COFFEE_BUILD_APP=OFF), así que es
+  # rápido y robusto: solo descarga la pequeña librería ctests y compila los
+  # módulos puros (structs, buffer, lexer).
+  # ---------------------------------------------------------------------------
+  tests:
+    name: Tests (sin SDL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar (solo tests)
+        run: >
+          cmake -B build-tests
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCOFFEE_BUILD_APP=OFF
+          -DCOFFEE_BUILD_TESTS=ON
+
+      - name: Compilar tests
+        run: cmake --build build-tests -j
+
+      - name: Ejecutar tests (CTest)
+        run: ctest --test-dir build-tests --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Compilación de la aplicación completa (con SDL3/SDL3_ttf vendorizados) en
+  # Linux y Windows, para detectar roturas de build. Los tests se desactivan
+  # aquí porque ya los cubre el job anterior.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build app (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDL3 se compila desde fuente: en Linux necesita las cabeceras de
+      # X11/Wayland y audio. En Windows el SDK de MSVC ya las trae.
+      - name: Instalar dependencias de SDL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libgl1-mesa-dev libegl1-mesa-dev libgbm-dev \
+            libdrm-dev libasound2-dev libpulse-dev
+
+      - name: Configurar
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOFFEE_BUILD_TESTS=OFF
+
+      - name: Compilar
+        run: cmake --build build --config Release -j

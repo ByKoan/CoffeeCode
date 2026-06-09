@@ -21,10 +21,24 @@ option(COFFEE_NATIVE "Compilar optimizado para la CPU local (-march=native)" OFF
 # puede no enlazar por falta de runtime; funciona en Linux o con Clang.
 option(COFFEE_SANITIZE "Activar AddressSanitizer + UBSan en Debug" OFF)
 
+# Compilar la batería de tests unitarios (con la librería ctests, auto-descargada).
+# ON por defecto; desactívala con -DCOFFEE_BUILD_TESTS=OFF si solo quieres el editor.
+option(COFFEE_BUILD_TESTS "Compilar los tests unitarios (ctests)" ON)
+
+# Compilar la aplicación CoffeeCode (y sus dependencias SDL3/SDL3_ttf). Ponlo en
+# OFF para compilar SOLO los tests, sin descargar ni construir SDL (mucho más
+# rápido). Lo usa "Compile.bat test".
+option(COFFEE_BUILD_APP "Compilar la aplicación CoffeeCode (requiere SDL)" ON)
+
 # Force static everywhere — must be set before any FetchContent configures
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
+
+# === Aplicación CoffeeCode (SDL3/SDL3_ttf + el ejecutable) ===================
+# Todo este bloque solo se procesa si COFFEE_BUILD_APP=ON. Con OFF se omite la
+# descarga de SDL y la app, dejando únicamente los tests (build mucho más ligero).
+if(COFFEE_BUILD_APP)
 
 # -- SDL3 3.2.6 ---------------------------------------------------------------
 set(SDL_SHARED       OFF CACHE BOOL "" FORCE)
@@ -61,9 +75,9 @@ set(PACKAGE_VERSION_EXACT TRUE)
 ]])
 
 # -- SDL3_ttf 3.2.2 -----------------------------------------------------------
-# Usamos el flujo Declare+Populate+add_subdirectory para poder compilar
-# Freetype vendorizado antes de que SDL3_ttf lo busque.  CMP0169=OLD suprime
-# el warning de deprecación de FetchContent_Populate con detalles declarados.
+# Declare+Populate+add_subdirectory para fijar las opciones de SDL3_ttf antes de
+# configurarlo. CMP0169=OLD suprime el warning de deprecación de
+# FetchContent_Populate con detalles ya declarados.
 if(POLICY CMP0169)
     cmake_policy(SET CMP0169 OLD)
 endif()
@@ -76,71 +90,20 @@ FetchContent_Declare(
 )
 FetchContent_Populate(SDL3_ttf)
 
-# Compilar freetype vendored ANTES de que SDL3_ttf lo busque
-set(FREETYPE_SRC "${sdl3_ttf_SOURCE_DIR}/external/freetype")
-set(FREETYPE_BINARY "${CMAKE_BINARY_DIR}/_deps/freetype-build")
-
-# Deshabilitar dependencias opcionales de freetype que no tenemos
-set(FT_DISABLE_ZLIB    TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_BZIP2   TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_PNG     TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_HARFBUZZ TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_BROTLI  TRUE CACHE BOOL "" FORCE)
-add_subdirectory("${FREETYPE_SRC}" "${FREETYPE_BINARY}")
-
-# Crear alias y variables que find_package(Freetype REQUIRED) espera encontrar
-if(NOT TARGET Freetype::Freetype)
-    add_library(Freetype::Freetype ALIAS freetype)
-endif()
-set(FREETYPE_FOUND        TRUE  CACHE BOOL   "" FORCE)
-set(FREETYPE_LIBRARY      freetype CACHE STRING "" FORCE)
-set(FREETYPE_LIBRARIES    freetype CACHE STRING "" FORCE)
-set(FREETYPE_INCLUDE_DIRS "${FREETYPE_SRC}/include" CACHE STRING "" FORCE)
-set(FREETYPE_INCLUDE_DIR  "${FREETYPE_SRC}/include" CACHE STRING "" FORCE)
-set(FREETYPE_VERSION_STRING "2.13" CACHE STRING "" FORCE)
-
-# Escribir el redirect ANTES de add_subdirectory(SDL3_ttf)
-file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/freetype-config.cmake" "
-set(FREETYPE_FOUND TRUE)
-set(FREETYPE_LIBRARIES freetype)
-set(FREETYPE_INCLUDE_DIRS \"${FREETYPE_SRC}/include\")
-set(FREETYPE_INCLUDE_DIR  \"${FREETYPE_SRC}/include\")
-if(NOT TARGET Freetype::Freetype)
-    add_library(Freetype::Freetype ALIAS freetype)
-endif()
-")
-file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/freetype-config-version.cmake" "
-set(PACKAGE_VERSION \"2.13\")
-set(PACKAGE_VERSION_COMPATIBLE TRUE)
-set(PACKAGE_VERSION_EXACT TRUE)
-")
-
-# Ahora configurar SDL3_ttf — encontrará Freetype via cache+redirect
-set(SDL3TTF_VENDORED  ON  CACHE BOOL "" FORCE)
-set(SDL3TTF_SAMPLES   OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_INSTALL   OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_HARFBUZZ  OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_PLUTOSVG  OFF CACHE BOOL "" FORCE)
+# Opciones de SDL3_ttf. IMPORTANTE: las variables reales son SDLTTF_* (SIN el
+# "3"); usar SDL3TTF_* no tiene efecto y deja que SDL3_ttf elija sus defaults
+# (harfbuzz ON y freetype vendorizado), lo que en CI rompía el build.
+#
+# Dejamos que el propio SDL3_ttf vendorice y compile su freetype
+# (SDLTTF_FREETYPE_VENDORED = SDLTTF_VENDORED): así hay un ÚNICO target freetype
+# y no chocan dos definiciones. Desactivamos harfbuzz y plutosvg porque no los
+# necesitamos y evitan dependencias extra (harfbuzz, plutosvg, pkg-config...).
+set(SDLTTF_VENDORED ON  CACHE BOOL "" FORCE)
+set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)
+set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
+set(SDLTTF_SAMPLES  OFF CACHE BOOL "" FORCE)
+set(SDLTTF_INSTALL  OFF CACHE BOOL "" FORCE)
 add_subdirectory("${sdl3_ttf_SOURCE_DIR}" "${sdl3_ttf_BINARY_DIR}")
-
-# -- Generar font_data.h embebiendo assets/font.ttf ---------------------------
-set(FONT_TTF "${CMAKE_SOURCE_DIR}/assets/font.ttf")
-set(FONT_DATA_H "${CMAKE_SOURCE_DIR}/include/font_data.h")
-
-# Regenera font_data.h en tiempo de build solo cuando cambian font.ttf o el
-# generador. Antes usaba 'if(NOT EXISTS)', que nunca lo regeneraba porque el
-# header está commiteado y siempre existe.
-add_custom_command(
-    OUTPUT  "${FONT_DATA_H}"
-    COMMAND ${CMAKE_COMMAND}
-            -DFONT_TTF=${FONT_TTF}
-            -DFONT_DATA_H=${FONT_DATA_H}
-            -P "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
-    DEPENDS "${FONT_TTF}" "${CMAKE_SOURCE_DIR}/EmbedFont.cmake"
-    COMMENT "Generando font_data.h desde assets/font.ttf"
-    VERBATIM
-)
-add_custom_target(coffee_font_data DEPENDS "${FONT_DATA_H}")
 
 # -- Icono (.ico en la raíz del proyecto) -------------------------------------
 # Fuentes: main.c en la raíz de src/ + cada módulo en src/<modulo>/<modulo>.c
@@ -171,8 +134,13 @@ endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
-# font_data.h debe generarse antes de compilar editor.c (que lo incluye)
-add_dependencies(CoffeeCode coffee_font_data)
+# La fuente ya no va embebida: se carga en runtime (SDL_GetBasePath()/font.ttf).
+# Copiamos font.ttf junto al ejecutable tras compilar.
+add_custom_command(TARGET CoffeeCode POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/assets/font.ttf"
+            "$<TARGET_FILE_DIR:CoffeeCode>/font.ttf"
+    COMMENT "Copiando font.ttf junto al ejecutable")
 
 # Cabeceras en include/, organizadas en subcarpetas por módulo
 # (los includes usan prefijo de módulo: #include "editor/editor.h")
@@ -260,11 +228,30 @@ else()
     message(STATUS "LTO no disponible: ${COFFEE_IPO_MSG}")
 endif()
 
+endif() # COFFEE_BUILD_APP
+
+# -- Tests unitarios (ctests) -------------------------------------------------
+# La librería de tests se auto-descarga con FetchContent (no hay que instalarla).
+# Solo cubre los módulos "puros" (sin SDL): structs, buffer y lexer.
+# Ejecuta la batería con:   ctest --test-dir <build> --output-on-failure
+if(COFFEE_BUILD_TESTS)
+    FetchContent_Declare(
+        ctests
+        GIT_REPOSITORY https://github.com/desmonHak/ctests.git
+        GIT_TAG        v1.0.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(ctests)
+    enable_testing()
+    add_subdirectory(test)
+endif()
+
 # -- Resumen de configuración -------------------------------------------------
 message(STATUS "----------------------------------------------")
 message(STATUS " CoffeeCode")
 message(STATUS "   build type   : ${CMAKE_BUILD_TYPE}")
 message(STATUS "   native       : ${COFFEE_NATIVE}")
 message(STATUS "   sanitizers   : ${COFFEE_SANITIZE}")
+message(STATUS "   tests        : ${COFFEE_BUILD_TESTS}")
 message(STATUS "   LTO (Release): ${COFFEE_IPO_OK}")
 message(STATUS "----------------------------------------------")

@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/desmonHak/CoffeeCode/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/desmonHak/CoffeeCode/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Lenguaje C11" src="https://img.shields.io/badge/Lenguaje-C11-00599C?logo=c&logoColor=white">
   <img alt="Plataformas" src="https://img.shields.io/badge/Plataformas-Windows%20%7C%20Linux-2ea44f">
   <img alt="Gráficos SDL3" src="https://img.shields.io/badge/Gr%C3%A1ficos-SDL3-1e90ff">
@@ -31,8 +32,38 @@
 
 Guía completa en **[doc/how_build.md](doc/how_build.md)**.
 
-- **Windows:** `Compile.bat release` &nbsp;(o `debug` / `native` / `asan` / `clean`)
+- **Windows:** `Compile.bat release` &nbsp;(o `debug` / `native` / `asan` / `test` / `clean`)
 - **Linux:** `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`
+
+## Tests
+
+Pruebas unitarias de los módulos puros (estructuras genéricas, gap buffer y
+lexer) con la librería [**ctests**](https://github.com/desmonHak/ctests), que se
+**descarga sola** vía CMake (FetchContent). No hay que instalar nada.
+
+- **Windows (todos los tests):**
+
+  ```bat
+  Compile.bat test
+  ```
+
+  Compila solo la batería de tests (sin SDL ni la app) y la ejecuta, mostrando
+  el informe completo de ctests (suites, casos, resumen).
+
+- **Linux / CMake manual:**
+
+  ```bash
+  cmake -B build-tests -DCOFFEE_BUILD_APP=OFF -DCOFFEE_BUILD_TESTS=ON
+  cmake --build build-tests -j
+  ctest --test-dir build-tests --output-on-failure
+  ```
+
+  Para ver el informe detallado de cada suite, ejecuta los binarios
+  directamente (`build-tests/test/test_*`).
+
+`-DCOFFEE_BUILD_APP=OFF` evita descargar y compilar SDL: solo se construye lo
+necesario para testear. Cada test es además un test de **CTest**, así que se
+integran con CLion / VS Code.
 
 ## Documentación
 
@@ -67,11 +98,13 @@ Guía completa en **[doc/how_build.md](doc/how_build.md)**.
 CoffeeCode/
 ├-- CMakeLists.txt
 ├-- Compile.bat            ← build en Windows (modos release/debug/native/asan/clean)
-├-- EmbedFont.cmake        ← genera include/font_data.h embebiendo la fuente
-├-- assets/                ← logo, icono y fuente
+├-- assets/                ← logo, icono y fuente (font.ttf se carga en runtime)
 ├-- include/<modulo>/      ← cabeceras (una carpeta por modulo)
 └-- src/<modulo>/          ← fuentes  (una carpeta por modulo)
 ```
+
+> La fuente se lee de `font.ttf` en runtime (junto al ejecutable, o vía la
+> variable de entorno `COFFEECODE_FONT`); ya no va embebida en el binario.
 
 Módulos: `buffer` (gap buffer de texto), `editor` (núcleo: pestañas, undo/redo), `lexer` (resaltado), `filetree` (explorador), `input` (entrada) y `render` (renderizador). Los includes de módulo usan prefijo de carpeta, p. ej. `#include "editor/editor.h"`.
 
