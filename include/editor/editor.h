@@ -167,6 +167,10 @@ typedef struct {
     /* estado */
     int running;      /* 0 termina el bucle principal                   */
     int needs_redraw; /* 1 = hay que redibujar en el próximo frame      */
+
+    /* cursor parpadeante */
+    Uint64 cursor_blink_ms;  /* timestamp del último cambio de estado del cursor */
+    int    cursor_visible;   /* 1 = cursor visible, 0 = cursor oculto (blink)    */
 } Editor;
 
 /* -- Ciclo de vida -------------------------------------------------------- */
@@ -178,6 +182,9 @@ void editor_run(Editor *e);
 void editor_update_lexer(Editor *e, int from_line);
 void editor_sync_cursor(Editor *e); /* actualiza cursor_line/col desde buf */
 void editor_ensure_visible(Editor *e);
+/* Reinicia el timer del parpadeo del cursor (llamar tras cualquier edición o
+ * movimiento para que el cursor siempre empiece visible tras una acción). */
+void editor_cursor_blink_reset(Editor *e);
 size_t editor_pos_from_line_col(Editor *e, int line, int col);
 
 /* -- NUEVO: undo/redo API (usada desde input.c) --------------------------- */

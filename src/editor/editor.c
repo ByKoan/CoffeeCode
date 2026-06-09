@@ -201,6 +201,18 @@ void editor_sel_clear(Editor *e) {
     e->sel_active = 0;
 }
 
+/**
+ * @brief Reinicia el timer del parpadeo del cursor y lo pone visible.
+ *
+ * Debe llamarse cada vez que el cursor se mueve o se edita texto, para que el
+ * cursor arranque siempre visible tras una acción del usuario y no aparezca
+ * en su fase "oculta" justo después de pulsar una tecla.
+ */
+void editor_cursor_blink_reset(Editor *e) {
+    e->cursor_visible = 1;
+    e->cursor_blink_ms = SDL_GetTicks();
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * ARRANQUE / CIERRE / BUCLE PRINCIPAL
  * ═══════════════════════════════════════════════════════════════════════════
@@ -238,6 +250,8 @@ int editor_init(Editor *e, const char *filepath) {
     e->needs_redraw = 1;
     e->menu_hovered = -1;
     e->find.result_line = -1;
+    e->cursor_visible = 1;          /* cursor visible al arrancar */
+    e->cursor_blink_ms = SDL_GetTicks(); /* iniciar timer del parpadeo */
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -361,22 +375,27 @@ void editor_free(Editor *e) {
 /**
  * @brief Bucle principal: espera eventos, los procesa, autoguarda y redibuja.
  *
- * Es un bucle "perezoso" guiado por eventos (no redibuja a 60 FPS constantes):
- *   - @c SDL_WaitEventTimeout(&ev, 16): bloquea hasta 16 ms esperando un
- * evento. Si llega antes, despierta; si no, sigue tras el timeout. Así la app
- * no consume CPU cuando está inactiva, pero refresca a ~60 Hz como tope.
- *   - Tras el primer evento, @c SDL_PollEvent vacía sin bloquear el resto de la
- *     cola (varias pulsaciones acumuladas) antes de redibujar una sola vez.
- *   - Solo se llama a @c render_frame cuando @c needs_redraw está activo,
- * evitando dibujar frames idénticos.
+ * El bucle corre a 60 FPS garantizados mediante SDL_WaitEventTimeout con
+ * un timeout de 16 ms (~1 frame a 60 Hz). En cada iteración:
+ *   - Se procesan todos los eventos pendientes de la cola.
+ *   - Se actualiza el parpadeo del cursor (530 ms encendido / 530 ms apagado),
+ *     marcando needs_redraw cuando cambia de estado para no dibujar de más.
+ *   - Se redibuja si algo cambió (needs_redraw activo).
+ *
+ * Así la app mantiene respuesta inmediata ante entrada del usuario Y animaciones
+ * fluidas (cursor parpadeante) sin quemar CPU cuando no hay actividad.
  */
+#define CURSOR_BLINK_MS 530  /* medio periodo del parpadeo del cursor (ms) */
+
 void editor_run(Editor *e) {
     SDL_Event ev;
     while (e->running) {
-        /* Esperar un evento (hasta 16 ms) y luego drenar los demás de la cola.
-         */
+        /* Esperar un evento hasta 16 ms (= 1 frame a 60 Hz).
+         * Si llega antes, procesarlo; si no, el timeout fuerza la siguiente
+         * iteración garantizando que siempre revisamos el blink y redibujamos. */
         if (SDL_WaitEventTimeout(&ev, 16)) {
             input_handle_event(e, &ev);
+            /* Drenar el resto de la cola sin bloquear */
             while (SDL_PollEvent(&ev))
                 input_handle_event(e, &ev);
         }
@@ -408,6 +427,18 @@ void editor_run(Editor *e) {
             }
         }
 
+        /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
+         * Solo se marca needs_redraw cuando cambia el estado, evitando
+         * redibujos innecesarios cuando el cursor no ha cambiado. */
+        {
+            Uint64 now = SDL_GetTicks();
+            if (now - e->cursor_blink_ms >= CURSOR_BLINK_MS) {
+                e->cursor_visible = !e->cursor_visible;
+                e->cursor_blink_ms = now;
+                e->needs_redraw = 1;
+            }
+        }
+
         /* Redibujar solo si algo cambió desde el último frame. */
         if (e->needs_redraw) {
             render_frame(e);
@@ -415,3 +446,4 @@ void editor_run(Editor *e) {
         }
     }
 }
+

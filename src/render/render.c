@@ -556,6 +556,10 @@ static void render_gutter(Editor *e, int left_offset, int text_top,
  */
 static void render_cursor(Editor *e, int left_offset, int text_top,
                           int visible_lines) {
+    /* Respetar el estado de parpadeo: si el cursor está en su fase "oculta",
+     * no dibujar nada (el parpadeo se gestiona en editor_run). */
+    if (!e->cursor_visible) return;
+
     /* fila del cursor en la vista */
     int vis_line = e->cursor_line - e->scroll_line;
     /* columna del cursor en la vista */
