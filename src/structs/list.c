@@ -8,12 +8,12 @@
  * ::list_init) y copia bytes con @c memcpy. La particularidad está en CÓMO se
  * almacena el dato genérico: cada nodo se reserva con UNA sola llamada a @c
  * malloc que pide @c sizeof(ListNode) @c + @c elem bytes; el campo @c data es
- * un "array miembro flexible" (@c max_align_t @c data[]) que apunta justo
+ * un "array miembro flexible" (@c ListMaxAlign @c data[]) que apunta justo
  * detrás de los punteros prev/next, dentro del MISMO bloque. Ventajas frente a
  * guardar un
  * @c void* al dato: una asignación por nodo (no dos), mejor localidad de caché
- * y menos fragmentación. @c max_align_t garantiza que el dato queda
- * correctamente alineado para cualquier tipo.
+ * y menos fragmentación. @c ListMaxAlign (unión de los tipos más exigentes)
+ * garantiza que el dato queda correctamente alineado para cualquier tipo.
  *
  * Al ser doblemente enlazada (cada nodo conoce a su anterior y siguiente), dado
  * un nodo se puede insertar o borrar en O(1) sin recorrer la lista. El
