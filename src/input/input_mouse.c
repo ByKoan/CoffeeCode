@@ -30,7 +30,6 @@
 #define HIT_FTREE_HEADER_H 26
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
-#define HIT_SCROLLBAR_X 9 /* ancho de la pista + borde (SCROLLBAR_W + 1) */
 
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
@@ -574,8 +573,8 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     /* Área principal (bajo navbar + pestañas) */
     if (my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) return; /* clic en navbar vacía */
 
-    /* Clic en la scrollbar: iniciar arrastre del thumb */
-    if (mx >= e->win_w - HIT_SCROLLBAR_X) {
+    /* Clic en la scrollbar (registrada por render solo si existe): arrastrar */
+    if (ui_hit(&e->ui, UI_SCROLLBAR, mx, my)) {
         e->scrollbar_dragging = 1;      /* activar modo arrastre del thumb  */
         e->scrollbar_drag_start_y = my; /* Y de partida del arrastre        */
         e->scrollbar_drag_start_line = e->scroll_line; /* scroll de partida */

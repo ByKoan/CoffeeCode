@@ -484,6 +484,11 @@ void render_scrollbar(Editor *e, int left_offset) {
                TAB_BAR_HEIGHT; /* Y de inicio (bajo navbar y pestañas) */
     int sb_h = text_height;    /* alto del carril */
 
+    /* registrar el carril para el hit-test: input arranca el arrastre con
+     * ui_hit(UI_SCROLLBAR), y solo cuando hay scrollbar (se llegó hasta aquí).
+     */
+    ui_put(&e->ui, UI_SCROLLBAR, (Rect){sb_x, sb_y, e->win_w - sb_x, sb_h});
+
     set_color(r, COL_SB_TRACK);
     fill_rect(r, sb_x, sb_y, SCROLLBAR_W, sb_h); /* carril de fondo */
 
