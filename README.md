@@ -31,8 +31,38 @@
 
 Guía completa en **[doc/how_build.md](doc/how_build.md)**.
 
-- **Windows:** `Compile.bat release` &nbsp;(o `debug` / `native` / `asan` / `clean`)
+- **Windows:** `Compile.bat release` &nbsp;(o `debug` / `native` / `asan` / `test` / `clean`)
 - **Linux:** `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`
+
+## Tests
+
+Pruebas unitarias de los módulos puros (estructuras genéricas, gap buffer y
+lexer) con la librería [**ctests**](https://github.com/desmonHak/ctests), que se
+**descarga sola** vía CMake (FetchContent). No hay que instalar nada.
+
+- **Windows (todos los tests):**
+
+  ```bat
+  Compile.bat test
+  ```
+
+  Compila solo la batería de tests (sin SDL ni la app) y la ejecuta, mostrando
+  el informe completo de ctests (suites, casos, resumen).
+
+- **Linux / CMake manual:**
+
+  ```bash
+  cmake -B build-tests -DCOFFEE_BUILD_APP=OFF -DCOFFEE_BUILD_TESTS=ON
+  cmake --build build-tests -j
+  ctest --test-dir build-tests --output-on-failure
+  ```
+
+  Para ver el informe detallado de cada suite, ejecuta los binarios
+  directamente (`build-tests/test/test_*`).
+
+`-DCOFFEE_BUILD_APP=OFF` evita descargar y compilar SDL: solo se construye lo
+necesario para testear. Cada test es además un test de **CTest**, así que se
+integran con CLion / VS Code.
 
 ## Documentación
 

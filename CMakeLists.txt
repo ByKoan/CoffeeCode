@@ -21,10 +21,24 @@ option(COFFEE_NATIVE "Compilar optimizado para la CPU local (-march=native)" OFF
 # puede no enlazar por falta de runtime; funciona en Linux o con Clang.
 option(COFFEE_SANITIZE "Activar AddressSanitizer + UBSan en Debug" OFF)
 
+# Compilar la batería de tests unitarios (con la librería ctests, auto-descargada).
+# ON por defecto; desactívala con -DCOFFEE_BUILD_TESTS=OFF si solo quieres el editor.
+option(COFFEE_BUILD_TESTS "Compilar los tests unitarios (ctests)" ON)
+
+# Compilar la aplicación CoffeeCode (y sus dependencias SDL3/SDL3_ttf). Ponlo en
+# OFF para compilar SOLO los tests, sin descargar ni construir SDL (mucho más
+# rápido). Lo usa "Compile.bat test".
+option(COFFEE_BUILD_APP "Compilar la aplicación CoffeeCode (requiere SDL)" ON)
+
 # Force static everywhere — must be set before any FetchContent configures
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
+
+# === Aplicación CoffeeCode (SDL3/SDL3_ttf + el ejecutable) ===================
+# Todo este bloque solo se procesa si COFFEE_BUILD_APP=ON. Con OFF se omite la
+# descarga de SDL y la app, dejando únicamente los tests (build mucho más ligero).
+if(COFFEE_BUILD_APP)
 
 # -- SDL3 3.2.6 ---------------------------------------------------------------
 set(SDL_SHARED       OFF CACHE BOOL "" FORCE)
@@ -246,11 +260,30 @@ else()
     message(STATUS "LTO no disponible: ${COFFEE_IPO_MSG}")
 endif()
 
+endif() # COFFEE_BUILD_APP
+
+# -- Tests unitarios (ctests) -------------------------------------------------
+# La librería de tests se auto-descarga con FetchContent (no hay que instalarla).
+# Solo cubre los módulos "puros" (sin SDL): structs, buffer y lexer.
+# Ejecuta la batería con:   ctest --test-dir <build> --output-on-failure
+if(COFFEE_BUILD_TESTS)
+    FetchContent_Declare(
+        ctests
+        GIT_REPOSITORY https://github.com/desmonHak/ctests.git
+        GIT_TAG        v1.0.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(ctests)
+    enable_testing()
+    add_subdirectory(test)
+endif()
+
 # -- Resumen de configuración -------------------------------------------------
 message(STATUS "----------------------------------------------")
 message(STATUS " CoffeeCode")
 message(STATUS "   build type   : ${CMAKE_BUILD_TYPE}")
 message(STATUS "   native       : ${COFFEE_NATIVE}")
 message(STATUS "   sanitizers   : ${COFFEE_SANITIZE}")
+message(STATUS "   tests        : ${COFFEE_BUILD_TESTS}")
 message(STATUS "   LTO (Release): ${COFFEE_IPO_OK}")
 message(STATUS "----------------------------------------------")
