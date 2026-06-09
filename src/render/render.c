@@ -122,12 +122,12 @@ void stroke_rect(SDL_Renderer *r, int x, int y, int w, int h) {
  * @return Ancho en píxeles del texto dibujado (útil para colocar lo siguiente),
  * 0 si no se dibujó nada.
  */
-int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G,
-              uint8_t B) {
-    if (!text || !text[0]) return 0; /* nada que dibujar */
-    SDL_Color col = {R, G, B, 255};  /* color opaco para el glifo */
+int draw_text_font(Editor *e, TTF_Font *font, const char *text, int x, int y,
+                   Color c) {
+    if (!font || !text || !text[0]) return 0; /* nada que dibujar */
+    SDL_Color col = {c.r, c.g, c.b, 255};     /* color opaco para el glifo */
     /* texto -> píxeles (RAM) */
-    SDL_Surface *surf = TTF_RenderText_Blended(e->font, text, 0, col);
+    SDL_Surface *surf = TTF_RenderText_Blended(font, text, 0, col);
     if (!surf) return 0; /* fallo de rasterizado */
     /* subir a la GPU */
     SDL_Texture *tex = SDL_CreateTextureFromSurface(e->renderer, surf);
@@ -138,6 +138,12 @@ int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G,
     SDL_DestroySurface(surf); /* liberar surface (RAM) */
     SDL_DestroyTexture(tex);  /* liberar textura (GPU) */
     return w;
+}
+
+int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G,
+              uint8_t B) {
+    Color c = {R, G, B, 255};
+    return draw_text_font(e, e->font, text, x, y, c); /* fuente del editor */
 }
 
 /**

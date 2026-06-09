@@ -53,6 +53,7 @@ typedef enum {
     UI_PREF_TABW_INC,   /**< Stepper ancho de tab: +.                 */
     UI_PREF_FONTSZ_DEC, /**< Stepper tamaño de fuente: −.             */
     UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
+    UI_PREF_FONT_LIST,  /**< Área de la lista de fuentes (para la rueda). */
     UI_ID_COUNT
 } UiId;
 
@@ -62,6 +63,7 @@ typedef enum {
     UI_LIST_TAB_CLOSE, /**< Botón "x" de cada pestaña.       */
     UI_LIST_TREE_ROW,  /**< Filas del explorador de archivos.*/
     UI_LIST_MENU_ITEM, /**< Items del menú "Archivo".        */
+    UI_LIST_PREF_FONT, /**< Filas de la lista de fuentes.    */
     UI_LIST_COUNT
 } UiList;
 

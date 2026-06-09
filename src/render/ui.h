@@ -47,3 +47,29 @@ int ui_label(Editor *e, int x, int y, const char *text, Color c);
  */
 void ui_button(Editor *e, UiId id, Rect r, const char *label, const UiStyle *st,
                UiState state);
+
+/** Callback que dibuja el contenido de una fila de ::ui_list. */
+typedef void (*UiRowDraw)(Editor *e, int index, Rect row, int selected,
+                          void *ud);
+
+/**
+ * @brief Lista vertical con scroll y selección (componente reutilizable).
+ *
+ * Pinta el panel, las filas visibles (su contenido lo dibuja @p draw_row), el
+ * resaltado de la fila seleccionada y un pulgar de scroll. Registra el área
+ * (@p area_id) y cada fila visible (@p row_list + índice) en e->ui para que el
+ * input resuelva clics y rueda con ui_hit / ui_hit_idx.
+ *
+ * @param bounds   Rectángulo de la lista.
+ * @param area_id  Id para registrar el área completa (rueda del ratón).
+ * @param row_list Familia indexada para registrar cada fila.
+ * @param count    Nº total de filas.
+ * @param row_h    Alto de cada fila en px.
+ * @param scroll   [in/out] primera fila visible; se recorta a rango válido.
+ * @param selected Fila seleccionada (-1 = ninguna).
+ * @param draw_row Callback que pinta el contenido de cada fila.
+ * @param ud       Dato opaco que se pasa a @p draw_row.
+ */
+void ui_list(Editor *e, Rect bounds, UiId area_id, UiList row_list, int count,
+             int row_h, int *scroll, int selected, UiRowDraw draw_row,
+             void *ud);

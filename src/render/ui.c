@@ -83,3 +83,47 @@ void ui_button(Editor *e, UiId id, Rect r, const char *label, const UiStyle *st,
 
     if (id != UI_ID_NONE) ui_put(&e->ui, id, r);
 }
+
+void ui_list(Editor *e, Rect bounds, UiId area_id, UiList row_list, int count,
+             int row_h, int *scroll, int selected, UiRowDraw draw_row,
+             void *ud) {
+    SDL_Renderer *r = e->renderer;
+
+    /* Panel de fondo + registro del área completa (para la rueda del ratón). */
+    ui_panel(e, bounds, e->theme.col_menu_bg, e->theme.col_menu_border);
+    ui_put(&e->ui, area_id, bounds);
+
+    int visible = (row_h > 0) ? bounds.h / row_h : 0;
+    int max_scroll = count - visible;
+    if (max_scroll < 0) max_scroll = 0;
+    /* recortar el scroll a un rango válido (in/out) */
+    if (*scroll < 0) *scroll = 0;
+    if (*scroll > max_scroll) *scroll = max_scroll;
+
+    int sb_w =
+        (count > visible) ? 6 : 0; /* hueco del scrollbar si hace falta */
+    int row_w = bounds.w - sb_w;
+
+    /* Filas visibles: resaltado de selección + contenido (callback) + hit-test
+     */
+    for (int v = 0; v < visible; v++) {
+        int i = *scroll + v;
+        if (i >= count) break;
+        Rect rr = {bounds.x, bounds.y + v * row_h, row_w, row_h};
+        if (i == selected) {
+            set_color_c(r, e->theme.col_menu_hover);
+            fill_rect(r, rr.x, rr.y, rr.w, rr.h);
+        }
+        draw_row(e, i, rr, i == selected, ud);
+        ui_put_idx(&e->ui, row_list, i, rr);
+    }
+
+    /* Pulgar de scroll proporcional. */
+    if (sb_w && max_scroll > 0) {
+        int thumb_h = bounds.h * visible / count;
+        if (thumb_h < 16) thumb_h = 16;
+        int thumb_y = bounds.y + (bounds.h - thumb_h) * (*scroll) / max_scroll;
+        set_color_c(r, e->theme.col_sb_thumb);
+        fill_rect(r, bounds.x + bounds.w - sb_w, thumb_y, sb_w, thumb_h);
+    }
+}

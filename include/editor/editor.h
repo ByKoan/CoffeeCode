@@ -187,6 +187,7 @@ typedef struct {
 
     /* fuentes del sistema descubiertas (para el selector de preferencias) */
     FontList fonts;
+    int font_list_scroll; /* primera fila visible en la lista de fuentes */
 
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */

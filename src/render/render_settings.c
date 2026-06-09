@@ -11,6 +11,7 @@
 #include "render_internal.h"
 #include "ui.h"
 #include <stdio.h>
+#include <string.h>
 
 /* -- Geometría (px) -------------------------------------------------------- */
 #define PREF_HEADER_H 44 /* alto de la cabecera                       */
@@ -95,6 +96,62 @@ static void pref_choice(Editor *e, UiId id, int x, int y, int w,
     ui_button(e, id, box, value, &e->theme.style_button, UI_NORMAL);
 }
 
+/* -- Lista de fuentes con previsualización --------------------------------- */
+
+/* Abrir una TTF por fila y frame sería costoso: cacheamos las últimas abiertas
+ * (por ruta + tamaño). Al llenarse, se vacía entera cerrando las fuentes. */
+#define PREVIEW_CACHE 32
+static struct {
+    char path[512];
+    TTF_Font *font;
+    int size;
+} g_prev[PREVIEW_CACHE];
+static int g_prev_n;
+
+/** Devuelve (cacheada) la fuente de @p path al tamaño @p size, o NULL. */
+static TTF_Font *preview_font(const char *path, int size) {
+    for (int i = 0; i < g_prev_n; i++)
+        if (g_prev[i].size == size && strcmp(g_prev[i].path, path) == 0)
+            return g_prev[i].font;
+    if (g_prev_n == PREVIEW_CACHE) { /* cache llena: vaciarla entera */
+        for (int i = 0; i < g_prev_n; i++)
+            if (g_prev[i].font) TTF_CloseFont(g_prev[i].font);
+        g_prev_n = 0;
+    }
+    TTF_Font *f = TTF_OpenFont(path, size);
+    if (!f) return NULL;
+    snprintf(g_prev[g_prev_n].path, sizeof g_prev[g_prev_n].path, "%s", path);
+    g_prev[g_prev_n].font = f;
+    g_prev[g_prev_n].size = size;
+    g_prev_n++;
+    return f;
+}
+
+/**
+ * @brief Callback de ::ui_list para una fila de la lista de fuentes.
+ *
+ * Dibuja el nombre de la fuente CON su propia fuente (preview), para que se vea
+ * su aspecto. La fila 0 es "Predeterminada" (se dibuja con la fuente del
+ * editor).
+ */
+static void font_row(Editor *e, int i, Rect row, int selected, void *ud) {
+    (void)ud;
+    (void)selected;
+    Color c = e->theme.tokens[TOK_DEFAULT];
+    int tx = row.x + 8;
+    int ty = row.y + (row.h - e->font_size) / 2;
+    if (i == 0) {
+        draw_text_c(e, "Predeterminada", tx, ty, c);
+        return;
+    }
+    const FontEntry *fe = &e->fonts.items[i - 1];
+    TTF_Font *pf = preview_font(fe->path, e->font_size);
+    if (pf)
+        draw_text_font(e, pf, fe->name, tx, ty, c);
+    else
+        draw_text_c(e, fe->name, tx, ty, c); /* fallback: fuente del editor */
+}
+
 void render_settings_view(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
@@ -121,9 +178,6 @@ void render_settings_view(Editor *e) {
     pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
                 theme_name(e->settings.theme));
     y += PREF_ROW_H;
-    pref_choice(e, UI_PREF_FONT, x, y, col_w, "Fuente",
-                fonts_name_for(&e->fonts, e->settings.font_path));
-    y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_FONTSZ_DEC, UI_PREF_FONTSZ_INC, x, y, col_w,
                  "Tamano de fuente", e->settings.font_size);
     y += PREF_ROW_H + 12;
@@ -134,5 +188,18 @@ void render_settings_view(Editor *e) {
     y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_TABW_DEC, UI_PREF_TABW_INC, x, y, col_w,
                  "Ancho de tabulacion", e->settings.tab_width);
-    y += PREF_ROW_H;
+    y += PREF_ROW_H + 12;
+
+    /* -- Sección Fuente: lista con scroll, cada nombre en su propia fuente --
+     */
+    y = pref_section(e, x, y, "Fuente (clic para elegir)");
+    int sel = e->settings.font_path[0]
+                  ? fonts_index_of(&e->fonts, e->settings.font_path) + 1
+                  : 0; /* fila 0 = Predeterminada */
+    int row_h = e->font_size + 14;
+    int list_h = e->win_h - y - 24;
+    if (list_h < row_h * 3) list_h = row_h * 3;
+    Rect lb = {x, y, col_w, list_h};
+    ui_list(e, lb, UI_PREF_FONT_LIST, UI_LIST_PREF_FONT, e->fonts.count + 1,
+            row_h, &e->font_list_scroll, sel, font_row, NULL);
 }

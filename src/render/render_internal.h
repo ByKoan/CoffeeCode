@@ -30,6 +30,9 @@ int draw_text(Editor *e, const char *text, int x, int y, uint8_t R, uint8_t G,
               uint8_t B);
 /* draw_text desde un Color del tema (usa c.r/c.g/c.b; ignora el alfa) */
 int draw_text_c(Editor *e, const char *text, int x, int y, Color c);
+/* draw_text con una fuente concreta (para previsualizar fuentes del sistema) */
+int draw_text_font(Editor *e, TTF_Font *font, const char *text, int x, int y,
+                   Color c);
 /* get_line_text: copia la línea a 'out' expandiendo tabs; devuelve su longitud.
  */
 int get_line_text(Editor *e, int line, char *out, int max);
