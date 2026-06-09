@@ -1,6 +1,7 @@
 /**
  * @file list.h
- * @brief Lista doblemente enlazada genérica con los datos almacenados en el nodo.
+ * @brief Lista doblemente enlazada genérica con los datos almacenados en el
+ * nodo.
  *
  * Cada nodo guarda su elemento "inline" (una sola asignación por nodo, mejor
  * localidad y menos @c malloc). El tamaño del elemento se fija en ::list_init.
@@ -40,48 +41,61 @@ typedef struct {
 
 /**
  * @brief Inicializa una lista vacía para elementos de @p elem_size bytes.
+ * @param l Lista a inicializar (no nula).
+ * @param elem_size Tamaño de cada elemento en bytes (> 0).
  * @return 1 siempre.
  */
 int list_init(List *l, size_t elem_size);
 
 /**
  * @brief Libera todos los nodos y deja la lista vacía.
+ * @param l Lista (no nula).
  */
 void list_free(List *l);
 
 /**
  * @brief Elimina todos los nodos (equivalente a ::list_free, reutilizable).
+ * @param l Lista (no nula).
  */
 void list_clear(List *l);
 
 /**
  * @brief Inserta una copia de @p item al final.
+ * @param l Lista (no nula).
+ * @param item Puntero a @c elem bytes a copiar (no nulo).
  * @return El nodo creado, o @c NULL si falló la asignación.
  */
 ListNode *list_push_back(List *l, const void *item);
 
 /**
  * @brief Inserta una copia de @p item al principio.
+ * @param l Lista (no nula).
+ * @param item Puntero a @c elem bytes a copiar (no nulo).
  * @return El nodo creado, o @c NULL si falló la asignación.
  */
 ListNode *list_push_front(List *l, const void *item);
 
 /**
  * @brief Inserta una copia de @p item justo antes de @p ref.
+ * @param l Lista (no nula).
  * @param ref Nodo de referencia (no nulo, perteneciente a @p l).
+ * @param item Puntero a @c elem bytes a copiar (no nulo).
  * @return El nodo creado, o @c NULL si falló la asignación.
  */
 ListNode *list_insert_before(List *l, ListNode *ref, const void *item);
 
 /**
  * @brief Inserta una copia de @p item justo después de @p ref.
+ * @param l Lista (no nula).
  * @param ref Nodo de referencia (no nulo, perteneciente a @p l).
+ * @param item Puntero a @c elem bytes a copiar (no nulo).
  * @return El nodo creado, o @c NULL si falló la asignación.
  */
 ListNode *list_insert_after(List *l, ListNode *ref, const void *item);
 
 /**
  * @brief Extrae el primer elemento.
+ * @param l Lista (no nula).
  * @param out Destino de @c elem bytes, o @c NULL para descartar.
  * @return 1 si había elemento, 0 si la lista estaba vacía.
  */
@@ -89,6 +103,7 @@ int list_pop_front(List *l, void *out);
 
 /**
  * @brief Extrae el último elemento.
+ * @param l Lista (no nula).
  * @param out Destino de @c elem bytes, o @c NULL para descartar.
  * @return 1 si había elemento, 0 si la lista estaba vacía.
  */

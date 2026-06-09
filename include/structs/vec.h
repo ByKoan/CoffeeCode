@@ -1,10 +1,12 @@
 /**
  * @file vec.h
- * @brief Vector genérico (array dinámico) basado en @c void* y tamaño de elemento.
+ * @brief Vector genérico (array dinámico) basado en @c void* y tamaño de
+ * elemento.
  *
  * Almacena elementos de cualquier tipo en un buffer contiguo que crece de forma
- * amortizada O(1) (duplicando capacidad). Es type-erased: el tamaño del elemento
- * se fija en @ref vec_init y todas las operaciones trabajan con copias de bytes.
+ * amortizada O(1) (duplicando capacidad). Es type-erased: el tamaño del
+ * elemento se fija en @ref vec_init y todas las operaciones trabajan con copias
+ * de bytes.
  *
  * Acceso en caliente: usa el accesor @c static @c inline ::vec_at o la macro
  * tipada ::VEC_AT para evitar coste de llamada en bucles ajustados.
@@ -69,7 +71,8 @@ int vec_reserve(Vec *v, size_t cap);
 /**
  * @brief Ajusta el número de elementos a @p n.
  *
- * Si crece, los elementos nuevos se inicializan a cero. Si decrece, se descartan.
+ * Si crece, los elementos nuevos se inicializan a cero. Si decrece, se
+ * descartan.
  * @param v Vector (no nulo).
  * @param n Nuevo número de elementos.
  * @return 1 en éxito, 0 si falló la reasignación al crecer.
@@ -110,7 +113,8 @@ void *vec_push_slot(Vec *v);
 int vec_pop(Vec *v, void *out);
 
 /**
- * @brief Inserta una copia de @p item en la posición @p idx desplazando el resto.
+ * @brief Inserta una copia de @p item en la posición @p idx desplazando el
+ * resto.
  * @param v Vector (no nulo).
  * @param idx Posición de inserción en @c [0, len].
  * @param item Puntero a @c elem bytes (no nulo).

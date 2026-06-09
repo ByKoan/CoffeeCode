@@ -69,8 +69,8 @@ int hashmap_init(HashMap *m, size_t key_size, size_t val_size);
  * @param eq Función de igualdad, o @c NULL para comparación por bytes.
  * @return 1 en éxito, 0 si falló la reserva.
  */
-int hashmap_init_ex(HashMap *m, size_t key_size, size_t val_size, size_t initial_cap, HashFn hash,
-                    EqFn eq);
+int hashmap_init_ex(HashMap *m, size_t key_size, size_t val_size,
+                    size_t initial_cap, HashFn hash, EqFn eq);
 
 /**
  * @brief Libera toda la memoria de la tabla.
@@ -131,10 +131,12 @@ static inline size_t hashmap_len(const HashMap *m) {
  * while (hashmap_next(&m, &it, &k, &v)) { ... }
  * @endcode
  */
-int hashmap_next(const HashMap *m, size_t *iter, void **key_out, void **val_out);
+int hashmap_next(const HashMap *m, size_t *iter, void **key_out,
+                 void **val_out);
 
 /**
- * @brief Hash FNV-1a para claves tipo @c const @c char* (clave = puntero a cadena).
+ * @brief Hash FNV-1a para claves tipo @c const @c char* (clave = puntero a
+ * cadena).
  *
  * Pásala a ::hashmap_init_ex cuando la clave almacenada sea un @c char*.
  */
