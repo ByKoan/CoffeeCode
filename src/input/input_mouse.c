@@ -454,50 +454,41 @@ static int click_find_bar(Editor *e, int mx, int my) {
     FindBar *fb = &e->find;
     if (!fb->visible) return 0; /* barra oculta: no consume nada */
 
-    /* Botón "Reemplazar" */
-    if (mx >= fb->replace_btn_x && mx < fb->replace_btn_x + fb->replace_btn_w &&
-        my >= fb->replace_btn_y && my < fb->replace_btn_y + fb->replace_btn_h) {
+    /* La geometría de cada control la registró el render en e->ui; aquí solo se
+     * pregunta con ui_hit. Los botones prev/next solo están registrados cuando
+     * se dibujan (hay coincidencias), así que ui_hit devuelve 0 si no los hay.
+     */
+    if (ui_hit(&e->ui, UI_FIND_REPLACE, mx, my)) {
         fb->bar_focused = 1;
         do_replace(e);
         return 1;
     }
-    /* Botón "anterior" (solo si está dibujado: prev_btn_w > 0) */
-    if (fb->prev_btn_w > 0 && mx >= fb->prev_btn_x &&
-        mx < fb->prev_btn_x + fb->prev_btn_w && my >= fb->prev_btn_y &&
-        my < fb->prev_btn_y + fb->prev_btn_h) {
+    if (ui_hit(&e->ui, UI_FIND_PREV, mx, my)) {
         fb->bar_focused = 1;
         find_prev(e);
         return 1;
     }
-    /* Botón "siguiente" (solo si está dibujado: next_btn_w > 0) */
-    if (fb->next_btn_w > 0 && mx >= fb->next_btn_x &&
-        mx < fb->next_btn_x + fb->next_btn_w && my >= fb->next_btn_y &&
-        my < fb->next_btn_y + fb->next_btn_h) {
+    if (ui_hit(&e->ui, UI_FIND_NEXT, mx, my)) {
         fb->bar_focused = 1;
         find_jump(e);
         return 1;
     }
-    /* Fila 1: campo de búsqueda → darle foco (no es el de reemplazo) */
-    if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w && my >= fb->row1_y &&
-        my < fb->row1_y + fb->field_h) {
+    if (ui_hit(&e->ui, UI_FIND_QUERY, mx, my)) { /* campo buscar → foco */
         fb->replace_focused = 0;
         fb->bar_focused = 1;
         e->needs_redraw = 1;
         return 1;
     }
-    /* Fila 2: campo de reemplazo → darle foco */
-    if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w && my >= fb->row2_y &&
-        my < fb->row2_y + fb->field_h) {
+    if (ui_hit(&e->ui, UI_FIND_REPL, mx, my)) { /* campo reemplazar → foco */
         fb->replace_focused = 1;
         fb->bar_focused = 1;
         e->needs_redraw = 1;
         return 1;
     }
-    /* Dentro del marco de la barra pero no en un widget concreto */
-    if (mx >= fb->bar_x && mx < fb->bar_x + fb->bar_w && my >= fb->bar_y &&
-        my < fb->bar_y + fb->bar_h) {
-        return 1; /* clic dentro de la barra pero fuera de campos: lo consume */
-    }
+    /* Dentro del marco de la barra pero fuera de un control: consumir el clic.
+     */
+    if (ui_hit(&e->ui, UI_FIND_BAR, mx, my)) return 1;
+
     if (fb->bar_focused) { /* clic fuera: el foco vuelve al editor */
         fb->bar_focused = 0;
         e->needs_redraw = 1;

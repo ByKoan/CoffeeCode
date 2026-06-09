@@ -21,6 +21,7 @@
  * cajas.
  */
 #include "render_internal.h"
+#include "ui.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -173,29 +174,6 @@ static void draw_field_text(Editor *e, int field_x, int row_y,
 }
 
 /**
- * @brief Dibuja un botón cuadrado de flecha (↑ / ↓) con su glifo centrado.
- *
- * @param e     Editor (renderer + fuente).
- * @param x     X (izquierda) del botón en píxeles.
- * @param row_y Y (arriba) de la fila en píxeles.
- * @param size  Lado del botón en píxeles (es cuadrado: ancho = alto del campo).
- * @param glyph Cadena del glifo a dibujar (p. ej. "↑" o "↓").
- */
-static void draw_arrow_button(Editor *e, int x, int row_y, int size,
-                              const char *glyph) {
-    SDL_Renderer *r = e->renderer;
-    set_color(r, FB_COL_NAV_BTN); /* fondo del botón */
-    fill_rect(r, x, row_y, size, FB_FIELD_H);
-    set_color(r, FB_COL_BORDER); /* borde gris */
-    stroke_rect(r, x, row_y, size, FB_FIELD_H);
-    /* Medir el glifo para centrarlo horizontalmente dentro del botón. */
-    int glyph_w = 0, glyph_h = 0;
-    TTF_GetStringSize(e->font, glyph, 0, &glyph_w, &glyph_h);
-    draw_text(e, glyph, x + (size - glyph_w) / 2, field_text_y(row_y),
-              FB_TXT_ARROW);
-}
-
-/**
  * @brief Dibuja la navegación de coincidencias (↑ X/N ↓) y registra los
  * botones.
  *
@@ -229,22 +207,20 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     int next_x = prev_x + arrow_w + FB_NAV_GAP + counter_w +
                  FB_NAV_GAP; /* X de "siguiente" */
 
-    /* Guardar la geometría de los botones para que la detección de clics
-     * (ratón) sepa dónde están. */
-    e->find.prev_btn_x = prev_x;
-    e->find.prev_btn_y = row_y;
-    e->find.prev_btn_w = arrow_w;
-    e->find.prev_btn_h = FB_FIELD_H;
-    e->find.next_btn_x = next_x;
-    e->find.next_btn_y = row_y;
-    e->find.next_btn_w = arrow_w;
-    e->find.next_btn_h = FB_FIELD_H;
-
-    draw_arrow_button(e, prev_x, row_y, arrow_w, "↑"); /* flecha anterior */
+    /* Flechas como botones reutilizables; ui_button registra su rect
+     * (UI_FIND_PREV / UI_FIND_NEXT) para el hit-test, sin guardar geometría. */
+    UiStyle arrow = {.bg = {FB_COL_NAV_BTN},
+                     .bg_hover = {FB_COL_NAV_BTN},
+                     .bg_active = {FB_COL_NAV_BTN},
+                     .border = {FB_COL_BORDER},
+                     .text = {FB_TXT_ARROW, 255}};
+    Rect prev_box = {prev_x, row_y, arrow_w, FB_FIELD_H};
+    Rect next_box = {next_x, row_y, arrow_w, FB_FIELD_H};
+    ui_button(e, UI_FIND_PREV, prev_box, "↑", &arrow, UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
     draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
               FB_TXT_COUNTER);
-    draw_arrow_button(e, next_x, row_y, arrow_w, "↓"); /* flecha siguiente */
+    ui_button(e, UI_FIND_NEXT, next_box, "↓", &arrow, UI_NORMAL);
 }
 
 /**
@@ -349,32 +325,24 @@ void render_find_bar(Editor *e) {
     draw_field_text(e, field_x, row2_y, fb->replace,
                     replace_focused && fb->replace_sel_start < 0 && blink);
 
-    /* Botón "Reemplazar" (fondo de acento + borde + texto centrado). */
-    set_color(r, FB_COL_REPLACE_BTN);
-    fill_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
-    set_color(r, FB_COL_ACCENT);
-    stroke_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
-    {
-        /* Medir el texto del botón para centrarlo dentro de su rectángulo. */
-        int text_w = 0, text_h = 0;
-        TTF_GetStringSize(e->font, "Reemplazar", 0, &text_w, &text_h);
-        draw_text(e, "Reemplazar", replace_btn_x + (replace_btn_w - text_w) / 2,
-                  field_text_y(row2_y), FB_TXT_BTN);
-    }
+    /* Botón "Reemplazar" como componente reutilizable (registra
+     * UI_FIND_REPLACE). */
+    UiStyle replace_btn = {.bg = {FB_COL_REPLACE_BTN},
+                           .bg_hover = {FB_COL_REPLACE_BTN},
+                           .bg_active = {FB_COL_REPLACE_BTN},
+                           .border = {FB_COL_ACCENT},
+                           .text = {FB_TXT_BTN, 255}};
+    Rect replace_box = {replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H};
+    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar", &replace_btn,
+              UI_NORMAL);
 
-    /* -- Geometría para la detección de clics (la usa input_mouse.c) -- */
-    fb->replace_btn_x = replace_btn_x; /* rectángulo del botón Reemplazar */
-    fb->replace_btn_y = row2_y;
-    fb->replace_btn_w = replace_btn_w;
-    fb->replace_btn_h = FB_FIELD_H;
-    fb->bar_x =
-        bar_x; /* rectángulo de la barra completa (para clics dentro/fuera) */
-    fb->bar_y = bar_y;
-    fb->bar_w = bar_w;
-    fb->bar_h = bar_h;
-    fb->field_x =
-        field_x; /* X común de los campos y Y de cada fila + alto del campo */
-    fb->row1_y = row1_y;
-    fb->row2_y = row2_y;
-    fb->field_h = FB_FIELD_H;
+    /* -- Hit-test: registrar campos y marco en e->ui (lo lee input_mouse) --
+     * El área "clicable" de cada campo abarca toda la fila hasta el borde
+     * derecho de la barra (igual que el comportamiento anterior). */
+    int bar_right = bar_x + bar_w;
+    ui_put(&e->ui, UI_FIND_QUERY,
+           (Rect){field_x, row1_y, bar_right - field_x, FB_FIELD_H});
+    ui_put(&e->ui, UI_FIND_REPL,
+           (Rect){field_x, row2_y, bar_right - field_x, FB_FIELD_H});
+    ui_put(&e->ui, UI_FIND_BAR, (Rect){bar_x, bar_y, bar_w, bar_h});
 }

@@ -61,12 +61,13 @@ typedef struct {
     LexerCache lex;        /* cache de tokens por línea (resaltado)          */
     UndoStack undo;        /* pila de undo/redo de esta pestaña              */
     const Highlighter *hl; /* resaltador según el lenguaje del archivo */
-    LspClient lsp;         /* cliente LSP para este archivo (puede estar inactivo) */
-    int lsp_active;        /* 1 si el cliente LSP está iniciado y en uso */
-    LspInstallJob lsp_install; /* trabajo de instalación automática (si procede) */
-    char filepath[512];    /* ruta del archivo, o "" si es nuevo sin guardar */
-    int modified;          /* 1 si hay cambios sin guardar                   */
-    long loaded_mtime; /* mtime del fichero en la última carga desde disco */
+    LspClient lsp;  /* cliente LSP para este archivo (puede estar inactivo) */
+    int lsp_active; /* 1 si el cliente LSP está iniciado y en uso */
+    LspInstallJob
+        lsp_install;    /* trabajo de instalación automática (si procede) */
+    char filepath[512]; /* ruta del archivo, o "" si es nuevo sin guardar */
+    int modified;       /* 1 si hay cambios sin guardar                   */
+    long loaded_mtime;  /* mtime del fichero en la última carga desde disco */
     int cursor_line, cursor_col; /* posición del cursor guardada            */
     int scroll_line, scroll_col; /* desplazamiento de la vista guardado     */
     int sel_active;              /* 1 si la selección está activa           */
@@ -96,16 +97,9 @@ typedef struct {
     int query_sel_start, query_sel_end; /* rango seleccionado en buscar    */
     int replace_sel_start,
         replace_sel_end; /* rango seleccionado en reemplazar */
-    /* geometría para click detection (calculado en render) */
-    int bar_x, bar_y, bar_w, bar_h; /* caja de toda la barra (px)        */
-    int field_x, row1_y, row2_y, field_h; /* X de campos, Y de filas, alto */
-    int replace_btn_x, replace_btn_y, replace_btn_w,
-        replace_btn_h; /* botón "Reemplazar" */
-    /* botones flecha prev/next en fila de búsqueda */
-    int prev_btn_x, prev_btn_y, prev_btn_w,
-        prev_btn_h; /* botón coincidencia anterior */
-    int next_btn_x, next_btn_y, next_btn_w,
-        next_btn_h; /* botón coincidencia siguiente */
+    /* La geometría de los controles (campos, flechas, botón Reemplazar y marco)
+     * ya no se guarda aquí: la registra el render en e->ui (ver
+     * render/ui_hit.h) y el input la consulta con ui_hit(UI_FIND_*). */
 } FindBar;
 
 /* -- Estado global del editor --------------------------------------------- */
@@ -175,8 +169,9 @@ typedef struct {
     int needs_redraw; /* 1 = hay que redibujar en el próximo frame      */
 
     /* cursor parpadeante */
-    Uint64 cursor_blink_ms;  /* timestamp del último cambio de estado del cursor */
-    int    cursor_visible;   /* 1 = cursor visible, 0 = cursor oculto (blink)    */
+    Uint64
+        cursor_blink_ms; /* timestamp del último cambio de estado del cursor */
+    int cursor_visible;  /* 1 = cursor visible, 0 = cursor oculto (blink)    */
 
     /* geometría de los controles de UI del último frame (hit-test compartido
      * entre render e input; ver render/ui_hit.h). */

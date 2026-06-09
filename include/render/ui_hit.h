@@ -41,7 +41,8 @@ typedef enum {
     UI_FIND_REPLACE, /**< Botón "Reemplazar".                         */
     UI_FIND_QUERY,   /**< Campo de texto "buscar".                    */
     UI_FIND_REPL,    /**< Campo de texto "reemplazar".                */
-    UI_SCROLLBAR,    /**< Pulgar de la barra de scroll vertical.      */
+    UI_FIND_BAR,  /**< Marco de la barra de búsqueda (consume clics dentro). */
+    UI_SCROLLBAR, /**< Pulgar de la barra de scroll vertical.      */
     UI_ID_COUNT
 } UiId;
 
