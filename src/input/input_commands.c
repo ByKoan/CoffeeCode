@@ -3,51 +3,79 @@
  * @brief Comandos de archivo y menú: nuevo, guardar, diálogos de abrir
  *        archivo/carpeta, ejecución del menú "Archivo" y toggle del panel.
  *
- * @note Diálogos en Linux — GTK nativo vía dlopen.
+ * @note Diálogos de archivo asíncronos (Windows). A diferencia de funciones
+ * bloqueantes que "esperan" a que el usuario elija, @c SDL_ShowOpenFileDialog
+ * y @c SDL_ShowOpenFolderDialog RETORNAN al instante: solo PIDEN al sistema
+ * operativo que muestre su diálogo nativo. Cuando el usuario por fin elige (o
+ * cancela), SDL llama de vuelta a una función que le pasamos: el CALLBACK.
+ * Como el callback se ejecuta más tarde y "fuera" de la llamada original, no
+ * puede recibir el Editor por parámetro normal; en su lugar se pasa un puntero
+ * opaco @c userdata al pedir el diálogo, y SDL nos lo devuelve tal cual en el
+ * callback (donde lo casteamos de vuelta a @c Editor*). Este es el patrón
+ * estándar callback + userdata. El callback recibe @c filelist: un array de
+ * cadenas terminado en NULL (vacío/NULL si se canceló), del que aquí usamos
+ * solo el primer elemento.
  *
- * En Linux no se usa SDL_ShowOpenFileDialog porque depende de XDG Desktop
- * Portal (D-Bus), que no está disponible en todos los entornos (Kali, TTY,
- * WMs minimalistas...).
- *
- * En su lugar se carga libgtk-3.so en tiempo de ejecución con dlopen() y
- * se construye un GtkFileChooserDialog directamente. Esto es 100 % nativo
- * del sistema.
- * Si GTK no está instalado se imprime un aviso y se cancela sin crashear.
- *
- * El diálogo se ejecuta en un hilo secundario (SDL_CreateThread) para no
- * bloquear el bucle de eventos del hilo principal.
- *
- * En Windows se sigue usando SDL_ShowOpenFileDialog / SDL_ShowOpenFolderDialog
- * que llaman a la API Win32 nativa, sin ningún cambio.
+ * @note Diálogos de archivo en Linux. @c SDL_ShowOpenFileDialog y
+ * @c SDL_ShowOpenFolderDialog dependen de XDG Desktop Portal (D-Bus), que no
+ * está disponible en todos los entornos Linux (Kali, TTY, WMs minimalistas…).
+ * En Linux se usa en su lugar @c GtkFileChooserDialog, cargando @c libgtk-3
+ * en tiempo de ejecución con @c dlopen() sin añadir dependencias al build.
+ * El diálogo se abre desde un hilo secundario (@c SDL_CreateThread) para no
+ * bloquear el bucle de eventos SDL del hilo principal. El resultado llega al
+ * mismo callback (@c file_dialog_cb / @c folder_dialog_cb) que usa la ruta
+ * Windows, manteniendo la lógica uniforme.
  */
 #include "input_internal.h"
 
-/* Includes extra para Linux */
 #if !(defined(_WIN32))
-#include <dlfcn.h>   /* dlopen / dlsym / dlclose */
-#include <stdio.h>
-#include <string.h>
+#include <dlfcn.h>  /* dlopen / dlsym / dlclose */
 #endif
 
+/** @brief Alto en px de un separador del menú desplegable. */
 #define MENU_SEP_H 8
 
+/**
+ * @brief Índices de los items del menú "Archivo" (orden de @c MENU_LABELS).
+ */
 enum {
-    MENU_NEW = 0,
-    MENU_OPEN_FILE,
-    MENU_OPEN_FOLDER,
-    MENU_SEP,
-    MENU_SAVE,
-    MENU_AUTOSAVE,
+    MENU_NEW = 0,     /**< Nuevo.            */
+    MENU_OPEN_FILE,   /**< Abrir archivo...  */
+    MENU_OPEN_FOLDER, /**< Abrir carpeta...  */
+    MENU_SEP,         /**< Separador (sin acción). */
+    MENU_SAVE,        /**< Guardar.          */
+    MENU_AUTOSAVE,    /**< Autoguardado.     */
 };
 
+/** @brief Etiquetas del menú; @c NULL marca el separador (no es pulsable). */
 static const char *MENU_LABELS[MENU_ITEMS] = {
     "Nuevo", "Abrir archivo...", "Abrir carpeta...",
     NULL,    "Guardar",          "Autoguardado"};
 
+/**
+ * @brief Alto en px del item @p i (item normal o separador si su etiqueta
+ *        es @c NULL).
+ *
+ * @param i Índice del item (ver enum anónimo de MENU_*).
+ * @return Alto en píxeles: @c MENU_ITEM_H para items normales,
+ *         @c MENU_SEP_H para separadores.
+ */
 static int menu_item_height(int i) {
     return MENU_LABELS[i] ? MENU_ITEM_H : MENU_SEP_H;
 }
 
+/**
+ * @brief Índice del item del menú bajo (@p mx, @p my), o -1 si ninguno.
+ *
+ * Comprueba primero que la X esté dentro del ancho del menú; luego recorre
+ * los items de arriba abajo acumulando su alto hasta dar con la banda vertical
+ * que contiene @p my. Los separadores (etiqueta @c NULL) nunca se devuelven
+ * como acierto.
+ *
+ * @param mx Coordenada X del ratón en píxeles.
+ * @param my Coordenada Y del ratón en píxeles.
+ * @return Índice del item bajo el cursor, o -1 si no hay ninguno.
+ */
 int menu_item_at(int mx, int my) {
     if (mx < BTN_FILE_X || mx >= BTN_FILE_X + MENU_WIDTH)
         return -1;
@@ -61,6 +89,12 @@ int menu_item_at(int mx, int my) {
     return -1;
 }
 
+/**
+ * @brief Altura total del menú desplegable (suma de los altos de todos los
+ *        items).
+ *
+ * @return Alto en píxeles del menú desplegado.
+ */
 int menu_total_h(void) {
     int h = 0;
     for (int i = 0; i < MENU_ITEMS; i++)
@@ -68,8 +102,15 @@ int menu_total_h(void) {
     return h;
 }
 
-/* Operaciones de archivo */
-
+/**
+ * @brief Crea una pestaña nueva y vacía.
+ *
+ * Abre una pestaña en blanco y limpia la ruta/flag de modificación tanto en
+ * el editor como en la pestaña activa, dejando el título de la ventana por
+ * defecto.
+ *
+ * @param e Editor.
+ */
 void new_file(Editor *e) {
     editor_tab_new(e);
     e->filepath[0] = '\0';
@@ -82,6 +123,16 @@ void new_file(Editor *e) {
     e->needs_redraw = 1;
 }
 
+/**
+ * @brief Guarda el archivo actual (usa @c "untitled.c" si no tiene nombre).
+ *
+ * Escribe el buffer a disco. Si tiene éxito, baja el flag de modificación,
+ * pone la ruta en el título y sincroniza ruta/flag/mtime de vuelta a la
+ * pestaña activa (el @c mtime se relee con @c stat para detectar cambios
+ * externos más adelante). Si la escritura falla, solo pide redibujar.
+ *
+ * @param e Editor.
+ */
 void save_file(Editor *e) {
     if (!e->filepath[0])
         strncpy(e->filepath, "untitled.c", sizeof(e->filepath) - 1);
@@ -102,8 +153,22 @@ void save_file(Editor *e) {
     e->needs_redraw = 1;
 }
 
-/* Callbacks (compartidos por todas las plataformas) */
-
+/**
+ * @brief Callback de SDL al elegir un archivo en el diálogo de apertura.
+ *
+ * SDL lo invoca cuando el usuario termina con el diálogo nativo (de forma
+ * asíncrona). Recupera el Editor desde @p userdata, y si el usuario eligió
+ * algo (@p filelist no vacío), abre el primer archivo en una pestaña y
+ * actualiza el título. Si canceló, solo pide redibujar.
+ *
+ * En Linux este mismo callback es invocado directamente desde el hilo GTK
+ * (@c linux_dialog_thread) con la ruta elegida.
+ *
+ * @param userdata Puntero opaco que pasamos al pedir el diálogo: el Editor.
+ * @param filelist Array de rutas elegidas terminado en @c NULL
+ *                 (@c NULL/vacío = cancelado).
+ * @param filter   Índice del filtro elegido (no usado).
+ */
 void SDLCALL file_dialog_cb(void *userdata, const char *const *filelist,
                             int filter) {
     (void)filter;
@@ -119,6 +184,18 @@ void SDLCALL file_dialog_cb(void *userdata, const char *const *filelist,
     SDL_SetWindowTitle(e->window, path);
 }
 
+/**
+ * @brief Callback de SDL al elegir una carpeta en el diálogo.
+ *
+ * Análogo a ::file_dialog_cb pero para carpetas: carga el árbol del
+ * explorador con la carpeta elegida. En Linux es invocado directamente
+ * desde el hilo GTK (@c linux_dialog_thread).
+ *
+ * @param userdata Puntero opaco con el Editor.
+ * @param filelist Array de rutas terminado en @c NULL
+ *                 (@c NULL/vacío = cancelado).
+ * @param filter   Índice del filtro (no usado).
+ */
 void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist,
                               int filter) {
     (void)filter;
@@ -131,91 +208,92 @@ void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist,
     e->needs_redraw = 1;
 }
 
-/* Implementación Linux: GTK3 nativo cargado con dlopen */
-
+/* ── Implementación Linux: GTK3 nativo cargado con dlopen ──────────────── */
 #if !(defined(_WIN32))
 
-/* Tipos y constantes mínimos de GTK que necesitamos */
+/**
+ * @brief Tipos opacos mínimos de GTK necesarios para el diálogo de archivo.
+ *
+ * No se incluye @c <gtk/gtk.h> para evitar la dependencia de compilación;
+ * GTK se carga en tiempo de ejecución con @c dlopen(). Solo se necesitan
+ * los tipos que aparecen en las firmas de las funciones que usamos.
+ */
+typedef void  GtkWidget;     /**< Widget GTK genérico (opaco). */
+typedef void  GtkFileFilter; /**< Filtro de tipos de archivo GTK (opaco). */
+typedef int   gint;          /**< Entero de GLib (equivale a @c int). */
+typedef char  gchar;         /**< Carácter de GLib (equivale a @c char). */
+typedef int   gboolean;      /**< Booleano de GLib (0 = FALSE, !=0 = TRUE). */
+typedef void *gpointer;      /**< Puntero genérico de GLib. */
 
-typedef void      GtkWidget;
-typedef void      GtkFileFilter;
-typedef int       gint;
-typedef char      gchar;
-typedef int       gboolean;
-typedef void *    gpointer;
-
-/* GtkFileChooserAction */
+/** @brief Acción del @c GtkFileChooser: abrir archivo. */
 #define GTK_FILE_CHOOSER_ACTION_OPEN          0
+/** @brief Acción del @c GtkFileChooser: seleccionar carpeta. */
 #define GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER 2
-
-/* Respuestas de GtkDialog */
+/** @brief Respuesta de @c gtk_dialog_run cuando el usuario acepta. */
 #define GTK_RESPONSE_ACCEPT -3
-#define GTK_RESPONSE_CANCEL -6
+/** @brief Botón "Cancelar" de GTK (stock). */
+#define GTK_STOCK_CANCEL    "gtk-cancel"
+/** @brief Botón "Abrir" de GTK (stock). */
+#define GTK_STOCK_OPEN      "gtk-open"
 
-/* GTK_STOCK buttons (GTK3) */
-#define GTK_STOCK_CANCEL "gtk-cancel"
-#define GTK_STOCK_OPEN   "gtk-open"
-
-/* Sentinel para gtk_file_chooser_dialog_new (varargs) */
-#define GTK_BUTTONS_SENTINEL NULL
-
-/* Punteros a las funciones GTK que cargaremos con dlsym */
-
-typedef gboolean  (*fn_gtk_init_check)   (int *, char ***);
-typedef GtkWidget*(*fn_gtk_file_chooser_dialog_new)(
-                      const gchar *, GtkWidget *, gint,
-                      const gchar *, gint,
-                      const gchar *, gint,
-                      gpointer);
-typedef gint      (*fn_gtk_dialog_run)         (GtkWidget *);
-typedef gchar *   (*fn_gtk_file_chooser_get_filename)(GtkWidget *);
-typedef void      (*fn_gtk_file_chooser_set_select_multiple)(GtkWidget *, gboolean);
-typedef void      (*fn_gtk_widget_destroy)     (GtkWidget *);
-typedef void      (*fn_gtk_main_iteration_do)  (gboolean);
-typedef gboolean  (*fn_gtk_events_pending)     (void);
-typedef GtkFileFilter *(*fn_gtk_file_filter_new)(void);
-typedef void      (*fn_gtk_file_filter_set_name)(GtkFileFilter *, const gchar *);
-typedef void      (*fn_gtk_file_filter_add_pattern)(GtkFileFilter *, const gchar *);
-typedef void      (*fn_gtk_file_chooser_add_filter)(GtkWidget *, GtkFileFilter *);
-typedef void      (*fn_g_free)                 (gpointer);
-
-/* Estructura con todas las funciones cargadas */
-
+/**
+ * @brief Punteros a todas las funciones GTK que se cargan con @c dlsym.
+ *
+ * Agrupa los handles de las bibliotecas (@c lib_gtk, @c lib_glib) y los
+ * punteros de función. Se rellena por ::gtk_handles_load y se libera por
+ * ::gtk_handles_unload.
+ */
 typedef struct {
-    void *lib_gtk;
-    void *lib_glib;
+    void *lib_gtk;  /**< Handle de @c libgtk-3 abierto con @c dlopen(). */
+    void *lib_glib; /**< Handle de @c libglib-2.0 abierto con @c dlopen(). */
 
-    fn_gtk_init_check                        gtk_init_check;
-    fn_gtk_file_chooser_dialog_new           gtk_file_chooser_dialog_new;
-    fn_gtk_dialog_run                        gtk_dialog_run;
-    fn_gtk_file_chooser_get_filename         gtk_file_chooser_get_filename;
-    fn_gtk_file_chooser_set_select_multiple  gtk_file_chooser_set_select_multiple;
-    fn_gtk_widget_destroy                    gtk_widget_destroy;
-    fn_gtk_main_iteration_do                 gtk_main_iteration_do;
-    fn_gtk_events_pending                    gtk_events_pending;
-    fn_gtk_file_filter_new                   gtk_file_filter_new;
-    fn_gtk_file_filter_set_name              gtk_file_filter_set_name;
-    fn_gtk_file_filter_add_pattern           gtk_file_filter_add_pattern;
-    fn_gtk_file_chooser_add_filter           gtk_file_chooser_add_filter;
-    fn_g_free                                g_free;
+    /** @brief Inicializa GTK; devuelve @c FALSE si no hay display. */
+    gboolean   (*gtk_init_check)(int *, char ***);
+    /** @brief Crea un @c GtkFileChooserDialog con botones (varargs). */
+    GtkWidget *(*gtk_file_chooser_dialog_new)(const gchar *, GtkWidget *,
+                                              gint, const gchar *, gint,
+                                              const gchar *, gint, gpointer);
+    /** @brief Ejecuta el diálogo de forma bloqueante; devuelve el ID de
+     *         respuesta. */
+    gint       (*gtk_dialog_run)(GtkWidget *);
+    /** @brief Obtiene la ruta elegida en el diálogo (heap; liberar con
+     *         @c g_free). */
+    gchar     *(*gtk_file_chooser_get_filename)(GtkWidget *);
+    /** @brief Activa o desactiva la selección múltiple en el diálogo. */
+    void       (*gtk_file_chooser_set_select_multiple)(GtkWidget *, gboolean);
+    /** @brief Destruye el widget y libera sus recursos. */
+    void       (*gtk_widget_destroy)(GtkWidget *);
+    /** @brief Procesa una iteración del bucle de eventos GTK. */
+    void       (*gtk_main_iteration_do)(gboolean);
+    /** @brief Devuelve @c TRUE si hay eventos GTK pendientes. */
+    gboolean   (*gtk_events_pending)(void);
+    /** @brief Crea un nuevo @c GtkFileFilter vacío. */
+    GtkFileFilter *(*gtk_file_filter_new)(void);
+    /** @brief Asigna el nombre visible del filtro (p. ej. "Archivos C"). */
+    void       (*gtk_file_filter_set_name)(GtkFileFilter *, const gchar *);
+    /** @brief Añade un patrón glob al filtro (p. ej. @c "*.c"). */
+    void       (*gtk_file_filter_add_pattern)(GtkFileFilter *, const gchar *);
+    /** @brief Añade el filtro al @c GtkFileChooser. */
+    void       (*gtk_file_chooser_add_filter)(GtkWidget *, GtkFileFilter *);
+    /** @brief Libera memoria reservada por GLib. */
+    void       (*g_free)(gpointer);
 } GtkHandles;
 
 /**
- * @brief Carga libgtk-3 y resuelve todos los símbolos necesarios.
- * @return 1 si tuvo éxito, 0 si GTK no está disponible.
+ * @brief Carga @c libgtk-3 y @c libglib-2.0 y resuelve todos los símbolos
+ *        necesarios para mostrar el diálogo de archivo.
+ *
+ * Prueba los nombres de biblioteca más comunes en distintas distribuciones
+ * Linux. Si algún símbolo falta imprime el error en @c stderr y cierra los
+ * handles abiertos antes de retornar.
+ *
+ * @param g Estructura @c GtkHandles a rellenar.
+ * @return 1 si todos los símbolos se cargaron correctamente, 0 si algo
+ *         falló (GTK no instalado o símbolo no encontrado).
  */
 static int gtk_handles_load(GtkHandles *g) {
-    /* Nombres de libgtk-3 en distintas distros */
-    static const char *gtk_names[] = {
-        "libgtk-3.so.0",
-        "libgtk-3.so",
-        NULL
-    };
-    static const char *glib_names[] = {
-        "libglib-2.0.so.0",
-        "libglib-2.0.so",
-        NULL
-    };
+    static const char *gtk_names[]  = {"libgtk-3.so.0",  "libgtk-3.so",  NULL};
+    static const char *glib_names[] = {"libglib-2.0.so.0","libglib-2.0.so",NULL};
 
     g->lib_gtk = NULL;
     for (int i = 0; gtk_names[i]; i++) {
@@ -234,15 +312,16 @@ static int gtk_handles_load(GtkHandles *g) {
         g->lib_glib = dlopen(glib_names[i], RTLD_LAZY | RTLD_LOCAL);
         if (g->lib_glib) break;
     }
-    /* g_free puede estar también en libgtk, intentamos de ahí si falta glib */
 
-#define LOAD(handle, sym) \
-    g->sym = (fn_##sym) dlsym(handle, #sym); \
-    if (!g->sym) { \
-        fprintf(stderr, "CoffeeCode: dlsym(%s) falló: %s\n", #sym, dlerror()); \
-        dlclose(g->lib_gtk); \
-        if (g->lib_glib) dlclose(g->lib_glib); \
-        return 0; \
+/* Macro interna: resuelve el símbolo @p sym desde @p handle y lo guarda en
+ * @c g->sym. Si @c dlsym falla, imprime el error y libera los handles. */
+#define LOAD(handle, sym)                                                   \
+    g->sym = dlsym(handle, #sym);                                           \
+    if (!g->sym) {                                                          \
+        fprintf(stderr, "CoffeeCode: dlsym(%s): %s\n", #sym, dlerror());   \
+        dlclose(g->lib_gtk);                                                \
+        if (g->lib_glib) dlclose(g->lib_glib);                             \
+        return 0;                                                           \
     }
 
     LOAD(g->lib_gtk, gtk_init_check)
@@ -259,13 +338,11 @@ static int gtk_handles_load(GtkHandles *g) {
     LOAD(g->lib_gtk, gtk_file_chooser_add_filter)
 #undef LOAD
 
-    /* g_free: preferimos glib, caemos a gtk si no hay */
-    if (g->lib_glib)
-        g->g_free = (fn_g_free) dlsym(g->lib_glib, "g_free");
-    if (!g->g_free)
-        g->g_free = (fn_g_free) dlsym(g->lib_gtk, "g_free");
+    /* g_free puede vivir en glib o quedar re-exportada desde gtk */
+    g->g_free = g->lib_glib ? dlsym(g->lib_glib, "g_free") : NULL;
+    if (!g->g_free) g->g_free = dlsym(g->lib_gtk, "g_free");
     if (!g->g_free) {
-        fprintf(stderr, "CoffeeCode: dlsym(g_free) falló\n");
+        fprintf(stderr, "CoffeeCode: dlsym(g_free): %s\n", dlerror());
         dlclose(g->lib_gtk);
         if (g->lib_glib) dlclose(g->lib_glib);
         return 0;
@@ -274,23 +351,42 @@ static int gtk_handles_load(GtkHandles *g) {
     return 1;
 }
 
+/**
+ * @brief Cierra los handles de @c libgtk-3 y @c libglib-2.0.
+ *
+ * @param g Estructura @c GtkHandles cuyos handles se van a cerrar.
+ */
 static void gtk_handles_unload(GtkHandles *g) {
     if (g->lib_glib) dlclose(g->lib_glib);
     if (g->lib_gtk)  dlclose(g->lib_gtk);
 }
 
-/* Datos para el hilo */
-
+/**
+ * @brief Datos que se pasan al hilo del diálogo GTK.
+ *
+ * El hilo necesita saber a qué @c Editor entregar el resultado y si debe
+ * mostrar un selector de archivo o de carpeta.
+ */
 typedef struct {
-    Editor *editor;
-    int     is_folder;
+    Editor *editor;    /**< Editor al que entregar la ruta elegida. */
+    int     is_folder; /**< 0 = diálogo de archivo, 1 = diálogo de carpeta. */
 } LinuxDialogData;
 
 /**
- * @brief Hilo que abre el GtkFileChooserDialog y entrega el resultado.
+ * @brief Hilo que muestra el @c GtkFileChooserDialog y entrega el resultado.
  *
- * Carga GTK dinámicamente, muestra el diálogo, lee la ruta elegida y
- * llama al callback correspondiente (file_dialog_cb / folder_dialog_cb).
+ * Se lanza con @c SDL_CreateThread para no bloquear el bucle de eventos SDL
+ * del hilo principal. Flujo:
+ *   1. Carga @c libgtk-3 dinámicamente con ::gtk_handles_load.
+ *   2. Inicializa GTK (@c gtk_init_check).
+ *   3. Crea el @c GtkFileChooserDialog con la acción y los filtros adecuados.
+ *   4. Llama a @c gtk_dialog_run (bloqueante dentro del hilo).
+ *   5. Entrega la ruta al callback correspondiente
+ *      (::file_dialog_cb o ::folder_dialog_cb) y descarga GTK.
+ *
+ * @param data Puntero a @c LinuxDialogData asignado con @c SDL_malloc;
+ *             este hilo es el dueño y lo libera con @c SDL_free.
+ * @return 0 siempre (valor de retorno del hilo no usado).
  */
 static int SDLCALL linux_dialog_thread(void *data) {
     LinuxDialogData *d = (LinuxDialogData *)data;
@@ -305,26 +401,23 @@ static int SDLCALL linux_dialog_thread(void *data) {
         return 0;
     }
 
-    /* Inicializar GTK (puede fallar si no hay DISPLAY/Wayland, lo toleramos) */
-    int   argc = 0;
-    char *argv_dummy[] = {NULL};
-    char **argv_ptr = argv_dummy;
+    /* Inicializar GTK; puede fallar si no hay DISPLAY/Wayland, pero en ese
+     * caso gtk_dialog_run también fallará de forma controlada. */
+    int   argc      = 0;
+    char *argv_buf[] = {NULL};
+    char **argv_ptr  = argv_buf;
     g.gtk_init_check(&argc, &argv_ptr);
 
-    /* Crear el diálogo */
-    gint action = is_folder
-        ? GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER
-        : GTK_FILE_CHOOSER_ACTION_OPEN;
-
-    const char *title = is_folder ? "Abrir carpeta" : "Abrir archivo";
+    gint action = is_folder ? GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER
+                            : GTK_FILE_CHOOSER_ACTION_OPEN;
 
     GtkWidget *dialog = g.gtk_file_chooser_dialog_new(
-        title,
-        NULL,          /* ventana padre: NULL (hilo separado) */
+        is_folder ? "Abrir carpeta" : "Abrir archivo",
+        NULL,  /* ventana padre: NULL porque estamos en un hilo separado */
         action,
-        GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+        GTK_STOCK_CANCEL, GTK_RESPONSE_ACCEPT - 3, /* GTK_RESPONSE_CANCEL */
         GTK_STOCK_OPEN,   GTK_RESPONSE_ACCEPT,
-        GTK_BUTTONS_SENTINEL
+        NULL   /* centinela que termina la lista de botones */
     );
 
     if (!dialog) {
@@ -337,18 +430,17 @@ static int SDLCALL linux_dialog_thread(void *data) {
 
     g.gtk_file_chooser_set_select_multiple(dialog, 0 /* FALSE */);
 
-    /* Filtros de tipo de archivo (solo para diálogo de archivo) */
+    /* Añadir filtros de tipo de archivo solo al diálogo de archivo */
     if (!is_folder) {
-        static const char *code_patterns[] = {
-            "*.c", "*.h", "*.cpp", "*.hpp", "*.py", "*.js", "*.ts",
-            "*.rs", "*.go", "*.java", "*.txt", "*.md",
-            "*.json", "*.toml", "*.yaml", "*.yml", NULL
+        static const char *patterns[] = {
+            "*.c","*.h","*.cpp","*.hpp","*.py","*.js","*.ts",
+            "*.rs","*.go","*.java","*.txt","*.md",
+            "*.json","*.toml","*.yaml","*.yml", NULL
         };
-
         GtkFileFilter *f_code = g.gtk_file_filter_new();
         g.gtk_file_filter_set_name(f_code, "Archivos de código");
-        for (int i = 0; code_patterns[i]; i++)
-            g.gtk_file_filter_add_pattern(f_code, code_patterns[i]);
+        for (int i = 0; patterns[i]; i++)
+            g.gtk_file_filter_add_pattern(f_code, patterns[i]);
         g.gtk_file_chooser_add_filter(dialog, f_code);
 
         GtkFileFilter *f_all = g.gtk_file_filter_new();
@@ -357,26 +449,20 @@ static int SDLCALL linux_dialog_thread(void *data) {
         g.gtk_file_chooser_add_filter(dialog, f_all);
     }
 
-    /* Mostrar y esperar respuesta */
     gint response = g.gtk_dialog_run(dialog);
 
     if (response == GTK_RESPONSE_ACCEPT) {
         gchar *path = g.gtk_file_chooser_get_filename(dialog);
         if (path) {
-            /* Copiar antes de destruir el diálogo */
-            static char path_copy[4096];
+            static char path_copy[4096]; /* estático: vive hasta que el
+                                            callback termina de usarlo */
             strncpy(path_copy, path, sizeof(path_copy) - 1);
             path_copy[sizeof(path_copy) - 1] = '\0';
             g.g_free(path);
-
             g.gtk_widget_destroy(dialog);
-
-            /* Vaciar eventos GTK pendientes */
             while (g.gtk_events_pending())
                 g.gtk_main_iteration_do(0 /* FALSE: no bloqueante */);
-
             gtk_handles_unload(&g);
-
             const char *list[2] = {path_copy, NULL};
             if (is_folder) folder_dialog_cb(e, list, 0);
             else           file_dialog_cb(e, list, 0);
@@ -384,11 +470,10 @@ static int SDLCALL linux_dialog_thread(void *data) {
         }
     }
 
-    /* Cancelado o sin selección */
+    /* Usuario canceló o no eligió nada */
     g.gtk_widget_destroy(dialog);
     while (g.gtk_events_pending())
         g.gtk_main_iteration_do(0);
-
     gtk_handles_unload(&g);
 
     if (is_folder) folder_dialog_cb(e, NULL, 0);
@@ -397,7 +482,15 @@ static int SDLCALL linux_dialog_thread(void *data) {
 }
 
 /**
- * @brief Lanza el diálogo GTK en un hilo secundario.
+ * @brief Lanza ::linux_dialog_thread en un hilo secundario y retorna.
+ *
+ * El hilo se desvincula con @c SDL_DetachThread: se limpia solo al terminar
+ * y no es necesario hacer @c SDL_WaitThread. Si la creación del hilo o la
+ * reserva de memoria fallan, se llama al callback directamente con @c NULL
+ * (equivalente a cancelar) para que el editor quede en un estado consistente.
+ *
+ * @param e         Editor.
+ * @param is_folder 0 = diálogo de archivo, 1 = diálogo de carpeta.
  */
 static void linux_open_dialog(Editor *e, int is_folder) {
     LinuxDialogData *d = (LinuxDialogData *)SDL_malloc(sizeof(*d));
@@ -416,13 +509,20 @@ static void linux_open_dialog(Editor *e, int is_folder) {
         else           file_dialog_cb(e, NULL, 0);
         return;
     }
-    SDL_DetachThread(t);
+    SDL_DetachThread(t); /* el hilo se limpia solo al terminar */
 }
 
 #endif /* !_WIN32 */
 
-/* API pública de diálogos */
-
+/**
+ * @brief Lanza (asíncronamente) el diálogo nativo para abrir un archivo.
+ *
+ * En Windows usa @c SDL_ShowOpenFileDialog (Win32 nativo, asíncrono).
+ * En Linux lanza ::linux_open_dialog, que abre un @c GtkFileChooserDialog
+ * desde un hilo secundario y entrega el resultado a ::file_dialog_cb.
+ *
+ * @param e Editor.
+ */
 void open_file_dialog(Editor *e) {
 #if defined(_WIN32)
     SDL_DialogFileFilter filters[] = {
@@ -436,6 +536,15 @@ void open_file_dialog(Editor *e) {
 #endif
 }
 
+/**
+ * @brief Lanza (asíncronamente) el diálogo nativo para abrir una carpeta.
+ *
+ * En Windows usa @c SDL_ShowOpenFolderDialog (Win32 nativo, asíncrono).
+ * En Linux lanza ::linux_open_dialog, que abre un @c GtkFileChooserDialog
+ * desde un hilo secundario y entrega el resultado a ::folder_dialog_cb.
+ *
+ * @param e Editor.
+ */
 void open_folder_dialog(Editor *e) {
 #if defined(_WIN32)
     SDL_ShowOpenFolderDialog(folder_dialog_cb, e, e->window, NULL, false);
@@ -444,8 +553,16 @@ void open_folder_dialog(Editor *e) {
 #endif
 }
 
-/* Menú y sidebar */
-
+/**
+ * @brief Ejecuta el item @p item del menú "Archivo" y lo cierra.
+ *
+ * Despacha según el índice del item. "Autoguardado" es un toggle: al
+ * activarlo se apunta el instante actual para que el bucle principal respete
+ * el intervalo. Tras cualquier acción, cierra el menú.
+ *
+ * @param e    Editor.
+ * @param item Índice del item (ver enum @c MENU_*).
+ */
 void menu_exec(Editor *e, int item) {
     switch (item) {
     case MENU_NEW:         new_file(e);           break;
@@ -463,6 +580,11 @@ void menu_exec(Editor *e, int item) {
     e->needs_redraw = 1;
 }
 
+/**
+ * @brief Muestra u oculta el panel lateral del explorador de archivos.
+ *
+ * @param e Editor.
+ */
 void toggle_sidebar(Editor *e) {
     e->ftree.open = !e->ftree.open;
     e->needs_redraw = 1;
