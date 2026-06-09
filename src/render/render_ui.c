@@ -14,6 +14,7 @@
  * render/ui_hit.h) para que el módulo de input detecte los clics con ui_hit().
  */
 #include "render_internal.h"
+#include "ui.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -144,18 +145,17 @@ void render_navbar(Editor *e) {
     }
     int btn_w = cached_btn_w;
 
-    /* registrar el botón "Archivo" (ocupa toda la altura de la navbar) para que
-     * input abra el menú con ui_hit(UI_BTN_FILE). */
+    /* Botón "Archivo" como componente del tema (UI_STYLE_NAV): fondo invisible
+     * en reposo y resaltado cuando el menú está abierto (UI_ACTIVE). El área de
+     * clic registrada (UI_BTN_FILE) ocupa toda la altura de la navbar; la caja
+     * visible que se dibuja es algo más baja. */
     ui_put(&e->ui, UI_BTN_FILE, (Rect){NAV_BTN_X, 0, btn_w, NAVBAR_HEIGHT});
+    Rect file_box = {NAV_BTN_X, NAV_BTN_Y, btn_w, btn_h};
+    ui_button(e, UI_ID_NONE, file_box, "  Archivo  ", &UI_STYLE_NAV,
+              e->menu_open ? UI_ACTIVE : UI_NORMAL);
 
-    if (e->menu_open) { /* botón resaltado mientras el menú está desplegado */
-        set_color(r, COL_NAVBAR_BTN);
-        fill_rect(r, NAV_BTN_X, NAV_BTN_Y, btn_w, btn_h);
-    }
-
-    int text_y =
-        NAV_BTN_Y + (btn_h - FONT_SIZE) / 2; /* centrado vertical del texto */
-    draw_text(e, "  Archivo  ", NAV_BTN_X, text_y, TXT_NAVBAR_BTN);
+    /* Y para centrar verticalmente el título y el punto de "modificado". */
+    int text_y = NAV_BTN_Y + (btn_h - FONT_SIZE) / 2;
 
     /* Título: "CoffeeCode" y, si hay archivo, " — nombre" (\xe2\x80\x94 es el
      * guión largo "—" codificado en UTF-8). */

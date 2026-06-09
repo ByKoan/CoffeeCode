@@ -30,6 +30,13 @@ static inline Color ui_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     return c;
 }
 
+/* ── Tema: estilos de botón compartidos (definidos en ui.c) ──────────────────
+ * Centralizan el aspecto de cada tipo de botón en un único sitio: para cambiar
+ * el color de, p. ej., todos los botones de acción, se edita aquí. */
+extern const UiStyle UI_STYLE_BUTTON; /**< Botón secundario (caja gris).      */
+extern const UiStyle UI_STYLE_PRIMARY; /**< Botón de acción (acento azul). */
+extern const UiStyle UI_STYLE_NAV; /**< Botón de la barra de navegación.   */
+
 /**
  * @brief Dibuja una caja rellena con borde opcional.
  * @param bg     Color de relleno.

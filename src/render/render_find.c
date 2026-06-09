@@ -48,15 +48,12 @@
 #define FB_COL_FIELD_FOCUS 0x2A, 0x2E, 0x38, 255 /* campo con foco         */
 #define FB_COL_ACCENT 0x52, 0x8B, 0xD4, 255      /* borde con foco / acento */
 #define FB_COL_SEL 0x26, 0x4F, 0x78, 200         /* resaltado de selección */
-#define FB_COL_NAV_BTN 0x2A, 0x2E, 0x38, 255     /* fondo botones ↑/↓      */
-#define FB_COL_REPLACE_BTN 0x2C, 0x5F, 0x8C, 255 /* fondo botón Reemplazar */
+/* (los colores de los botones ↑/↓/Reemplazar viven en el tema: ui.h/ui.c) */
 
 /* -- Colores de texto (RGB, para draw_text) -------------------------------- */
 #define FB_TXT_LABEL 0x88, 0x8C, 0x99
 #define FB_TXT_FIELD 220, 220, 220
-#define FB_TXT_ARROW 180, 200, 230
 #define FB_TXT_COUNTER 97, 175, 239
-#define FB_TXT_BTN 210, 230, 255
 #define FB_TXT_NORESULT 200, 80, 80
 
 /**
@@ -207,20 +204,15 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     int next_x = prev_x + arrow_w + FB_NAV_GAP + counter_w +
                  FB_NAV_GAP; /* X de "siguiente" */
 
-    /* Flechas como botones reutilizables; ui_button registra su rect
-     * (UI_FIND_PREV / UI_FIND_NEXT) para el hit-test, sin guardar geometría. */
-    UiStyle arrow = {.bg = {FB_COL_NAV_BTN},
-                     .bg_hover = {FB_COL_NAV_BTN},
-                     .bg_active = {FB_COL_NAV_BTN},
-                     .border = {FB_COL_BORDER},
-                     .text = {FB_TXT_ARROW, 255}};
+    /* Flechas como botones reutilizables (estilo del tema); ui_button registra
+     * su rect (UI_FIND_PREV / UI_FIND_NEXT) para el hit-test. */
     Rect prev_box = {prev_x, row_y, arrow_w, FB_FIELD_H};
     Rect next_box = {next_x, row_y, arrow_w, FB_FIELD_H};
-    ui_button(e, UI_FIND_PREV, prev_box, "↑", &arrow, UI_NORMAL);
+    ui_button(e, UI_FIND_PREV, prev_box, "↑", &UI_STYLE_BUTTON, UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
     draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
               FB_TXT_COUNTER);
-    ui_button(e, UI_FIND_NEXT, next_box, "↓", &arrow, UI_NORMAL);
+    ui_button(e, UI_FIND_NEXT, next_box, "↓", &UI_STYLE_BUTTON, UI_NORMAL);
 }
 
 /**
@@ -325,15 +317,10 @@ void render_find_bar(Editor *e) {
     draw_field_text(e, field_x, row2_y, fb->replace,
                     replace_focused && fb->replace_sel_start < 0 && blink);
 
-    /* Botón "Reemplazar" como componente reutilizable (registra
-     * UI_FIND_REPLACE). */
-    UiStyle replace_btn = {.bg = {FB_COL_REPLACE_BTN},
-                           .bg_hover = {FB_COL_REPLACE_BTN},
-                           .bg_active = {FB_COL_REPLACE_BTN},
-                           .border = {FB_COL_ACCENT},
-                           .text = {FB_TXT_BTN, 255}};
+    /* Botón "Reemplazar": estilo de acción del tema (registra UI_FIND_REPLACE).
+     */
     Rect replace_box = {replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H};
-    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar", &replace_btn,
+    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar", &UI_STYLE_PRIMARY,
               UI_NORMAL);
 
     /* -- Hit-test: registrar campos y marco en e->ui (lo lee input_mouse) --
