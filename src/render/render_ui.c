@@ -127,7 +127,7 @@ void render_navbar(Editor *e) {
      * visible que se dibuja es algo más baja. */
     ui_put(&e->ui, UI_BTN_FILE, (Rect){NAV_BTN_X, 0, btn_w, NAVBAR_HEIGHT});
     Rect file_box = {NAV_BTN_X, NAV_BTN_Y, btn_w, btn_h};
-    ui_button(e, UI_ID_NONE, file_box, "  Archivo  ", &UI_STYLE_NAV,
+    ui_button(e, UI_ID_NONE, file_box, "  Archivo  ", &e->theme.style_nav,
               e->menu_open ? UI_ACTIVE : UI_NORMAL);
 
     /* Y para centrar verticalmente el título y el punto de "modificado". */

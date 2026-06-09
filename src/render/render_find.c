@@ -196,11 +196,13 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
      * su rect (UI_FIND_PREV / UI_FIND_NEXT) para el hit-test. */
     Rect prev_box = {prev_x, row_y, arrow_w, FB_FIELD_H};
     Rect next_box = {next_x, row_y, arrow_w, FB_FIELD_H};
-    ui_button(e, UI_FIND_PREV, prev_box, "↑", &UI_STYLE_BUTTON, UI_NORMAL);
+    ui_button(e, UI_FIND_PREV, prev_box, "↑", &e->theme.style_button,
+              UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
     draw_text_c(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
                 e->theme.fb_txt_counter);
-    ui_button(e, UI_FIND_NEXT, next_box, "↓", &UI_STYLE_BUTTON, UI_NORMAL);
+    ui_button(e, UI_FIND_NEXT, next_box, "↓", &e->theme.style_button,
+              UI_NORMAL);
 }
 
 /**
@@ -308,8 +310,8 @@ void render_find_bar(Editor *e) {
     /* Botón "Reemplazar": estilo de acción del tema (registra UI_FIND_REPLACE).
      */
     Rect replace_box = {replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H};
-    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar", &UI_STYLE_PRIMARY,
-              UI_NORMAL);
+    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar",
+              &e->theme.style_primary, UI_NORMAL);
 
     /* -- Hit-test: registrar campos y marco en e->ui (lo lee input_mouse) --
      * El área "clicable" de cada campo abarca toda la fila hasta el borde

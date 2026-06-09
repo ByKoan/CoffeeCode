@@ -19,6 +19,20 @@
 #define THEME_COUNT 2
 
 /**
+ * @brief Estilo de un botón de la capa ui: fondos por estado, borde y texto.
+ *
+ * Vive aquí (y no en ui.h) para poder formar parte del ::Theme y cambiar con
+ * él.
+ */
+typedef struct {
+    Color bg;        /**< Fondo en estado normal.        */
+    Color bg_hover;  /**< Fondo bajo el ratón.           */
+    Color bg_active; /**< Fondo pulsado/activo.          */
+    Color border;    /**< Borde (si @c a==0, sin borde). */
+    Color text;      /**< Color del label.               */
+} UiStyle;
+
+/**
  * @brief Paleta de la UI. Un campo por color (mismo nombre que su macro), más
  *        los colores de los tokens de sintaxis.
  */
@@ -53,6 +67,10 @@ typedef struct {
     Color fb_txt_label, fb_txt_field, fb_txt_counter, fb_txt_noresult;
     /* -- Sintaxis (indexado por ::LexTokenType) -- */
     Color tokens[TOK_COUNT];
+    /* -- Estilos de botón de la capa ui -- */
+    UiStyle style_button;  /**< Botón secundario (caja gris).  */
+    UiStyle style_primary; /**< Botón de acción (acento azul). */
+    UiStyle style_nav;     /**< Botón de la barra de navegación. */
 } Theme;
 
 /** Devuelve el preset @p index (0 = oscuro, 1 = claro; fuera de rango =

@@ -6,30 +6,8 @@
 #include "ui.h"
 #include "render_internal.h" /* set_color, fill_rect, stroke_rect, draw_text */
 
-/* ── Tema: estilos de botón (colores literales centralizados aquí) ───────────
- */
-
-/** Botón secundario: caja gris con borde (p. ej. flechas de la búsqueda). */
-const UiStyle UI_STYLE_BUTTON = {.bg = {0x2A, 0x2E, 0x38, 255},
-                                 .bg_hover = {0x33, 0x38, 0x44, 255},
-                                 .bg_active = {0x33, 0x38, 0x44, 255},
-                                 .border = {0x3A, 0x3F, 0x4A, 255},
-                                 .text = {180, 200, 230, 255}};
-
-/** Botón de acción/acento azul (p. ej. "Reemplazar"). */
-const UiStyle UI_STYLE_PRIMARY = {.bg = {0x2C, 0x5F, 0x8C, 255},
-                                  .bg_hover = {0x34, 0x6E, 0xA0, 255},
-                                  .bg_active = {0x34, 0x6E, 0xA0, 255},
-                                  .border = {0x52, 0x8B, 0xD4, 255},
-                                  .text = {210, 230, 255, 255}};
-
-/** Botón de la barra de navegación: sin borde, fondo = navbar (invisible en
- *  reposo) y resaltado al estar activo (menú abierto). */
-const UiStyle UI_STYLE_NAV = {.bg = {0x1A, 0x1D, 0x23, 255},
-                              .bg_hover = {0x2C, 0x31, 0x3C, 255},
-                              .bg_active = {0x2C, 0x31, 0x3C, 255},
-                              .border = {0, 0, 0, 0},
-                              .text = {0xCC, 0xCC, 0xCC, 255}};
+/* Los estilos de botón (UI_STYLE_*) ahora viven en el tema:
+ * e->theme.style_button / style_primary / style_nav (ver render/theme.c). */
 
 /* ── Registro de hit-test ───────────────────────────────────────────────────
  */

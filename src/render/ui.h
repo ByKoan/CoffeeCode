@@ -15,27 +15,14 @@
 /** Estado visual de un control interactivo. */
 typedef enum { UI_NORMAL, UI_HOVER, UI_ACTIVE, UI_DISABLED } UiState;
 
-/** Estilo de una caja/botón: colores de fondo por estado, borde y texto. */
-typedef struct {
-    Color bg;        /**< Fondo en estado normal.            */
-    Color bg_hover;  /**< Fondo bajo el ratón.               */
-    Color bg_active; /**< Fondo pulsado/activo.              */
-    Color border;    /**< Borde (si @c a==0, sin borde).     */
-    Color text;      /**< Color del label.                   */
-} UiStyle;
+/* ::UiStyle (estilo de botón) vive en render/theme.h, porque forma parte del
+ * tema: los estilos concretos están en e->theme.style_button/primary/nav. */
 
 /** Construye un ::Color a partir de sus componentes. */
 static inline Color ui_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     Color c = {r, g, b, a};
     return c;
 }
-
-/* ── Tema: estilos de botón compartidos (definidos en ui.c) ──────────────────
- * Centralizan el aspecto de cada tipo de botón en un único sitio: para cambiar
- * el color de, p. ej., todos los botones de acción, se edita aquí. */
-extern const UiStyle UI_STYLE_BUTTON; /**< Botón secundario (caja gris).      */
-extern const UiStyle UI_STYLE_PRIMARY; /**< Botón de acción (acento azul). */
-extern const UiStyle UI_STYLE_NAV; /**< Botón de la barra de navegación.   */
 
 /**
  * @brief Dibuja una caja rellena con borde opcional.
