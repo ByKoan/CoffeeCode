@@ -2,111 +2,160 @@
  * @file render_ui.c
  * @brief Cromo de la interfaz: navbar, menú "Archivo", barra de pestañas,
  *        banda de atajos y scrollbar vertical.
+ *
+ * @note Todas las funciones de aquí dibujan con las utilidades compartidas de
+ * render.c: ::set_color (fija el color RGBA actual del renderer), ::fill_rect
+ * (rectángulo relleno), ::stroke_rect (contorno de 1 px) y ::draw_text
+ * (rasteriza texto con SDL_ttf y devuelve su ancho en px). Para medir texto sin
+ * dibujarlo se usa @c TTF_GetStringSize, imprescindible para centrar y para
+ * dimensionar botones según su etiqueta. El patrón recurrente es: pintar fondo
+ * → pintar bordes/acentos → escribir texto encima. Muchas de estas funciones,
+ * además de dibujar, guardan la geometría de los elementos (p. ej. la X de
+ * cerrar pestaña) en el @c Editor para que el módulo de input sepa dónde se
+ * hizo clic.
  */
 #include "render_internal.h"
 #include <stdio.h>
 #include <string.h>
 
-/* ── Menú "Archivo" ───────────────────────────────────────────────────────── */
-#define MENU_ITEM_H   26
-#define MENU_WIDTH    210
-#define MENU_ITEMS    6
-#define MENU_SEP_H    8  /* alto de un separador del menú        */
-#define MENU_SHADOW   3  /* desplazamiento de la sombra          */
+/* ── Menú "Archivo" ─────────────────────────────────────────────────────────
+ */
+#define MENU_ITEM_H 26       /* alto de cada entrada del menú (px)   */
+#define MENU_WIDTH 210       /* ancho del desplegable (px)           */
+#define MENU_ITEMS 6         /* número de entradas (incluye separadores) */
+#define MENU_SEP_H 8         /* alto de un separador del menú        */
+#define MENU_SHADOW 3        /* desplazamiento de la sombra          */
 #define MENU_AUTOSAVE_ITEM 5 /* índice del item "Autoguardado"   */
 
-static const char *MENU_LABELS[MENU_ITEMS] = {"Nuevo", "Abrir archivo...", "Abrir carpeta...",
-                                              NULL,    "Guardar",          "Autoguardado"};
-static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL, "Ctrl+S", NULL};
+/* Etiquetas del menú; una entrada NULL es un separador (línea horizontal). */
+static const char *MENU_LABELS[MENU_ITEMS] = {
+    "Nuevo", "Abrir archivo...", "Abrir carpeta...",
+    NULL,    "Guardar",          "Autoguardado"};
+/* Atajo mostrado a la derecha de cada entrada (NULL = sin atajo o separador).
+ */
+static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K",
+                                             NULL,     "Ctrl+S", NULL};
 
-/* ── Navbar ───────────────────────────────────────────────────────────────── */
-#define NAV_BTN_X         4
-#define NAV_BTN_Y         2
-#define NAV_BTN_MIN_W     90
-#define NAV_TITLE_GAP     8  /* separación mínima entre botón y título */
-#define COL_NAVBAR_SEP    0x3A, 0x3F, 0x4A, 0xFF
-#define COL_MODIFIED_DOT  0xE0, 0x6C, 0x75, 0xFF
-#define TXT_NAVBAR_BTN    0xCC, 0xCC, 0xCC
-#define TXT_NAVBAR_TITLE  0x80, 0x85, 0x95
-#define COL_MENU_SHADOW   0x00, 0x00, 0x00, 0x60
-#define TXT_MENU_CHECK    0x98, 0xC3, 0x79
-#define TXT_MENU_ITEM     0xCC, 0xCC, 0xCC
-#define TXT_MENU_HINT     0x60, 0x65, 0x70
+/* ── Navbar (barra superior con el botón "Archivo" y el título) ─────────────
+ */
+#define NAV_BTN_X 4      /* X del botón "Archivo" (px)            */
+#define NAV_BTN_Y 2      /* Y del botón "Archivo" (px)            */
+#define NAV_BTN_MIN_W 90 /* ancho mínimo del botón "Archivo" (px) */
+#define NAV_TITLE_GAP 8  /* separación mínima entre botón y título */
+#define COL_NAVBAR_SEP 0x3A, 0x3F, 0x4A, 0xFF
+#define COL_MODIFIED_DOT 0xE0, 0x6C, 0x75, 0xFF
+#define TXT_NAVBAR_BTN 0xCC, 0xCC, 0xCC
+#define TXT_NAVBAR_TITLE 0x80, 0x85, 0x95
+#define COL_MENU_SHADOW 0x00, 0x00, 0x00, 0x60
+#define TXT_MENU_CHECK 0x98, 0xC3, 0x79
+#define TXT_MENU_ITEM 0xCC, 0xCC, 0xCC
+#define TXT_MENU_HINT 0x60, 0x65, 0x70
 
-/* ── Barra de pestañas ────────────────────────────────────────────────────── */
-#define TAB_CLOSE_W       16
-#define TAB_PAD           10
-#define TAB_TEXT_EXTRA    4   /* holgura extra del ancho de pestaña    */
-#define TAB_MIN_W         80
-#define TAB_MAX_W         200
-#define TAB_ACCENT_H      2   /* línea de acento del tab activo        */
-#define TAB_MOD_DOT_SZ    5   /* punto de "modificado"                 */
-#define TAB_CLOSE_GLYPH_H 14
-#define TAB_NEW_BTN_W     28
-#define COL_TABBAR_BG     0x16, 0x19, 0x1F, 255
-#define COL_TABBAR_SEP    0x2A, 0x2E, 0x38, 255
-#define COL_TAB_ACTIVE    0x1E, 0x22, 0x2B, 255
-#define COL_TAB_ACCENT    0x52, 0x8B, 0xD4, 255
-#define COL_TAB_MOD_DOT   0xE0, 0x90, 0x40, 255
-#define TXT_TAB_NEW       0x55, 0x5A, 0x6A
+/* ── Barra de pestañas ──────────────────────────────────────────────────────
+ */
+#define TAB_CLOSE_W 16       /* ancho reservado para la "×" de cerrar */
+#define TAB_PAD 10           /* padding horizontal interno (px)       */
+#define TAB_TEXT_EXTRA 4     /* holgura extra del ancho de pestaña    */
+#define TAB_MIN_W 80         /* ancho mínimo de una pestaña (px)      */
+#define TAB_MAX_W 200        /* ancho máximo de una pestaña (px)      */
+#define TAB_ACCENT_H 2       /* línea de acento del tab activo        */
+#define TAB_MOD_DOT_SZ 5     /* punto de "modificado"                 */
+#define TAB_CLOSE_GLYPH_H 14 /* alto del glifo "×" (para centrarlo)   */
+#define TAB_NEW_BTN_W 28     /* ancho del botón "+" de nueva pestaña  */
+#define COL_TABBAR_BG 0x16, 0x19, 0x1F, 255
+#define COL_TABBAR_SEP 0x2A, 0x2E, 0x38, 255
+#define COL_TAB_ACTIVE 0x1E, 0x22, 0x2B, 255
+#define COL_TAB_ACCENT 0x52, 0x8B, 0xD4, 255
+#define COL_TAB_MOD_DOT 0xE0, 0x90, 0x40, 255
+#define TXT_TAB_NEW 0x55, 0x5A, 0x6A
 
-/* ── Banda de atajos (badges) ─────────────────────────────────────────────── */
-#define BADGE_PAD_X       5
-#define BADGE_PAD_Y       2
-#define BADGE_GAP         3   /* tras el badge, antes de su etiqueta   */
-#define BADGE_LABEL_GAP   14  /* tras la etiqueta, antes del siguiente */
+/* ── Banda de atajos (badges) ───────────────────────────────────────────────
+ */
+#define BADGE_PAD_X 5
+#define BADGE_PAD_Y 2
+#define BADGE_GAP 3        /* tras el badge, antes de su etiqueta   */
+#define BADGE_LABEL_GAP 14 /* tras la etiqueta, antes del siguiente */
 #define SHORTCUT_LEFT_PAD 10
-#define SHORTCUT_END_PAD  40  /* margen donde se deja de pintar atajos */
-#define COL_BADGE_BG      0x3A, 0x3F, 0x4C, 0xFF
-#define COL_BADGE_BORDER  0x52, 0x5A, 0x6E, 0xFF
-#define COL_BADGE_SHADOW  0x1A, 0x1D, 0x23, 0xFF
-#define COL_SHORTCUT_SEP  0x35, 0x3A, 0x45, 0xFF
-#define COL_SHORTCUT_BG   0x1E, 0x21, 0x28, 0xFF
-#define TXT_BADGE_KEY     0xD0, 0xD8, 0xEA
-#define TXT_BADGE_LABEL   0x5C, 0x62, 0x72
+#define SHORTCUT_END_PAD 40 /* margen donde se deja de pintar atajos */
+#define COL_BADGE_BG 0x3A, 0x3F, 0x4C, 0xFF
+#define COL_BADGE_BORDER 0x52, 0x5A, 0x6E, 0xFF
+#define COL_BADGE_SHADOW 0x1A, 0x1D, 0x23, 0xFF
+#define COL_SHORTCUT_SEP 0x35, 0x3A, 0x45, 0xFF
+#define COL_SHORTCUT_BG 0x1E, 0x21, 0x28, 0xFF
+#define TXT_BADGE_KEY 0xD0, 0xD8, 0xEA
+#define TXT_BADGE_LABEL 0x5C, 0x62, 0x72
 
-/* ── Scrollbar ────────────────────────────────────────────────────────────── */
-#define SB_MIN_THUMB_H    20
-#define COL_SB_TRACK      0x1E, 0x21, 0x28, 0xFF
-#define COL_SB_THUMB      0x42, 0x48, 0x5A, 0xFF
-#define COL_SB_BORDER     0x35, 0x3A, 0x45, 0xFF
+/* ── Scrollbar ──────────────────────────────────────────────────────────────
+ */
+#define SB_MIN_THUMB_H 20
+#define COL_SB_TRACK 0x1E, 0x21, 0x28, 0xFF
+#define COL_SB_THUMB 0x42, 0x48, 0x5A, 0xFF
+#define COL_SB_BORDER 0x35, 0x3A, 0x45, 0xFF
 
-/** Último componente (nombre de archivo/carpeta) de una ruta. */
+/**
+ * @brief Devuelve el último componente (nombre de archivo/carpeta) de una ruta.
+ *
+ * Recorre la cadena y se queda con lo que sigue al último separador, sea '/' o
+ * '\\' (para que funcione en Linux y Windows). No copia: devuelve un puntero
+ * dentro de
+ * @p path. P. ej. "src/render/render_ui.c" -> "render_ui.c".
+ *
+ * @param path Ruta completa. @return Puntero al nombre base dentro de @p path.
+ */
 static const char *last_path_component(const char *path) {
     const char *base = path;
     for (const char *p = path; *p; p++)
-        if (*p == '/' || *p == '\\') base = p + 1;
+        if (*p == '/' || *p == '\\')
+            base = p + 1; /* tras cada separador, reiniciar base */
     return base;
 }
 
+/**
+ * @brief Dibuja la barra de navegación superior: botón "Archivo" y título
+ * central.
+ *
+ * Pinta el fondo de la navbar y su separador inferior, el botón "Archivo"
+ * (resaltado si el menú está abierto), y el título centrado ("CoffeeCode —
+ * archivo" si hay uno abierto). Si el archivo tiene cambios sin guardar, añade
+ * un punto rojo a la derecha del título.
+ *
+ * @param e Editor.
+ */
 void render_navbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
     set_color(r, COL_NAVBAR_BG);
-    fill_rect(r, 0, 0, e->win_w, NAVBAR_HEIGHT);
+    fill_rect(r, 0, 0, e->win_w, NAVBAR_HEIGHT); /* fondo de la navbar */
     set_color(r, COL_NAVBAR_SEP);
-    fill_rect(r, 0, NAVBAR_HEIGHT - 1, e->win_w, 1);
+    fill_rect(r, 0, NAVBAR_HEIGHT - 1, e->win_w,
+              1); /* separador inferior de 1 px */
 
-    int btn_h = NAVBAR_HEIGHT - 4;
+    int btn_h =
+        NAVBAR_HEIGHT - 4; /* alto del botón con 2 px de margen arriba/abajo */
 
-    /* Ancho del botón "Archivo": se calcula una vez y se cachea */
+    /* Ancho del botón "Archivo": se mide una vez (TTF_GetStringSize) y se
+     * cachea en una variable static para no remedir el texto en cada frame. */
     static int cached_btn_w = 0;
     if (cached_btn_w == 0) {
         int label_w = 0, label_h = 0;
         TTF_GetStringSize(e->font, "  Archivo  ", 0, &label_w, &label_h);
-        cached_btn_w = (label_w > 20) ? label_w : NAV_BTN_MIN_W;
+        cached_btn_w = (label_w > 20)
+                           ? label_w
+                           : NAV_BTN_MIN_W; /* fallback si midiera raro */
     }
     int btn_w = cached_btn_w;
 
-    if (e->menu_open) {
+    if (e->menu_open) { /* botón resaltado mientras el menú está desplegado */
         set_color(r, COL_NAVBAR_BTN);
         fill_rect(r, NAV_BTN_X, NAV_BTN_Y, btn_w, btn_h);
     }
 
-    int text_y = NAV_BTN_Y + (btn_h - FONT_SIZE) / 2;
+    int text_y =
+        NAV_BTN_Y + (btn_h - FONT_SIZE) / 2; /* centrado vertical del texto */
     draw_text(e, "  Archivo  ", NAV_BTN_X, text_y, TXT_NAVBAR_BTN);
 
-    /* Título: "CoffeeCode" + nombre del archivo abierto si lo hay */
+    /* Título: "CoffeeCode" y, si hay archivo, " — nombre" (\xe2\x80\x94 es el
+     * guión largo "—" codificado en UTF-8). */
     char title[600];
     if (e->filepath[0])
         snprintf(title, sizeof(title), "CoffeeCode \xe2\x80\x94 %s",
@@ -115,223 +164,341 @@ void render_navbar(Editor *e) {
         snprintf(title, sizeof(title), "CoffeeCode");
 
     int title_w = 0, title_h = 0;
-    TTF_GetStringSize(e->font, title, 0, &title_w, &title_h);
+    TTF_GetStringSize(e->font, title, 0, &title_w,
+                      &title_h); /* medir para centrar */
     int title_x = (e->win_w - title_w) / 2;
-    if (title_x < NAV_BTN_X + btn_w + NAV_TITLE_GAP) title_x = NAV_BTN_X + btn_w + NAV_TITLE_GAP;
+    /* no dejar que el título pise el botón "Archivo": empujarlo a su derecha */
+    if (title_x < NAV_BTN_X + btn_w + NAV_TITLE_GAP)
+        title_x = NAV_BTN_X + btn_w + NAV_TITLE_GAP;
     draw_text(e, title, title_x, text_y, TXT_NAVBAR_TITLE);
 
-    if (e->modified) {
+    if (e->modified) { /* punto rojo de "hay cambios sin guardar" */
         set_color(r, COL_MODIFIED_DOT);
         fill_rect(r, title_x + title_w + 6, text_y + FONT_SIZE / 2 - 3, 6, 6);
     }
 }
 
+/**
+ * @brief Dibuja el menú desplegable "Archivo" (solo si está abierto).
+ *
+ * Calcula el alto total sumando la altura de cada entrada (o de separador si la
+ * etiqueta es @c NULL), pinta una sombra desplazada (efecto flotante), el fondo
+ * y el borde, y luego cada entrada: separador como línea fina, fondo de hover
+ * bajo la entrada señalada por el ratón (@c menu_hovered), el texto y, a la
+ * derecha, su atajo (solo si no se solapa con la etiqueta). El item
+ * "Autoguardado" muestra un tic (✓) cuando está activo.
+ *
+ * @param e Editor (@c menu_open, @c menu_hovered, @c autosave).
+ */
 void render_menu(Editor *e) {
-    if (!e->menu_open) return;
+    if (!e->menu_open) return; /* menú cerrado: no dibujar nada */
     SDL_Renderer *r = e->renderer;
 
-    int menu_x = NAV_BTN_X, menu_y = NAVBAR_HEIGHT;
+    int menu_x = NAV_BTN_X,
+        menu_y = NAVBAR_HEIGHT; /* esquina del menú, bajo el botón */
     int menu_h = 0;
+    /* alto total = suma de las alturas de entradas y separadores */
     for (int i = 0; i < MENU_ITEMS; i++)
         menu_h += MENU_LABELS[i] ? MENU_ITEM_H : MENU_SEP_H;
 
-    set_color(r, COL_MENU_SHADOW);
-    fill_rect(r, menu_x + MENU_SHADOW, menu_y + MENU_SHADOW, MENU_WIDTH, menu_h);
+    set_color(r, COL_MENU_SHADOW); /* sombra desplazada (semitransparente) */
+    fill_rect(r, menu_x + MENU_SHADOW, menu_y + MENU_SHADOW, MENU_WIDTH,
+              menu_h);
     set_color(r, COL_MENU_BG);
-    fill_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h);
+    fill_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h); /* fondo del menú */
     set_color(r, COL_MENU_BORDER);
-    stroke_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h);
+    stroke_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h); /* borde del menú */
 
-    int item_y = menu_y;
+    int item_y = menu_y; /* Y acumulada de la entrada en curso */
     for (int i = 0; i < MENU_ITEMS; i++) {
-        if (!MENU_LABELS[i]) { /* separador */
+        if (!MENU_LABELS[i]) { /* separador (etiqueta NULL): línea fina centrada
+                                */
             set_color(r, COL_MENU_SEP);
             fill_rect(r, menu_x + 8, item_y + 4, MENU_WIDTH - 16, 1);
             item_y += MENU_SEP_H;
             continue;
         }
 
-        if (e->menu_hovered == i) {
+        if (e->menu_hovered == i) { /* fondo de resaltado bajo el ratón */
             set_color(r, COL_MENU_HOVER);
             fill_rect(r, menu_x + 1, item_y, MENU_WIDTH - 2, MENU_ITEM_H);
         }
 
-        int text_y = item_y + (MENU_ITEM_H - FONT_SIZE) / 2;
+        int text_y =
+            item_y + (MENU_ITEM_H - FONT_SIZE) / 2; /* centrado vertical */
 
-        /* Item "Autoguardado": checkmark si está activo */
+        /* Item "Autoguardado": tic (✓, \xe2\x9c\x93 en UTF-8) si está activo */
         if (i == MENU_AUTOSAVE_ITEM && e->autosave)
             draw_text(e, "\xe2\x9c\x93", menu_x + 4, text_y, TXT_MENU_CHECK);
 
-        draw_text(e, MENU_LABELS[i], menu_x + 14, text_y, TXT_MENU_ITEM);
+        draw_text(e, MENU_LABELS[i], menu_x + 14, text_y,
+                  TXT_MENU_ITEM); /* etiqueta */
 
-        if (MENU_HINTS[i]) {
+        if (MENU_HINTS[i]) { /* atajo alineado a la derecha del menú */
             int hint_w = 0, hint_h = 0, label_w = 0;
-            TTF_GetStringSize(e->font, MENU_HINTS[i], 0, &hint_w, &hint_h);
-            TTF_GetStringSize(e->font, MENU_LABELS[i], 0, &label_w, &hint_h);
-            int hint_x = menu_x + MENU_WIDTH - hint_w - 10;
-            int label_right = menu_x + 14 + label_w + 8;
-            if (hint_x > label_right) /* solo si no se solapa con el label */
+            TTF_GetStringSize(e->font, MENU_HINTS[i], 0, &hint_w,
+                              &hint_h); /* ancho atajo */
+            TTF_GetStringSize(e->font, MENU_LABELS[i], 0, &label_w,
+                              &hint_h); /* ancho etiqueta */
+            int hint_x =
+                menu_x + MENU_WIDTH - hint_w - 10; /* pegado al borde derecho */
+            int label_right =
+                menu_x + 14 + label_w + 8; /* fin de la etiqueta */
+            if (hint_x >
+                label_right) /* solo dibujar el atajo si no pisa la etiqueta */
                 draw_text(e, MENU_HINTS[i], hint_x, text_y, TXT_MENU_HINT);
         }
         item_y += MENU_ITEM_H;
     }
 }
 
-/** Dibuja la pestaña @p index en x=@p tx y guarda su geometría de clic. */
+/**
+ * @brief Dibuja una pestaña y registra su geometría para la detección de clics.
+ *
+ * Calcula el ancho según el nombre (acotado a [@c TAB_MIN_W, @c TAB_MAX_W]),
+ * pinta el fondo (más claro si es la activa), el borde derecho y, en la activa,
+ * una línea de acento arriba. Escribe el nombre recortado con un rectángulo de
+ * clip
+ * (@c SDL_SetRenderClipRect limita el dibujo a esa zona: lo que sobresalga se
+ * corta en vez de invadir el botón de cerrar), un punto si hay cambios y la "×"
+ * de cerrar. Guarda en la pestaña @c tab_x/@c tab_w y @c close_x/@c close_y
+ * para que el input sepa dónde están sus zonas pulsables.
+ *
+ * @param e Editor. @param index Índice de la pestaña. @param tx X de inicio
+ * (px).
+ * @param bar_y Y de la barra. @param bar_h Alto de la barra.
+ * @return Ancho dibujado de la pestaña (para avanzar a la siguiente).
+ */
 static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     SDL_Renderer *r = e->renderer;
     EditorTab *t = &e->tabs[index];
     int active = (index == e->active_tab);
 
-    const char *name = last_path_component(t->filepath[0] ? t->filepath : "Sin título");
+    /* nombre = último componente de la ruta, o "Sin título" si aún no se guardó
+     */
+    const char *name =
+        last_path_component(t->filepath[0] ? t->filepath : "Sin título");
 
     int name_w = 0, name_h = 0;
-    TTF_GetStringSize(e->font, name, 0, &name_w, &name_h);
+    TTF_GetStringSize(e->font, name, 0, &name_w, &name_h); /* medir el nombre */
+    /* ancho = nombre + botón cerrar + paddings, acotado a un rango */
     int tab_w = name_w + TAB_CLOSE_W + TAB_PAD * 2 + TAB_TEXT_EXTRA;
     if (tab_w < TAB_MIN_W) tab_w = TAB_MIN_W;
     if (tab_w > TAB_MAX_W) tab_w = TAB_MAX_W;
 
-    t->tab_x = tx;
+    t->tab_x = tx; /* guardar geometría para el input (clic en la pestaña) */
     t->tab_w = tab_w;
 
     if (active)
-        set_color(r, COL_TAB_ACTIVE);
+        set_color(r, COL_TAB_ACTIVE); /* pestaña activa: fondo más claro */
     else
         set_color(r, COL_TABBAR_BG);
     fill_rect(r, tx, bar_y, tab_w, bar_h);
 
-    set_color(r, COL_TABBAR_SEP); /* borde derecho */
+    set_color(r, COL_TABBAR_SEP); /* borde derecho separador */
     fill_rect(r, tx + tab_w - 1, bar_y, 1, bar_h);
 
-    if (active) { /* línea de acento superior */
+    if (active) { /* línea de acento superior en la activa */
         set_color(r, COL_TAB_ACCENT);
         fill_rect(r, tx, bar_y, tab_w, TAB_ACCENT_H);
     }
 
-    /* Nombre, recortado con clip para que no rebose */
+    /* Nombre: se acota el dibujo a un rectángulo de clip para que no rebose el
+     * botón de cerrar; SDL recorta cualquier píxel fuera de "clip". */
     int text_max_w = tab_w - TAB_CLOSE_W - TAB_PAD * 2 - TAB_TEXT_EXTRA;
     int text_y = bar_y + (bar_h - FONT_SIZE) / 2;
     SDL_Rect clip = {tx + TAB_PAD, bar_y, text_max_w, bar_h};
-    SDL_SetRenderClipRect(r, &clip);
+    SDL_SetRenderClipRect(r, &clip); /* activar recorte */
     if (active)
-        draw_text(e, name, tx + TAB_PAD, text_y, 0xCC, 0xCC, 0xDD);
+        draw_text(e, name, tx + TAB_PAD, text_y, 0xCC, 0xCC,
+                  0xDD); /* texto claro */
     else
-        draw_text(e, name, tx + TAB_PAD, text_y, 0x66, 0x6A, 0x75);
-    SDL_SetRenderClipRect(r, NULL);
+        draw_text(e, name, tx + TAB_PAD, text_y, 0x66, 0x6A,
+                  0x75); /* texto tenue */
+    SDL_SetRenderClipRect(
+        r, NULL); /* desactivar recorte (volver a dibujar libre) */
 
-    if (t->modified) {
+    if (t->modified) { /* punto de "cambios sin guardar" */
         set_color(r, COL_TAB_MOD_DOT);
-        fill_rect(r, tx + TAB_PAD + text_max_w + 2, text_y + FONT_SIZE / 2 - 3, TAB_MOD_DOT_SZ,
-                  TAB_MOD_DOT_SZ);
+        fill_rect(r, tx + TAB_PAD + text_max_w + 2, text_y + FONT_SIZE / 2 - 3,
+                  TAB_MOD_DOT_SZ, TAB_MOD_DOT_SZ);
     }
 
-    /* Botón × de cerrar */
+    /* Botón × de cerrar (más visible en la activa); se guarda su posición */
     int close_x = tx + tab_w - TAB_CLOSE_W - 2;
     int close_y = bar_y + (bar_h - TAB_CLOSE_GLYPH_H) / 2;
     t->close_x = close_x;
     t->close_y = close_y;
-    uint8_t close_shade = active ? 0x88 : 0x44;
+    uint8_t close_shade =
+        active ? 0x88 : 0x44; /* gris (un mismo valor en R=G=B) */
     draw_text(e, "×", close_x, close_y, close_shade, close_shade, close_shade);
 
     return tab_w;
 }
 
+/**
+ * @brief Dibuja la barra de pestañas completa y el botón "+" de nueva pestaña.
+ *
+ * Pinta el fondo y separador inferior, recorre las pestañas con ::draw_tab
+ * (avanzando la X por el ancho de cada una) y, al final, el botón "+". Guarda
+ * en
+ * @c tab_new_btn_x la X del "+" para que el input detecte el clic.
+ *
+ * @param e Editor.
+ */
 void render_tabbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
     int bar_y = NAVBAR_HEIGHT;
     int bar_h = TAB_BAR_HEIGHT;
 
     set_color(r, COL_TABBAR_BG);
-    fill_rect(r, 0, bar_y, e->win_w, bar_h);
+    fill_rect(r, 0, bar_y, e->win_w, bar_h); /* fondo de la barra */
     set_color(r, COL_TABBAR_SEP);
-    fill_rect(r, 0, bar_y + bar_h - 1, e->win_w, 1);
+    fill_rect(r, 0, bar_y + bar_h - 1, e->win_w, 1); /* separador inferior */
 
+    /* empezar tras el panel lateral (o su botón si está cerrado) */
     int tx = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     for (int i = 0; i < e->tab_count; i++)
-        tx += draw_tab(e, i, tx, bar_y, bar_h);
+        tx += draw_tab(e, i, tx, bar_y, bar_h); /* cada pestaña avanza tx */
 
-    /* Botón + (nueva pestaña) */
-    e->tab_new_btn_x = tx;
+    /* Botón + (nueva pestaña), justo después de la última */
+    e->tab_new_btn_x = tx; /* guardar para el input */
     set_color(r, COL_TABBAR_BG);
     fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
     draw_text(e, "+", tx + 7, bar_y + (bar_h - FONT_SIZE) / 2, TXT_TAB_NEW);
 }
 
-/** Dibuja un badge de tecla + su etiqueta; avanza *x al siguiente hueco. */
-static void draw_shortcut_badge(Editor *e, const char *key, const char *label, int *x, int y) {
+/**
+ * @brief Dibuja un "badge" (tecla en recuadro) seguido de su etiqueta.
+ *
+ * Pinta el recuadro de la tecla (fondo, borde y una línea de sombra inferior
+ * para dar relieve), su texto, y a continuación la etiqueta descriptiva. Avanza
+ * @p *x (paso por referencia) hasta el inicio del siguiente badge, de modo que
+ * el llamante pueda encadenarlos en fila.
+ *
+ * @param e   Editor. @param key Texto de la tecla (p. ej. "Ctrl+F").
+ * @param label Etiqueta (p. ej. "Buscar"); puede ser vacía.
+ * @param[in,out] x X actual; se actualiza al hueco siguiente. @param y Y del
+ * badge.
+ */
+static void draw_shortcut_badge(Editor *e, const char *key, const char *label,
+                                int *x, int y) {
     SDL_Renderer *r = e->renderer;
 
     int key_w = 0, key_h = 0;
-    TTF_GetStringSize(e->font, key, 0, &key_w, &key_h);
-    int badge_w = key_w + BADGE_PAD_X * 2;
+    TTF_GetStringSize(e->font, key, 0, &key_w, &key_h); /* medir la tecla */
+    int badge_w = key_w + BADGE_PAD_X * 2; /* recuadro = texto + padding */
     int badge_h = FONT_SIZE + BADGE_PAD_Y * 2;
 
     set_color(r, COL_BADGE_BG);
-    fill_rect(r, *x, y, badge_w, badge_h);
+    fill_rect(r, *x, y, badge_w, badge_h); /* fondo del recuadro */
     set_color(r, COL_BADGE_BORDER);
-    stroke_rect(r, *x, y, badge_w, badge_h);
-    set_color(r, COL_BADGE_SHADOW); /* sombra inferior (efecto 3D) */
+    stroke_rect(r, *x, y, badge_w, badge_h); /* borde del recuadro */
+    set_color(r, COL_BADGE_SHADOW); /* línea de sombra inferior (efecto 3D) */
     fill_rect(r, *x, y + badge_h, badge_w, 1);
 
-    draw_text(e, key, *x + BADGE_PAD_X, y + BADGE_PAD_Y, TXT_BADGE_KEY);
-    *x += badge_w + BADGE_GAP;
+    draw_text(e, key, *x + BADGE_PAD_X, y + BADGE_PAD_Y,
+              TXT_BADGE_KEY);  /* texto de la tecla */
+    *x += badge_w + BADGE_GAP; /* avanzar tras el recuadro */
 
-    if (label && label[0]) {
+    if (label && label[0]) { /* etiqueta a la derecha del badge */
         int label_w = draw_text(e, label, *x, y + BADGE_PAD_Y, TXT_BADGE_LABEL);
-        *x += label_w + BADGE_LABEL_GAP;
+        *x += label_w + BADGE_LABEL_GAP; /* avanzar tras la etiqueta */
     }
 }
 
+/**
+ * @brief Dibuja la banda de atajos de teclado bajo el área de edición.
+ *
+ * Pinta el separador superior y el fondo (solo sobre el área del editor, no
+ * bajo el panel lateral) y va colocando badges de izquierda a derecha con
+ * ::draw_shortcut_badge, parando cuando se acerca al borde derecho de la
+ * ventana.
+ *
+ * @note Con @c SHORTCUT_HEIGHT a 0 esta banda no se ve; la función existe
+ * igualmente.
+ * @param e Editor.
+ */
 void render_shortcuts(Editor *e) {
     SDL_Renderer *r = e->renderer;
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
-    int sep_y = e->win_h - STATUS_HEIGHT - SHORTCUT_HEIGHT;
+    int sep_y = e->win_h - STATUS_HEIGHT -
+                SHORTCUT_HEIGHT; /* Y del separador superior */
 
     set_color(r, COL_SHORTCUT_SEP);
-    fill_rect(r, 0, sep_y, e->win_w, 1);
-    set_color(r, COL_SHORTCUT_BG); /* solo sobre el área del editor */
-    fill_rect(r, left_offset, sep_y + 1, e->win_w - left_offset, SHORTCUT_HEIGHT - 1);
+    fill_rect(r, 0, sep_y, e->win_w, 1); /* separador de 1 px */
+    set_color(r, COL_SHORTCUT_BG); /* fondo solo sobre el área del editor */
+    fill_rect(r, left_offset, sep_y + 1, e->win_w - left_offset,
+              SHORTCUT_HEIGHT - 1);
 
+    /* lista de atajos (tecla, etiqueta) a mostrar en la banda */
     static const struct {
         const char *key;
         const char *label;
     } SHORTCUTS[] = {
-        {"Ctrl+F", "Buscar"},     {"Ctrl+B", "Panel"},    {"Ctrl+D", "Duplicar"},
-        {"Ctrl+L", "Sel. línea"}, {"Ctrl+/", "Comentar"}, {"Ctrl+Z", "Undo"},
-        {"Ctrl+Y", "Redo"},       {"Ctrl+S", "Guardar"},  {"Ctrl+N", "Nuevo"},
+        {"Ctrl+F", "Buscar"},   {"Ctrl+B", "Panel"},
+        {"Ctrl+D", "Duplicar"}, {"Ctrl+L", "Sel. línea"},
+        {"Ctrl+/", "Comentar"}, {"Ctrl+Z", "Undo"},
+        {"Ctrl+Y", "Redo"},     {"Ctrl+S", "Guardar"},
+        {"Ctrl+N", "Nuevo"},
     };
-    int badge_y = sep_y + (SHORTCUT_HEIGHT - FONT_SIZE) / 2 - 2;
-    int x = left_offset + SHORTCUT_LEFT_PAD;
+    int badge_y = sep_y + (SHORTCUT_HEIGHT - FONT_SIZE) / 2 -
+                  2;                         /* Y centrada de los badges */
+    int x = left_offset + SHORTCUT_LEFT_PAD; /* X de partida */
     for (int i = 0; i < (int)(sizeof(SHORTCUTS) / sizeof(SHORTCUTS[0])); i++) {
-        draw_shortcut_badge(e, SHORTCUTS[i].key, SHORTCUTS[i].label, &x, badge_y);
-        if (x > e->win_w - SHORTCUT_END_PAD) break;
+        draw_shortcut_badge(e, SHORTCUTS[i].key, SHORTCUTS[i].label, &x,
+                            badge_y); /* avanza x */
+        if (x > e->win_w - SHORTCUT_END_PAD)
+            break; /* sin sitio para más: parar */
     }
 }
 
+/**
+ * @brief Dibuja la barra de scroll vertical (track + "thumb") si hace falta.
+ *
+ * Si todo el texto cabe en pantalla no dibuja nada. Si no, pinta el carril
+ * (track) y encima el "thumb" (el recuadro arrastrable), cuyo alto es
+ * proporcional a la fracción de texto visible y cuya posición refleja @c
+ * scroll_line dentro del rango desplazable. @c SB_MIN_THUMB_H evita que el
+ * thumb sea diminuto en archivos grandes.
+ *
+ * @param e           Editor. @param left_offset Sin uso (se descarta con
+ * (void)).
+ */
 void render_scrollbar(Editor *e, int left_offset) {
-    (void)left_offset;
+    (void)left_offset; /* no se usa; se marca para evitar warning de parámetro
+                          sin usar */
     SDL_Renderer *r = e->renderer;
     int total_lines = buf_line_count(e->buf);
-    int text_height = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
+    int text_height =
+        e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - SHORTCUT_HEIGHT;
     int visible_lines = text_height / LINE_HEIGHT;
 
     if (total_lines <= visible_lines) return; /* todo cabe: sin scrollbar */
 
-    int sb_x = e->win_w - SCROLLBAR_W - 1;
-    int sb_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
-    int sb_h = text_height;
+    int sb_x =
+        e->win_w - SCROLLBAR_W - 1; /* X de la barra (pegada a la derecha) */
+    int sb_y = NAVBAR_HEIGHT +
+               TAB_BAR_HEIGHT; /* Y de inicio (bajo navbar y pestañas) */
+    int sb_h = text_height;    /* alto del carril */
 
     set_color(r, COL_SB_TRACK);
-    fill_rect(r, sb_x, sb_y, SCROLLBAR_W, sb_h);
+    fill_rect(r, sb_x, sb_y, SCROLLBAR_W, sb_h); /* carril de fondo */
 
+    /* alto del thumb proporcional a (líneas visibles / total), con un mínimo */
     int thumb_h = (int)(sb_h * ((float)visible_lines / (float)total_lines));
     if (thumb_h < SB_MIN_THUMB_H) thumb_h = SB_MIN_THUMB_H;
-    int max_scroll = total_lines - visible_lines;
-    float scroll_frac = (max_scroll > 0) ? (float)e->scroll_line / (float)max_scroll : 0.0f;
-    int thumb_y = sb_y + (int)(scroll_frac * (sb_h - thumb_h));
+    int max_scroll =
+        total_lines - visible_lines; /* desplazamiento máximo en líneas */
+    /* fracción [0..1] de cuánto se ha desplazado el scroll */
+    float scroll_frac =
+        (max_scroll > 0) ? (float)e->scroll_line / (float)max_scroll : 0.0f;
+    int thumb_y =
+        sb_y +
+        (int)(scroll_frac * (sb_h - thumb_h)); /* posición vertical del thumb */
 
     set_color(r, COL_SB_THUMB);
-    fill_rect(r, sb_x + 1, thumb_y, SCROLLBAR_W - 2, thumb_h);
+    fill_rect(r, sb_x + 1, thumb_y, SCROLLBAR_W - 2, thumb_h); /* thumb */
     set_color(r, COL_SB_BORDER);
-    fill_rect(r, sb_x, sb_y, 1, sb_h);
+    fill_rect(r, sb_x, sb_y, 1, sb_h); /* borde izquierdo del carril */
 }

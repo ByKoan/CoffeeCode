@@ -1,116 +1,236 @@
 /**
  * @file render_find.c
  * @brief Dibujado de la barra de búsqueda / reemplazo (Ctrl+F).
+ *
+ * @note SDL/SDL_ttf para recién llegados. El dibujado 2D en SDL gira en torno
+ * al "renderer" (@c SDL_Renderer), el contexto de dibujo acelerado por GPU
+ * asociado a la ventana. El patrón siempre es el mismo: primero se fija el
+ * color de dibujo actual con @c SDL_SetRenderDrawColor(renderer, r, g, b, a)
+ * (componentes 0-255), y luego se emite la primitiva. Las primitivas de
+ * rectángulo usan @c SDL_FRect (x, y, w, h en coordenadas float): @c
+ * SDL_RenderFillRect rellena el rectángulo y
+ * @c SDL_RenderRect dibuja solo su contorno. Para el texto, SDL_ttf rasteriza
+ * una cadena a un @c SDL_Surface (mapa de píxeles en RAM) con @c
+ * TTF_RenderText_Blended; esa superficie se sube a la GPU como @c SDL_Texture y
+ * se pinta en pantalla con
+ * @c SDL_RenderTexture. Este archivo no llama a esas funciones directamente:
+ * usa los envoltorios @c set_color / @c fill_rect / @c stroke_rect / @c
+ * draw_text de render_internal.h, que encapsulan ese flujo. @c
+ * TTF_GetStringSize mide en píxeles el tamaño que ocuparía una cadena (sin
+ * dibujarla), lo que se usa aquí para centrar y posicionar textos dentro de
+ * cajas.
  */
 #include "render_internal.h"
 #include <stdio.h>
 #include <string.h>
 
 /* -- Geometría (px) -------------------------------------------------------- */
-#define FB_PAD            10   /* margen interior de la barra              */
-#define FB_GAP             8   /* separación entre etiqueta/campo/botón    */
-#define FB_FIELD_H        22   /* alto de cada campo de texto              */
-#define FB_ROW_GAP         8   /* separación vertical entre las dos filas  */
-#define FB_MIN_FIELD_W   200   /* ancho útil mínimo de campo (para el cálculo) */
-#define FB_MIN_W         400   /* ancho mínimo de la barra                 */
-#define FB_RIGHT_MARGIN   12   /* separación del borde derecho de la ventana */
-#define FB_TOP_MARGIN      8   /* separación bajo la barra de pestañas     */
-#define FB_BTN_HPAD       20   /* padding horizontal del botón Reemplazar  */
-#define FB_TEXT_PAD        4   /* margen interno del texto dentro del campo */
-#define FB_NAV_GAP         4   /* separación entre flechas y contador      */
-#define FB_SEL_INSET       2   /* margen vertical del resaltado de selección */
-#define FB_LABEL_MARGIN    4   /* margen extra de la columna de etiquetas  */
-#define FB_NORESULT_OFFSET 30  /* desplazamiento del texto "Sin resultados" */
+#define FB_PAD 10             /* margen interior de la barra              */
+#define FB_GAP 8              /* separación entre etiqueta/campo/botón    */
+#define FB_FIELD_H 22         /* alto de cada campo de texto              */
+#define FB_ROW_GAP 8          /* separación vertical entre las dos filas  */
+#define FB_MIN_FIELD_W 200    /* ancho útil mínimo de campo (para el cálculo) */
+#define FB_MIN_W 400          /* ancho mínimo de la barra                 */
+#define FB_RIGHT_MARGIN 12    /* separación del borde derecho de la ventana */
+#define FB_TOP_MARGIN 8       /* separación bajo la barra de pestañas     */
+#define FB_BTN_HPAD 20        /* padding horizontal del botón Reemplazar  */
+#define FB_TEXT_PAD 4         /* margen interno del texto dentro del campo */
+#define FB_NAV_GAP 4          /* separación entre flechas y contador      */
+#define FB_SEL_INSET 2        /* margen vertical del resaltado de selección */
+#define FB_LABEL_MARGIN 4     /* margen extra de la columna de etiquetas  */
+#define FB_NORESULT_OFFSET 30 /* desplazamiento del texto "Sin resultados" */
 
 /* -- Colores de relleno/contorno (RGBA, para set_color) -------------------- */
-#define FB_COL_BG           0x1E, 0x22, 0x2A, 255
-#define FB_COL_BORDER       0x3A, 0x3F, 0x4A, 255
-#define FB_COL_FIELD        0x25, 0x29, 0x31, 255  /* campo sin foco         */
-#define FB_COL_FIELD_FOCUS  0x2A, 0x2E, 0x38, 255  /* campo con foco         */
-#define FB_COL_ACCENT       0x52, 0x8B, 0xD4, 255  /* borde con foco / acento */
-#define FB_COL_SEL          0x26, 0x4F, 0x78, 200  /* resaltado de selección */
-#define FB_COL_NAV_BTN      0x2A, 0x2E, 0x38, 255  /* fondo botones ↑/↓      */
-#define FB_COL_REPLACE_BTN  0x2C, 0x5F, 0x8C, 255  /* fondo botón Reemplazar */
+#define FB_COL_BG 0x1E, 0x22, 0x2A, 255
+#define FB_COL_BORDER 0x3A, 0x3F, 0x4A, 255
+#define FB_COL_FIELD 0x25, 0x29, 0x31, 255       /* campo sin foco         */
+#define FB_COL_FIELD_FOCUS 0x2A, 0x2E, 0x38, 255 /* campo con foco         */
+#define FB_COL_ACCENT 0x52, 0x8B, 0xD4, 255      /* borde con foco / acento */
+#define FB_COL_SEL 0x26, 0x4F, 0x78, 200         /* resaltado de selección */
+#define FB_COL_NAV_BTN 0x2A, 0x2E, 0x38, 255     /* fondo botones ↑/↓      */
+#define FB_COL_REPLACE_BTN 0x2C, 0x5F, 0x8C, 255 /* fondo botón Reemplazar */
 
 /* -- Colores de texto (RGB, para draw_text) -------------------------------- */
-#define FB_TXT_LABEL    0x88, 0x8C, 0x99
-#define FB_TXT_FIELD    220, 220, 220
-#define FB_TXT_ARROW    180, 200, 230
-#define FB_TXT_COUNTER  97, 175, 239
-#define FB_TXT_BTN      210, 230, 255
+#define FB_TXT_LABEL 0x88, 0x8C, 0x99
+#define FB_TXT_FIELD 220, 220, 220
+#define FB_TXT_ARROW 180, 200, 230
+#define FB_TXT_COUNTER 97, 175, 239
+#define FB_TXT_BTN 210, 230, 255
 #define FB_TXT_NORESULT 200, 80, 80
 
-/** Y del texto centrado verticalmente dentro de un campo en la fila @p row_y. */
+/**
+ * @brief Calcula la Y para centrar verticalmente el texto dentro de un campo.
+ *
+ * Un campo mide @c FB_FIELD_H de alto y el texto @c FONT_SIZE; el hueco
+ * sobrante se reparte mitad arriba y mitad abajo para centrarlo.
+ *
+ * @param row_y Coordenada Y (arriba) de la fila/campo.
+ * @return Coordenada Y donde empezar a dibujar el texto centrado.
+ */
 static int field_text_y(int row_y) {
     return row_y + (FB_FIELD_H - FONT_SIZE) / 2;
 }
 
-/** Dibuja la caja de un campo de texto (fondo + borde), resaltado si tiene foco. */
+/**
+ * @brief Dibuja la caja de un campo de texto (relleno + contorno).
+ *
+ * Primero rellena el fondo y luego traza el borde por encima. El color cambia
+ * según el foco: con foco, fondo más claro y borde de acento (azul); sin foco,
+ * fondo apagado y borde gris.
+ *
+ * @param e       Editor (contiene el @c renderer destino).
+ * @param x       X (izquierda) de la caja en píxeles.
+ * @param y       Y (arriba) de la caja en píxeles.
+ * @param w       Ancho de la caja en píxeles.
+ * @param focused 1 si el campo tiene el foco (se resalta); 0 en caso contrario.
+ */
 static void draw_field_box(Editor *e, int x, int y, int w, int focused) {
-    set_color(e->renderer, focused ? 0x2A : 0x25, focused ? 0x2E : 0x29, focused ? 0x38 : 0x31, 255);
-    fill_rect(e->renderer, x, y, w, FB_FIELD_H);
+    /* Color de relleno según foco: cada componente RGB se interpola entre el
+     * tono "con foco" (0x2A,0x2E,0x38) y el "sin foco" (0x25,0x29,0x31). */
+    set_color(e->renderer, focused ? 0x2A : 0x25, focused ? 0x2E : 0x29,
+              focused ? 0x38 : 0x31, 255);
+    fill_rect(e->renderer, x, y, w,
+              FB_FIELD_H); /* relleno del fondo del campo */
+    /* Borde: color de acento si tiene foco, gris normal si no. */
     if (focused)
         set_color(e->renderer, FB_COL_ACCENT);
     else
         set_color(e->renderer, FB_COL_BORDER);
-    stroke_rect(e->renderer, x, y, w, FB_FIELD_H);
+    stroke_rect(e->renderer, x, y, w, FB_FIELD_H); /* contorno (solo líneas) */
 }
 
-/** Resalta el tramo seleccionado [sel_start, sel_end) del texto del campo. */
-static void draw_field_selection(Editor *e, int field_x, int row_y, const char *content, int len,
-                                 int sel_start, int sel_end) {
+/**
+ * @brief Resalta (pinta un rectángulo de fondo bajo) el tramo seleccionado del
+ * texto.
+ *
+ * El resaltado abarca el rango de caracteres [sel_start, sel_end). Para saber a
+ * qué píxeles corresponde ese tramo, se mide con @c TTF_GetStringSize el ancho
+ * del texto que va ANTES de la selección (para el desplazamiento X) y el ancho
+ * del propio texto seleccionado (para la anchura del rectángulo).
+ *
+ * @param e         Editor (renderer + fuente).
+ * @param field_x   X (izquierda) del campo en píxeles.
+ * @param row_y     Y (arriba) de la fila en píxeles.
+ * @param content   Texto completo del campo.
+ * @param len       Longitud de @p content en caracteres.
+ * @param sel_start Índice de inicio de la selección (inclusive); <0 si no hay.
+ * @param sel_end   Índice de fin de la selección (exclusivo).
+ */
+static void draw_field_selection(Editor *e, int field_x, int row_y,
+                                 const char *content, int len, int sel_start,
+                                 int sel_end) {
+    /* Sin selección válida (vacía, invertida o fuera de rango): nada que
+     * dibujar. */
     if (!(sel_start >= 0 && sel_end > sel_start && sel_end <= len)) return;
 
+    /* Partimos el contenido en "lo de antes" y "lo seleccionado" como cadenas
+     * con terminador, para poder medir cada parte por separado con la fuente.
+     */
     char before[FIND_BAR_MAX], selected[FIND_BAR_MAX];
-    int before_len = sel_start;
-    int sel_len = sel_end - sel_start;
+    int before_len = sel_start; /* nº de caracteres antes de la selección */
+    int sel_len = sel_end - sel_start; /* nº de caracteres seleccionados */
     memcpy(before, content, before_len);
     before[before_len] = '\0';
     memcpy(selected, content + before_len, sel_len);
     selected[sel_len] = '\0';
 
+    /* Medir en píxeles el ancho de cada tramo (TTF_GetStringSize no dibuja,
+     * solo calcula el tamaño que ocuparía la cadena con esta fuente). */
     int before_w = 0, sel_w = 0, dummy_h = 0;
-    if (before_len > 0) TTF_GetStringSize(e->font, before, 0, &before_w, &dummy_h);
+    if (before_len > 0)
+        TTF_GetStringSize(e->font, before, 0, &before_w, &dummy_h);
     if (sel_len > 0) TTF_GetStringSize(e->font, selected, 0, &sel_w, &dummy_h);
 
+    /* Pintar el rectángulo de resaltado: desplazado en X por el texto previo y
+     * con la anchura del texto seleccionado; un pequeño inset vertical lo hace
+     * más fino que el campo para que se vea el borde. */
     set_color(e->renderer, FB_COL_SEL);
-    fill_rect(e->renderer, field_x + FB_TEXT_PAD + before_w, row_y + FB_SEL_INSET, sel_w,
-              FB_FIELD_H - 2 * FB_SEL_INSET);
+    fill_rect(e->renderer, field_x + FB_TEXT_PAD + before_w,
+              row_y + FB_SEL_INSET, sel_w, FB_FIELD_H - 2 * FB_SEL_INSET);
 }
 
-/** Dibuja el contenido de un campo, con cursor parpadeante si @p show_caret. */
-static void draw_field_text(Editor *e, int field_x, int row_y, const char *content, int show_caret) {
+/**
+ * @brief Dibuja el contenido textual de un campo, opcionalmente con cursor.
+ *
+ * Concatena el texto del campo con un "|" cuando @p show_caret está activo,
+ * simulando un cursor parpadeante (el parpadeo lo decide el llamante alternando
+ * el flag).
+ *
+ * @param e          Editor (renderer + fuente).
+ * @param field_x    X (izquierda) del campo en píxeles.
+ * @param row_y      Y (arriba) de la fila en píxeles.
+ * @param content    Texto a mostrar.
+ * @param show_caret 1 para añadir el "|" del cursor al final; 0 para no
+ * añadirlo.
+ */
+static void draw_field_text(Editor *e, int field_x, int row_y,
+                            const char *content, int show_caret) {
     char buf[512];
+    /* Añadir "|" al final si toca mostrar el cursor en este instante de
+     * parpadeo. */
     snprintf(buf, sizeof(buf), "%s%s", content, show_caret ? "|" : "");
     draw_text(e, buf, field_x + FB_TEXT_PAD, field_text_y(row_y), FB_TXT_FIELD);
 }
 
-/** Dibuja un botón cuadrado de flecha (↑/↓) y devuelve su ancho. */
-static void draw_arrow_button(Editor *e, int x, int row_y, int size, const char *glyph) {
+/**
+ * @brief Dibuja un botón cuadrado de flecha (↑ / ↓) con su glifo centrado.
+ *
+ * @param e     Editor (renderer + fuente).
+ * @param x     X (izquierda) del botón en píxeles.
+ * @param row_y Y (arriba) de la fila en píxeles.
+ * @param size  Lado del botón en píxeles (es cuadrado: ancho = alto del campo).
+ * @param glyph Cadena del glifo a dibujar (p. ej. "↑" o "↓").
+ */
+static void draw_arrow_button(Editor *e, int x, int row_y, int size,
+                              const char *glyph) {
     SDL_Renderer *r = e->renderer;
-    set_color(r, FB_COL_NAV_BTN);
+    set_color(r, FB_COL_NAV_BTN); /* fondo del botón */
     fill_rect(r, x, row_y, size, FB_FIELD_H);
-    set_color(r, FB_COL_BORDER);
+    set_color(r, FB_COL_BORDER); /* borde gris */
     stroke_rect(r, x, row_y, size, FB_FIELD_H);
+    /* Medir el glifo para centrarlo horizontalmente dentro del botón. */
     int glyph_w = 0, glyph_h = 0;
     TTF_GetStringSize(e->font, glyph, 0, &glyph_w, &glyph_h);
-    draw_text(e, glyph, x + (size - glyph_w) / 2, field_text_y(row_y), FB_TXT_ARROW);
+    draw_text(e, glyph, x + (size - glyph_w) / 2, field_text_y(row_y),
+              FB_TXT_ARROW);
 }
 
-/** Dibuja la navegación de coincidencias (↑ X/N ↓) a la derecha del campo de búsqueda
- *  y guarda la geometría de los botones para la detección de clics. */
+/**
+ * @brief Dibuja la navegación de coincidencias (↑ X/N ↓) y registra los
+ * botones.
+ *
+ * Se coloca pegada al borde derecho del campo de búsqueda: flecha "anterior",
+ * el contador "índice/total" en el centro, y flecha "siguiente". Además de
+ * pintar, guarda en @c e->find la geometría (x, y, w, h) de ambas flechas, que
+ * input_mouse.c consulta luego para saber si un clic cayó sobre ellas.
+ *
+ * @param e       Editor (renderer + fuente + estado de búsqueda).
+ * @param field_x X (izquierda) del campo de búsqueda en píxeles.
+ * @param field_w Ancho del campo de búsqueda en píxeles.
+ * @param row_y   Y (arriba) de la fila en píxeles.
+ */
 static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
-    int arrow_w = FB_FIELD_H; /* botones cuadrados */
+    int arrow_w = FB_FIELD_H; /* botones cuadrados: ancho = alto del campo */
 
+    /* Texto del contador "actual/total" (match_index es 0-based → se muestra
+     * +1). */
     char counter[32];
-    snprintf(counter, sizeof(counter), "%d/%d", e->find.match_index + 1, e->find.match_count);
+    snprintf(counter, sizeof(counter), "%d/%d", e->find.match_index + 1,
+             e->find.match_count);
     int counter_w = 0, counter_h = 0;
-    TTF_GetStringSize(e->font, counter, 0, &counter_w, &counter_h);
+    TTF_GetStringSize(e->font, counter, 0, &counter_w,
+                      &counter_h); /* ancho del contador */
 
-    int area_w = arrow_w + FB_NAV_GAP + counter_w + FB_NAV_GAP + arrow_w + FB_NAV_GAP;
-    int prev_x = field_x + field_w - area_w;
-    int next_x = prev_x + arrow_w + FB_NAV_GAP + counter_w + FB_NAV_GAP;
+    /* Ancho total del bloque [flecha][gap][contador][gap][flecha][gap], para
+     * anclarlo al borde derecho del campo. */
+    int area_w =
+        arrow_w + FB_NAV_GAP + counter_w + FB_NAV_GAP + arrow_w + FB_NAV_GAP;
+    int prev_x = field_x + field_w - area_w; /* X de la flecha "anterior" */
+    int next_x = prev_x + arrow_w + FB_NAV_GAP + counter_w +
+                 FB_NAV_GAP; /* X de "siguiente" */
 
+    /* Guardar la geometría de los botones para que la detección de clics
+     * (ratón) sepa dónde están. */
     e->find.prev_btn_x = prev_x;
     e->find.prev_btn_y = row_y;
     e->find.prev_btn_w = arrow_w;
@@ -120,44 +240,74 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     e->find.next_btn_w = arrow_w;
     e->find.next_btn_h = FB_FIELD_H;
 
-    draw_arrow_button(e, prev_x, row_y, arrow_w, "↑");
-    draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y), FB_TXT_COUNTER);
-    draw_arrow_button(e, next_x, row_y, arrow_w, "↓");
+    draw_arrow_button(e, prev_x, row_y, arrow_w, "↑"); /* flecha anterior */
+    /* contador "X/N" entre las dos flechas */
+    draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
+              FB_TXT_COUNTER);
+    draw_arrow_button(e, next_x, row_y, arrow_w, "↓"); /* flecha siguiente */
 }
 
+/**
+ * @brief Dibuja la barra flotante de búsqueda/reemplazo completa (Ctrl+F).
+ *
+ * Renderiza un panel anclado arriba a la derecha con dos filas: "Buscar:" (con
+ * navegación de coincidencias o un aviso "Sin resultados") y "Reemplazar:" (con
+ * un botón). El ancho de la barra y de las columnas se calcula a partir del
+ * tamaño real (medido) de las etiquetas, para que se adapten a la fuente. Al
+ * final guarda toda la geometría en @c e->find para que input_mouse.c pueda
+ * mapear clics a campos y botones. No hace nada si la barra está oculta.
+ *
+ * @param e Editor con el estado de búsqueda (@c e->find) y el renderer/fuente.
+ */
 void render_find_bar(Editor *e) {
-    if (!e->find.visible) return;
+    if (!e->find.visible) return; /* barra oculta: nada que dibujar */
     SDL_Renderer *r = e->renderer;
     FindBar *fb = &e->find;
 
-    /* -- Cálculo del layout (medimos etiquetas con la fuente real) -- */
+    /* -- Cálculo del layout (medimos las etiquetas con la fuente real) -- */
     int search_label_w = 0, replace_label_w = 0, dummy_h = 0;
     TTF_GetStringSize(e->font, "Buscar:", 0, &search_label_w, &dummy_h);
     TTF_GetStringSize(e->font, "Reemplazar:", 0, &replace_label_w, &dummy_h);
+    /* La columna de etiquetas se dimensiona según la más ancha de las dos. */
     int label_col_w =
-        (search_label_w > replace_label_w ? search_label_w : replace_label_w) + FB_LABEL_MARGIN;
+        (search_label_w > replace_label_w ? search_label_w : replace_label_w) +
+        FB_LABEL_MARGIN;
 
+    /* Ancho del botón "Reemplazar" = ancho de su texto + padding horizontal. */
     int replace_btn_label_w = 0;
     TTF_GetStringSize(e->font, "Reemplazar", 0, &replace_btn_label_w, &dummy_h);
     int replace_btn_w = replace_btn_label_w + FB_BTN_HPAD;
 
-    int bar_w = FB_PAD + label_col_w + FB_GAP + FB_MIN_FIELD_W + FB_GAP + replace_btn_w + FB_PAD;
+    /* Ancho total de la barra sumando paddings, columnas y gaps; con mínimo. */
+    int bar_w = FB_PAD + label_col_w + FB_GAP + FB_MIN_FIELD_W + FB_GAP +
+                replace_btn_w + FB_PAD;
     if (bar_w < FB_MIN_W) bar_w = FB_MIN_W;
+    /* Alto: padding + dos filas de campo separadas por un gap + padding. */
     int bar_h = FB_PAD + FB_FIELD_H + FB_ROW_GAP + FB_FIELD_H + FB_PAD;
-    int bar_x = e->win_w - bar_w - FB_RIGHT_MARGIN;
-    int bar_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT + FB_TOP_MARGIN;
+    int bar_x = e->win_w - bar_w - FB_RIGHT_MARGIN; /* anclada a la derecha */
+    int bar_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT +
+                FB_TOP_MARGIN; /* bajo navbar y pestañas */
 
-    int label_x = bar_x + FB_PAD;
-    int field_x = label_x + label_col_w + FB_GAP;
-    int search_field_w = bar_w - FB_PAD - label_col_w - FB_GAP - FB_PAD; /* fila 1: ocupa todo */
-    int replace_field_w = search_field_w - FB_GAP - replace_btn_w;      /* fila 2: deja el botón */
-    int replace_btn_x = field_x + replace_field_w + FB_GAP;
+    int label_x = bar_x + FB_PAD; /* X de la columna de etiquetas */
+    int field_x =
+        label_x + label_col_w + FB_GAP; /* X donde empiezan los campos  */
+    int search_field_w =
+        bar_w - FB_PAD - label_col_w - FB_GAP - FB_PAD; /* fila 1: ocupa todo */
+    int replace_field_w =
+        search_field_w - FB_GAP - replace_btn_w; /* fila 2: deja el botón */
+    int replace_btn_x =
+        field_x + replace_field_w + FB_GAP; /* X del botón Reemplazar */
 
-    int row1_y = bar_y + FB_PAD;
-    int row2_y = row1_y + FB_FIELD_H + FB_ROW_GAP;
+    int row1_y = bar_y + FB_PAD; /* Y de la fila "Buscar"      */
+    int row2_y =
+        row1_y + FB_FIELD_H + FB_ROW_GAP; /* Y de la fila "Reemplazar"  */
 
+    /* Qué campo tiene el foco: la barra está enfocada y replace_focused indica
+     * cuál. */
     int search_focused = (fb->bar_focused && fb->replace_focused == 0);
     int replace_focused = (fb->bar_focused && fb->replace_focused == 1);
+    /* Parpadeo del cursor: alterna 0/1 cada 500 ms (SDL_GetTicks = ms desde
+     * init). */
     int blink = (SDL_GetTicks() / 500) % 2;
 
     /* -- Fondo + borde de la barra -- */
@@ -167,34 +317,45 @@ void render_find_bar(Editor *e) {
     stroke_rect(r, bar_x, bar_y, bar_w, bar_h);
 
     /* -- Fila 1: Buscar -- */
-    draw_text(e, "Buscar:", label_x, field_text_y(row1_y), FB_TXT_LABEL);
-    draw_field_box(e, field_x, row1_y, search_field_w, search_focused);
-    draw_field_selection(e, field_x, row1_y, fb->query, fb->query_len, fb->query_sel_start,
-                         fb->query_sel_end);
+    draw_text(e, "Buscar:", label_x, field_text_y(row1_y),
+              FB_TXT_LABEL); /* etiqueta */
+    draw_field_box(e, field_x, row1_y, search_field_w,
+                   search_focused); /* caja del campo */
+    /* Resaltado de selección (si la hay) debajo del texto. */
+    draw_field_selection(e, field_x, row1_y, fb->query, fb->query_len,
+                         fb->query_sel_start, fb->query_sel_end);
+    /* Texto del campo; el cursor solo parpadea si tiene foco y no hay
+     * selección. */
     draw_field_text(e, field_x, row1_y, fb->query,
                     search_focused && fb->query_sel_start < 0 && blink);
 
+    /* A la derecha del campo: navegación "X/N" si hay coincidencias, o el aviso
+     * de "Sin resultados" si se escribió algo pero no se encontró nada. */
     if (fb->result_line >= 0 && fb->match_count > 0) {
         draw_match_nav(e, field_x, search_field_w, row1_y);
     } else if (fb->query_len > 0 && fb->match_count == 0) {
-        draw_text(e, "Sin resultados", field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
+        draw_text(e, "Sin resultados",
+                  field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
                   field_text_y(row1_y), FB_TXT_NORESULT);
     }
 
     /* -- Fila 2: Reemplazar -- */
-    draw_text(e, "Reemplazar:", label_x, field_text_y(row2_y), FB_TXT_LABEL);
-    draw_field_box(e, field_x, row2_y, replace_field_w, replace_focused);
-    draw_field_selection(e, field_x, row2_y, fb->replace, fb->replace_len, fb->replace_sel_start,
-                         fb->replace_sel_end);
+    draw_text(e, "Reemplazar:", label_x, field_text_y(row2_y),
+              FB_TXT_LABEL); /* etiqueta */
+    draw_field_box(e, field_x, row2_y, replace_field_w,
+                   replace_focused); /* caja del campo */
+    draw_field_selection(e, field_x, row2_y, fb->replace, fb->replace_len,
+                         fb->replace_sel_start, fb->replace_sel_end);
     draw_field_text(e, field_x, row2_y, fb->replace,
                     replace_focused && fb->replace_sel_start < 0 && blink);
 
-    /* Botón "Reemplazar" */
+    /* Botón "Reemplazar" (fondo de acento + borde + texto centrado). */
     set_color(r, FB_COL_REPLACE_BTN);
     fill_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
     set_color(r, FB_COL_ACCENT);
     stroke_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
     {
+        /* Medir el texto del botón para centrarlo dentro de su rectángulo. */
         int text_w = 0, text_h = 0;
         TTF_GetStringSize(e->font, "Reemplazar", 0, &text_w, &text_h);
         draw_text(e, "Reemplazar", replace_btn_x + (replace_btn_w - text_w) / 2,
@@ -202,15 +363,17 @@ void render_find_bar(Editor *e) {
     }
 
     /* -- Geometría para la detección de clics (la usa input_mouse.c) -- */
-    fb->replace_btn_x = replace_btn_x;
+    fb->replace_btn_x = replace_btn_x; /* rectángulo del botón Reemplazar */
     fb->replace_btn_y = row2_y;
     fb->replace_btn_w = replace_btn_w;
     fb->replace_btn_h = FB_FIELD_H;
-    fb->bar_x = bar_x;
+    fb->bar_x =
+        bar_x; /* rectángulo de la barra completa (para clics dentro/fuera) */
     fb->bar_y = bar_y;
     fb->bar_w = bar_w;
     fb->bar_h = bar_h;
-    fb->field_x = field_x;
+    fb->field_x =
+        field_x; /* X común de los campos y Y de cada fila + alto del campo */
     fb->row1_y = row1_y;
     fb->row2_y = row2_y;
     fb->field_h = FB_FIELD_H;
