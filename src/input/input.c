@@ -161,6 +161,7 @@ static void editor_insert_text(Editor *e, const char *text) {
  * @param ctrl 1 si Ctrl está pulsado en este momento (entonces se ignora).
  */
 static void on_text_input(Editor *e, SDL_Event *ev, int ctrl) {
+    if (e->settings_open) return; /* preferencias: no se escribe en el buffer */
     if (e->menu_open) return;
     if (ctrl) return; /* ignorar combos Ctrl+letra (ej. Ctrl+C) */
 
@@ -257,7 +258,7 @@ static int find_bar_key(Editor *e, SDL_Keycode key, int ctrl, int shift) {
 static void dedent_line(Editor *e) {
     size_t line_start = editor_pos_from_line_col(e, e->cursor_line, 0);
     int removed = 0;
-    for (int i = 0; i < TAB_SIZE; i++) {
+    for (int i = 0; i < e->settings.tab_width; i++) {
         if (buf_char_at(e->buf, line_start) != ' ') break; /* solo espacios */
         char space = ' ';
         editor_undo_push_delete(e, line_start, &space,
@@ -306,6 +307,10 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
     case SDLK_K: open_folder_dialog(e); break;
     case SDLK_S: save_file(e); break;
     case SDLK_Q: e->running = 0; break; /* salir del bucle principal */
+    case SDLK_COMMA:                    /* Ctrl+, abre las preferencias */
+        e->settings_open = 1;
+        e->needs_redraw = 1;
+        break;
     case SDLK_F: open_find_bar(e); break;
     case SDLK_B: toggle_sidebar(e); break;
     case SDLK_W: editor_tab_close(e); break;
@@ -410,6 +415,15 @@ static void edit_key(Editor *e, SDL_Keycode key, int shift) {
  */
 static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
     SDL_Keycode key = ev->key.key; /* tecla lógica (keycode) de la pulsación */
+
+    /* Preferencias abiertas: pantalla modal; solo ESC la cierra. */
+    if (e->settings_open) {
+        if (key == SDLK_ESCAPE) {
+            e->settings_open = 0;
+            e->needs_redraw = 1;
+        }
+        return;
+    }
 
     if (key == SDLK_ESCAPE) { /* cierra barra / menú / selección */
         if (e->find.visible)

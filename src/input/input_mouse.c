@@ -488,10 +488,42 @@ static void start_text_selection(Editor *e, int mx, int my) {
  * @param e  Editor.
  * @param ev Evento SDL; se usan @c ev->button.x/y y @c ev->button.button.
  */
+/**
+ * @brief Procesa un clic en la pantalla de preferencias.
+ *
+ * Los controles (botones y steppers) los registró render_settings_view en
+ * e->ui; aquí se resuelven con ui_hit, se aplica el cambio y se persiste con
+ * settings_save.
+ */
+static void handle_settings_click(Editor *e, int mx, int my) {
+    Settings *s = &e->settings;
+    if (ui_hit(&e->ui, UI_PREF_BACK, mx, my)) {
+        e->settings_open = 0; /* volver al editor */
+    } else if (ui_hit(&e->ui, UI_PREF_AUTOSAVE, mx, my)) {
+        e->autosave = !e->autosave;
+        if (e->autosave) e->autosave_last_ms = SDL_GetTicks();
+        s->autosave = e->autosave;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_TABW_DEC, mx, my)) {
+        if (s->tab_width > SETTINGS_TAB_MIN) s->tab_width--;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_TABW_INC, mx, my)) {
+        if (s->tab_width < SETTINGS_TAB_MAX) s->tab_width++;
+        settings_save(s);
+    }
+    e->needs_redraw = 1;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
     if (ev->button.button != SDL_BUTTON_LEFT) return; /* solo botón izquierdo */
+
+    /* Preferencias abiertas: la pantalla es modal y consume todo el ratón. */
+    if (e->settings_open) {
+        handle_settings_click(e, mx, my);
+        return;
+    }
 
     /* Menú "Archivo" abierto: tiene prioridad máxima sobre cualquier otra zona.
      * Debe comprobarse ANTES de la barra de pestañas porque el menú se dibuja

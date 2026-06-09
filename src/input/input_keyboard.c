@@ -344,11 +344,11 @@ void insert_newline(Editor *e) {
  */
 void insert_tab(Editor *e) {
     delete_selection(e);
-    int spaces =
-        TAB_SIZE - (e->cursor_col % TAB_SIZE); /* hasta el próximo tab stop */
+    int tw = e->settings.tab_width;
+    int spaces = tw - (e->cursor_col % tw); /* hasta el próximo tab stop */
     size_t pos = buf_cursor_pos(e->buf);
 
-    char tmp[TAB_SIZE + 1];
+    char tmp[SETTINGS_TAB_MAX + 1];
     for (int i = 0; i < spaces; i++)
         tmp[i] = ' ';
     tmp[spaces] = '\0';

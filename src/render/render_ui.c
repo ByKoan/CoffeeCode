@@ -22,19 +22,19 @@
  */
 #define MENU_ITEM_H 26       /* alto de cada entrada del menú (px)   */
 #define MENU_WIDTH 210       /* ancho del desplegable (px)           */
-#define MENU_ITEMS 6         /* número de entradas (incluye separadores) */
+#define MENU_ITEMS 7         /* número de entradas (incluye separadores) */
 #define MENU_SEP_H 8         /* alto de un separador del menú        */
 #define MENU_SHADOW 3        /* desplazamiento de la sombra          */
 #define MENU_AUTOSAVE_ITEM 5 /* índice del item "Autoguardado"   */
 
 /* Etiquetas del menú; una entrada NULL es un separador (línea horizontal). */
 static const char *MENU_LABELS[MENU_ITEMS] = {
-    "Nuevo", "Abrir archivo...", "Abrir carpeta...",
-    NULL,    "Guardar",          "Autoguardado"};
+    "Nuevo",   "Abrir archivo...", "Abrir carpeta...", NULL,
+    "Guardar", "Autoguardado",     "Preferencias"};
 /* Atajo mostrado a la derecha de cada entrada (NULL = sin atajo o separador).
  */
-static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K",
-                                             NULL,     "Ctrl+S", NULL};
+static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL,
+                                             "Ctrl+S", NULL,     "Ctrl+,"};
 
 /* ── Navbar (barra superior con el botón "Archivo" y el título) ─────────────
  */

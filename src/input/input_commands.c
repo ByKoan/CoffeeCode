@@ -43,6 +43,7 @@ enum {
     MENU_SEP,         /**< Separador (sin acción). */
     MENU_SAVE,        /**< Guardar.          */
     MENU_AUTOSAVE,    /**< Autoguardado.     */
+    MENU_PREFS,       /**< Preferencias.     */
 };
 
 /* El menú "Archivo" lo dibuja render_menu (render_ui.c), que registra el
@@ -535,6 +536,9 @@ void menu_exec(Editor *e, int item) {
         if (e->autosave) e->autosave_last_ms = SDL_GetTicks();
         e->settings.autosave = e->autosave; /* persistir el cambio */
         settings_save(&e->settings);
+        break;
+    case MENU_PREFS:
+        e->settings_open = 1; /* abrir la pantalla de preferencias */
         break;
     default: break;
     }

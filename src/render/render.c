@@ -173,8 +173,9 @@ int get_line_text(Editor *e, int line, char *out, int max) {
         char c = buf_char_at(b, i);
         if (c == '\n') break; /* fin de la línea */
         if (c == '\t') {
-            /* tab: rellenar hasta la siguiente parada múltiplo de TAB_SIZE */
-            int spaces = TAB_SIZE - (col % TAB_SIZE);
+            /* tab: rellenar hasta la siguiente parada (ancho de tab
+             * configurable) */
+            int spaces = e->settings.tab_width - (col % e->settings.tab_width);
             for (int s = 0; s < spaces && col < max - 1; s++)
                 out[col++] = ' ';
         } else {
@@ -362,10 +363,9 @@ static void update_lexer_cache(Editor *e) {
     /* Si la pestaña activa tiene un cliente LSP con tokens válidos, usarlos
      * directamente en lugar del tokenizador estático. El LSP proporciona
      * resaltado semántico preciso para cualquier lenguaje soportado. */
-    EditorTab *active_tab =
-        (e->tab_count > 0) ? &e->tabs[e->active_tab] : NULL;
-    int use_lsp = (active_tab && active_tab->lsp_active &&
-                   active_tab->lsp.cache.ready);
+    EditorTab *active_tab = (e->tab_count > 0) ? &e->tabs[e->active_tab] : NULL;
+    int use_lsp =
+        (active_tab && active_tab->lsp_active && active_tab->lsp.cache.ready);
 
     if (use_lsp) {
         /* Rellenar la cache del lexer con los tokens semánticos LSP */
@@ -616,6 +616,13 @@ void render_frame(Editor *e) {
     /* vaciar el registro de hit-test: se rellena al dibujar los controles de
      * este frame (ver render/ui_hit.h). */
     ui_reset(&e->ui);
+
+    /* Pantalla de preferencias: sustituye al editor mientras está abierta. */
+    if (e->settings_open) {
+        render_settings_view(e);
+        SDL_RenderPresent(r);
+        return;
+    }
     /* offset izquierdo: ancho del panel si está abierto, o el del botón si
      * cerrado */
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;

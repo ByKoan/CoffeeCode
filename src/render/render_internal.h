@@ -67,3 +67,5 @@ void render_scrollbar(Editor *e, int left_offset); /* scroll vertical */
 /* selección */
 void render_selection(Editor *e, int left_offset, int text_top,
                       int visible_lines);
+/* pantalla de preferencias (a pantalla completa) */
+void render_settings_view(Editor *e);

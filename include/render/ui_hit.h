@@ -43,6 +43,16 @@ typedef enum {
     UI_FIND_REPL,    /**< Campo de texto "reemplazar".                */
     UI_FIND_BAR,  /**< Marco de la barra de búsqueda (consume clics dentro). */
     UI_SCROLLBAR, /**< Pulgar de la barra de scroll vertical.      */
+    /* Pantalla de preferencias */
+    UI_PREF_BACK,       /**< Botón "← Volver" de preferencias.        */
+    UI_PREF_AUTOSAVE,   /**< Toggle de autoguardado.                  */
+    UI_PREF_LINENUM,    /**< Toggle de números de línea.              */
+    UI_PREF_THEME,      /**< Selector cíclico de tema.                */
+    UI_PREF_FONT,       /**< Selector cíclico de fuente.              */
+    UI_PREF_TABW_DEC,   /**< Stepper ancho de tab: −.                 */
+    UI_PREF_TABW_INC,   /**< Stepper ancho de tab: +.                 */
+    UI_PREF_FONTSZ_DEC, /**< Stepper tamaño de fuente: −.             */
+    UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
     UI_ID_COUNT
 } UiId;
 
