@@ -22,12 +22,8 @@
 /* líneas desplazadas por "muesca" de rueda */
 #define SCROLL_LINES_PER_NOTCH 3
 
-/* Geometría usada para hit-testing que aún no pasa por el registro e->ui.
- * Son medidas fijas (en píxeles) que deben coincidir con las de render. A
- * medida que los controles migran a ui_put/ui_hit, estas constantes
- * desaparecen. */
-/* alto de la cabecera del panel del explorador */
-#define HIT_FTREE_HEADER_H 26
+/* Única medida fija que aún necesita el input para el hit-test (el resto de la
+ * geometría de controles ya viene del registro e->ui). */
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
 
@@ -106,29 +102,6 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
 }
 
 /**
- * @brief Índice de la entrada visible nº @p target_row del árbol, o -1.
- *
- * En el explorador, las carpetas colapsadas ocultan a sus hijos: el array de
- * entradas tiene más elementos que filas dibujadas. Para mapear "fila N en
- * pantalla" → "índice en el array" hay que recorrer saltándose las entradas no
- * visibles y contar solo las visibles.
- *
- * @param ft         Árbol de archivos.
- * @param target_row Fila visible (0 = primera entrada dibujada del árbol).
- * @return Índice en el array de entradas, o -1 si esa fila no existe.
- */
-static int ftree_entry_at_row(FileTree *ft, int target_row) {
-    int visible = 0; /* cuántas entradas visibles llevamos vistas */
-    for (int i = 0; i < ftree_count(ft); i++) {
-        /* saltar entradas ocultas */
-        if (!ftree_entry(ft, i)->visible) continue;
-        if (visible == target_row) return i; /* es la fila buscada      */
-        visible++;
-    }
-    return -1; /* la fila pedida cae más allá de la última entrada visible */
-}
-
-/**
  * @brief Maneja un clic dentro del panel lateral (botón toggle o entrada del
  * árbol).
  *
@@ -144,7 +117,6 @@ static int ftree_entry_at_row(FileTree *ft, int target_row) {
  */
 void handle_ftree_click(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
-    int content_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT; /* inicio Y del panel */
 
     /* Botón toggle: su geometría la registró el render (UI_TOGGLE_TREE), así no
      * hay que recalcularla aquí ni mantenerla sincronizada con el dibujo. */
@@ -156,15 +128,11 @@ void handle_ftree_click(Editor *e, int mx, int my) {
 
     if (!ft->open) return; /* panel cerrado: no hay árbol donde clicar */
 
-    /* primera fila tras cabecera */
-    int content_y = content_top + HIT_FTREE_HEADER_H;
-    if (my < content_y) return; /* clic en la cabecera */
-
-    /* fila pulsada = (offset Y / alto de fila) + scroll del propio panel */
-    int target_row = (my - content_y) / FTREE_ITEM_H + ft->scroll;
-    /* fila visible → índice real */
-    int idx = ftree_entry_at_row(ft, target_row);
-    if (idx < 0) return; /* fila vacía */
+    /* Fila del árbol bajo el clic: su rect lo registró el render por índice de
+     * array, así que ui_hit_idx devuelve directamente el índice de la entrada.
+     */
+    int idx = ui_hit_idx(&e->ui, UI_LIST_TREE_ROW, mx, my);
+    if (idx < 0) return; /* clic en la cabecera o zona vacía */
 
     FEntry *en = ftree_entry(ft, idx);
     if (en->type == FTYPE_DIR) {
@@ -180,27 +148,19 @@ void handle_ftree_click(Editor *e, int mx, int my) {
 /**
  * @brief Actualiza la entrada del árbol bajo el cursor (hover).
  *
- * Calcula qué fila del árbol está bajo el ratón y, si difiere de la resaltada
- * antes, la actualiza y pide redibujar (para mostrar el resaltado de hover). La
- * X no importa aquí: basta estar dentro del panel, por eso se ignora con
- * (void).
+ * Consulta qué fila del árbol está bajo el ratón (con la geometría que registró
+ * el render) y, si difiere de la resaltada antes, la actualiza y pide
+ * redibujar.
  *
  * @param e  Editor.
- * @param mx Coordenada X del ratón (no usada, solo Y determina la fila).
+ * @param mx Coordenada X del ratón en píxeles.
  * @param my Coordenada Y del ratón en píxeles.
  */
 void handle_ftree_hover(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
     if (!ft->open) return;
-    (void)mx; /* la fila depende solo de Y */
 
-    int content_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT + HIT_FTREE_HEADER_H;
-    int hovered = -1;
-    /* por debajo de la cabecera: hay fila bajo el cursor */
-    if (my >= content_y)
-        hovered = ftree_entry_at_row(ft, (my - content_y) / FTREE_ITEM_H +
-                                             ft->scroll);
-
+    int hovered = ui_hit_idx(&e->ui, UI_LIST_TREE_ROW, mx, my);
     if (ft->hovered != hovered) { /* solo redibujar si cambió el resaltado */
         ft->hovered = hovered;
         e->needs_redraw = 1;

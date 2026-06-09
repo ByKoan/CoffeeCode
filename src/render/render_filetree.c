@@ -234,6 +234,9 @@ void render_filetree(Editor *e) {
         /* Y de la fila = bajo la cabecera + desplazamiento por el scroll. */
         int row_y =
             header_y + FTREE_HEADER_H + (vis_idx - ft->scroll) * FTREE_ITEM_H;
+        /* registrar la fila por su índice de array para el hit-test */
+        ui_put_idx(&e->ui, UI_LIST_TREE_ROW, i,
+                   (Rect){panel_x, row_y, panel_w, FTREE_ITEM_H});
         /* hover por índice */
         draw_tree_entry(e, en, row_y, panel_w, btn_w, ft->hovered == i);
     }
