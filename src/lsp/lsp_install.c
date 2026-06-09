@@ -24,6 +24,7 @@
 #include <windows.h>
 #else
 #define PLATFORM_POSIX 1
+#include <fcntl.h> /* open, O_WRONLY */
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
