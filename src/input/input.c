@@ -425,6 +425,13 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
         return;
     }
 
+    /* Popup de codificación abierto: ESC lo cierra. */
+    if (e->enc_popup && key == SDLK_ESCAPE) {
+        e->enc_popup = 0;
+        e->needs_redraw = 1;
+        return;
+    }
+
     if (key == SDLK_ESCAPE) { /* cierra barra / menú / selección */
         if (e->find.visible)
             close_find_bar(e);

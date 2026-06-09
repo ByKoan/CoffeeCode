@@ -241,6 +241,14 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* Popup de codificación: la rueda desplaza su lista. */
+    if (e->enc_popup) {
+        if (ui_hit(&e->ui, UI_ENC_LIST, cursor_x, cursor_y))
+            e->enc_popup_scroll -= (int)ev->wheel.y;
+        e->needs_redraw = 1;
+        return;
+    }
+
     if (e->ftree.open && cursor_x < get_left_offset(e)) {
         /* la rueda sobre el panel desplaza el árbol */
         e->ftree.scroll -= (int)(ev->wheel.y * SCROLL_LINES_PER_NOTCH);
@@ -551,6 +559,36 @@ static void handle_settings_click(Editor *e, int mx, int my) {
     e->needs_redraw = 1;
 }
 
+/**
+ * @brief Procesa un clic en el popup del selector de codificación.
+ *
+ * Botones de modo (Reabrir/Guardar como) cambian @c enc_popup_mode; un clic en
+ * una fila aplica esa codificación (reabrir desde disco o guardar) y cierra; un
+ * clic fuera del popup lo cierra.
+ */
+static void handle_enc_popup_click(Editor *e, int mx, int my) {
+    if (ui_hit(&e->ui, UI_ENC_MODE_REOPEN, mx, my)) {
+        e->enc_popup_mode = 0;
+    } else if (ui_hit(&e->ui, UI_ENC_MODE_SAVE, mx, my)) {
+        e->enc_popup_mode = 1;
+    } else {
+        int row = ui_hit_idx(&e->ui, UI_LIST_ENC, mx, my);
+        if (row >= 0) {
+            TextEncoding enc = (TextEncoding)row;
+            if (e->enc_popup_mode == 0) {
+                editor_reopen_with_encoding(e, enc); /* re-decodificar disco */
+            } else {
+                e->encoding = enc; /* guardar con esta codificación */
+                save_file(e);
+            }
+            e->enc_popup = 0;
+        } else if (!ui_hit(&e->ui, UI_ENC_LIST, mx, my)) {
+            e->enc_popup = 0; /* clic fuera del popup: cerrar */
+        }
+    }
+    e->needs_redraw = 1;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
@@ -559,6 +597,20 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     /* Preferencias abiertas: la pantalla es modal y consume todo el ratón. */
     if (e->settings_open) {
         handle_settings_click(e, mx, my);
+        return;
+    }
+
+    /* Popup de codificación abierto: consume el ratón. */
+    if (e->enc_popup) {
+        handle_enc_popup_click(e, mx, my);
+        return;
+    }
+
+    /* Clic en la codificación de la barra de estado: abrir el selector. */
+    if (ui_hit(&e->ui, UI_STATUS_ENC, mx, my)) {
+        e->enc_popup = 1;
+        e->enc_popup_mode = 0;
+        e->needs_redraw = 1;
         return;
     }
 

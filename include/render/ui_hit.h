@@ -55,6 +55,9 @@ typedef enum {
     UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
     UI_PREF_FONT_LIST,  /**< Área de la lista de fuentes (para la rueda). */
     UI_STATUS_ENC,      /**< Codificación en la barra de estado (clic).  */
+    UI_ENC_MODE_REOPEN, /**< Botón "Reabrir con" del popup.             */
+    UI_ENC_MODE_SAVE,   /**< Botón "Guardar como" del popup.            */
+    UI_ENC_LIST,        /**< Área de la lista de codificaciones.        */
     UI_ID_COUNT
 } UiId;
 
@@ -65,6 +68,7 @@ typedef enum {
     UI_LIST_TREE_ROW,  /**< Filas del explorador de archivos.*/
     UI_LIST_MENU_ITEM, /**< Items del menú "Archivo".        */
     UI_LIST_PREF_FONT, /**< Filas de la lista de fuentes.    */
+    UI_LIST_ENC,       /**< Filas del selector de codificación. */
     UI_LIST_COUNT
 } UiList;
 

@@ -192,6 +192,11 @@ typedef struct {
     FontList fonts;
     int font_list_scroll; /* primera fila visible en la lista de fuentes */
 
+    /* selector de codificación (popup desde la barra de estado) */
+    int enc_popup;        /* 1 = popup de codificación abierto          */
+    int enc_popup_mode;   /* 0 = reabrir con, 1 = guardar como          */
+    int enc_popup_scroll; /* primera fila visible de la lista           */
+
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */
     Theme theme;
@@ -204,6 +209,10 @@ void editor_run(Editor *e);
 /* Recarga la fuente desde las preferencias (settings.font_path/font_size) y
  * recalcula char_w/line_height. Mantiene la fuente actual si la nueva falla. */
 void editor_reload_font(Editor *e);
+/* Re-lee el archivo de la pestaña activa decodificándolo con la codificación
+ * @p enc (en vez de la autodetectada) y la fija como codificación de la
+ * pestaña. */
+void editor_reopen_with_encoding(Editor *e, TextEncoding enc);
 
 /* -- Lógica interna (usada entre módulos) --------------------------------- */
 void editor_update_lexer(Editor *e, int from_line);

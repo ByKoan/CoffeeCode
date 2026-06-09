@@ -504,3 +504,45 @@ void render_scrollbar(Editor *e, int left_offset) {
     set_color_c(r, e->theme.col_sb_border);
     fill_rect(r, sb_x, sb_y, 1, sb_h); /* borde izquierdo del carril */
 }
+
+/** Callback de ::ui_list: una fila del selector = el nombre de la codificación.
+ */
+static void enc_row(Editor *e, int i, Rect row, int selected, void *ud) {
+    (void)ud;
+    (void)selected;
+    draw_text_c(e, encoding_name((TextEncoding)i), row.x + 8,
+                row.y + (row.h - e->font_size) / 2,
+                e->theme.tokens[TOK_DEFAULT]);
+}
+
+void render_enc_popup(Editor *e) {
+    if (!e->enc_popup) return;
+
+    int row_h = e->font_size + 10;
+    int hdr_h = e->font_size + 14;
+    int w = 210;
+    int list_h = row_h * ENC_COUNT;
+    int h = hdr_h + list_h;
+    int x = e->win_w - w - 8;
+    int y = e->win_h - STATUS_HEIGHT - h;
+    if (x < 0) x = 0;
+    if (y < NAVBAR_HEIGHT) y = NAVBAR_HEIGHT;
+
+    /* fondo del popup */
+    ui_panel(e, (Rect){x, y, w, h}, e->theme.col_menu_bg,
+             e->theme.col_menu_border);
+
+    /* cabecera: dos botones de modo (el activo resaltado) */
+    int bw = w / 2;
+    Rect b1 = {x, y, bw, hdr_h};
+    Rect b2 = {x + bw, y, w - bw, hdr_h};
+    ui_button(e, UI_ENC_MODE_REOPEN, b1, "Reabrir", &e->theme.style_button,
+              e->enc_popup_mode == 0 ? UI_ACTIVE : UI_NORMAL);
+    ui_button(e, UI_ENC_MODE_SAVE, b2, "Guardar", &e->theme.style_button,
+              e->enc_popup_mode == 1 ? UI_ACTIVE : UI_NORMAL);
+
+    /* lista de codificaciones (selección = la actual) */
+    Rect lb = {x, y + hdr_h, w, list_h};
+    ui_list(e, lb, UI_ENC_LIST, UI_LIST_ENC, ENC_COUNT, row_h,
+            &e->enc_popup_scroll, (int)e->encoding, enc_row, NULL);
+}

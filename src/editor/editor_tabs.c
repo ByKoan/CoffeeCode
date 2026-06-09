@@ -67,6 +67,42 @@ static TextEncoding tab_load_decoded(EditorTab *t, const char *path) {
     return enc;
 }
 
+void editor_reopen_with_encoding(Editor *e, TextEncoding enc) {
+    if (e->tab_count == 0 || !e->filepath[0]) return; /* sin archivo en disco */
+    EditorTab *t = &e->tabs[e->active_tab];
+
+    size_t rawlen = 0;
+    void *raw = SDL_LoadFile(t->filepath, &rawlen);
+    if (!raw) return;
+    char *utf8 = NULL;
+    size_t utf8len = 0;
+    int ok = encoding_decode(enc, (const unsigned char *)raw, rawlen, &utf8,
+                             &utf8len);
+    SDL_free(raw);
+    if (!ok) return;
+
+    /* reemplazar el contenido del buffer con el re-decodificado */
+    buf_free(&t->buf);
+    buf_init(&t->buf);
+    buf_load_mem(&t->buf, utf8, utf8len);
+    free(utf8);
+
+    /* la cache del lexer ya no vale: rehacerla al nº de líneas actual */
+    lexer_cache_free(&t->lex);
+    int total = buf_line_count(&t->buf);
+    lexer_cache_init(&t->lex, total > 0 ? total : 1);
+
+    /* e->buf/e->lex ya apuntan a &t->buf/&t->lex (misma dirección): siguen
+     * válidos. Solo reseteamos los escalares en vivo y la codificación. */
+    t->encoding = enc;
+    e->encoding = enc;
+    e->cursor_line = e->cursor_col = 0;
+    e->scroll_line = e->scroll_col = 0;
+    e->modified = 0;
+    t->modified = 0;
+    e->needs_redraw = 1;
+}
+
 /**
  * @brief Inicializa una pestaña nueva y vacía: buffer de texto y pila de undo.
  *

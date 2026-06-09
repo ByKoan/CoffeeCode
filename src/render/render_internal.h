@@ -51,3 +51,5 @@ void render_selection(Editor *e, int left_offset, int text_top,
                       int visible_lines);
 /* pantalla de preferencias (a pantalla completa) */
 void render_settings_view(Editor *e);
+/* popup del selector de codificación (desde la barra de estado) */
+void render_enc_popup(Editor *e);
