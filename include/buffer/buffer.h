@@ -70,6 +70,14 @@ void buf_move_left(Buffer *b);           /* un carácter a la izquierda (O(1)) *
 void buf_move_right(Buffer *b);          /* un carácter a la derecha   (O(1)) */
 void buf_move_to(Buffer *b, size_t pos); /* posición lógica            */
 
+/* ¿es @p c un byte de continuación UTF-8 (10xxxxxx)? No inicia un carácter.
+ * Las "columnas" del editor cuentan caracteres (codepoints), no bytes: un
+ * carácter multibyte (acento, emoji) ocupa varios bytes pero una sola columna.
+ */
+static inline int buf_is_cont(char c) {
+    return ((unsigned char)c & 0xC0) == 0x80;
+}
+
 /* consulta */
 size_t buf_length(const Buffer *b);            /* nº de caracteres     */
 char buf_char_at(const Buffer *b, size_t pos); /* carácter en pos lóg. */

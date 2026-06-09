@@ -118,12 +118,19 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     /* fin de la línea (sin el '\n'): O(longitud de la línea) */
     size_t line_end = buf_line_end(b, line_start);
 
-    /* recortar la columna para no pasar del final real de la línea */
-    int line_len = (int)(line_end - line_start);
+    /* La columna cuenta CARACTERES, no bytes: avanzar `col` caracteres desde el
+     * inicio de la línea saltando los bytes de continuación UTF-8, sin pasar
+     * del final real de la línea. */
     if (col < 0) col = 0;
-    if (col > line_len) col = line_len;
-
-    return line_start + (size_t)col;
+    size_t p = line_start;
+    int c = 0;
+    while (p < line_end && c < col) {
+        p++; /* byte inicial del carácter */
+        while (p < line_end && buf_is_cont(buf_char_at(b, p)))
+            p++; /* sus bytes de continuación */
+        c++;
+    }
+    return p;
 }
 
 /**

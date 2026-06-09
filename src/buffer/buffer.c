@@ -362,9 +362,13 @@ void buf_insert_str(Buffer *b, const char *s, size_t len) {
  */
 void buf_delete_before(Buffer *b) {
     if (b->gap_start == 0) return; /* nada a la izquierda */
-    size_t pos = b->gap_start - 1;
-    li_after_delete(b, pos, pos + 1);
-    b->gap_start--;
+    /* Borrar el CARÁCTER completo (no un byte): retroceder hasta el byte
+     * inicial del carácter, saltando los bytes de continuación UTF-8. */
+    size_t start = b->gap_start - 1;
+    while (start > 0 && buf_is_cont(b->data[start]))
+        start--;
+    li_after_delete(b, start, b->gap_start);
+    b->gap_start = start; /* el carácter pasa a formar parte del hueco */
 }
 
 /**
@@ -376,9 +380,13 @@ void buf_delete_before(Buffer *b) {
  */
 void buf_delete_after(Buffer *b) {
     if (b->gap_end == b->size) return; /* nada a la derecha */
-    size_t pos = b->gap_start;
-    li_after_delete(b, pos, pos + 1);
-    b->gap_end++;
+    /* Borrar el CARÁCTER completo: avanzar tras su byte inicial y todos sus
+     * bytes de continuación UTF-8. */
+    size_t end = b->gap_end + 1;
+    while (end < b->size && buf_is_cont(b->data[end]))
+        end++;
+    li_after_delete(b, b->gap_start, b->gap_start + (end - b->gap_end));
+    b->gap_end = end;
 }
 
 /* -- edición de rangos ----------------------------------------------------- */
@@ -439,10 +447,15 @@ size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out) {
  */
 void buf_move_left(Buffer *b) {
     if (b->gap_start == 0) return; /* ya al inicio del texto */
-    b->gap_end--;
-    b->data[b->gap_end] =
-        b->data[b->gap_start - 1]; /* carácter cruza el hueco */
-    b->gap_start--;
+    /* Mover un CARÁCTER completo: trasladar bytes a través del hueco hasta que
+     * el byte que queda a la derecha del cursor inicie un carácter (no sea de
+     * continuación UTF-8). */
+    do {
+        b->gap_end--;
+        b->data[b->gap_end] =
+            b->data[b->gap_start - 1]; /* byte cruza el hueco */
+        b->gap_start--;
+    } while (b->gap_start > 0 && buf_is_cont(b->data[b->gap_end]));
 }
 
 /**
@@ -454,10 +467,14 @@ void buf_move_left(Buffer *b) {
  * @param b Buffer.
  */
 void buf_move_right(Buffer *b) {
-    if (b->gap_end == b->size) return;           /* ya al final del texto */
-    b->data[b->gap_start] = b->data[b->gap_end]; /* carácter cruza el hueco */
-    b->gap_start++;
-    b->gap_end++;
+    if (b->gap_end == b->size) return; /* ya al final del texto */
+    /* Mover un CARÁCTER completo: tras cruzar el byte inicial, seguir mientras
+     * el siguiente byte a la derecha sea de continuación UTF-8. */
+    do {
+        b->data[b->gap_start] = b->data[b->gap_end]; /* byte cruza el hueco */
+        b->gap_start++;
+        b->gap_end++;
+    } while (b->gap_end < b->size && buf_is_cont(b->data[b->gap_end]));
 }
 
 /**
@@ -580,7 +597,13 @@ size_t buf_line_start(const Buffer *b, size_t pos) {
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
     int ln = li_line_of(b, pos);
     *line = ln;
-    *col = (int)(pos - LI(b)[ln]); /* columna = offset relativo al inicio */
+    /* Columna = nº de CARACTERES (no bytes) entre el inicio de línea y pos:
+     * se cuentan los bytes que inician carácter (no los de continuación). */
+    size_t start = LI(b)[ln];
+    int c = 0;
+    for (size_t i = start; i < pos; i++)
+        if (!buf_is_cont(buf_char_at(b, i))) c++;
+    *col = c;
     return 1;
 }
 

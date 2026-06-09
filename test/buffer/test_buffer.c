@@ -111,6 +111,48 @@ static void test_borrar_salto_une_lineas(void) {
     buf_free(&b);
 }
 
+/** Cursor y borrado UTF-8: mover/borrar trata el carácter completo, no bytes.
+ */
+static void test_utf8_cursor(void) {
+    Buffer b;
+    buf_init(&b);
+    buf_insert_str(&b, "caf\xC3\xA9", 5);  /* "café": é = C3 A9 (2 bytes) */
+    EXPECT_EQ_INT((int)buf_length(&b), 5); /* 5 bytes */
+
+    int line, col;
+    buf_line_col(&b, buf_cursor_pos(&b), &line, &col);
+    EXPECT_EQ_INT(col, 4); /* 4 caracteres (no 5 bytes) */
+
+    /* mover a la izquierda salta el carácter é completo (2 bytes) */
+    buf_move_left(&b);
+    EXPECT_EQ_INT((int)buf_cursor_pos(&b), 3); /* byte inicial de é */
+    buf_line_col(&b, buf_cursor_pos(&b), &line, &col);
+    EXPECT_EQ_INT(col, 3);
+
+    /* a la derecha vuelve a saltar é entero */
+    buf_move_right(&b);
+    EXPECT_EQ_INT((int)buf_cursor_pos(&b), 5);
+    buf_line_col(&b, buf_cursor_pos(&b), &line, &col);
+    EXPECT_EQ_INT(col, 4);
+
+    /* backspace borra el carácter completo (é = 2 bytes) */
+    buf_delete_before(&b);
+    EXPECT_EQ_INT((int)buf_length(&b), 3);
+    char out[16];
+    dump(&b, out, sizeof out);
+    EXPECT_EQ_STR(out, "caf");
+
+    /* delete_after sobre un emoji de 4 bytes (U+1F600): se borra entero */
+    buf_insert_str(&b, "\xF0\x9F\x98\x80", 4); /* "caf😀", cursor al final */
+    buf_move_left(&b); /* cursor justo antes del emoji */
+    EXPECT_EQ_INT((int)buf_cursor_pos(&b), 3);
+    buf_delete_after(&b);
+    EXPECT_EQ_INT((int)buf_length(&b), 3);
+    dump(&b, out, sizeof out);
+    EXPECT_EQ_STR(out, "caf");
+    buf_free(&b);
+}
+
 int main(void) {
     tt_suite("buffer");
     tt_run("init deja un buffer vacio con 1 linea", test_init_vacio);
@@ -120,5 +162,6 @@ int main(void) {
     tt_run("indice de lineas (count/offset/col/end)", test_indice_lineas);
     tt_run("borrar un salto de linea une dos lineas",
            test_borrar_salto_une_lineas);
+    tt_run("cursor y borrado UTF-8 (caracter completo)", test_utf8_cursor);
     return tt_summary();
 }

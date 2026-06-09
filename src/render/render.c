@@ -205,7 +205,11 @@ int get_line_text(Editor *e, int line, char *out, int max) {
 static int line_visual_width(Editor *e, int line) {
     size_t ls = buf_line_offset(e->buf, line); /* inicio de la línea */
     size_t le = buf_line_end(e->buf, ls);      /* fin (sin el '\n') */
-    return (int)(le - ls) + 1; /* +1: incluir la celda del '\n' */
+    /* ancho en CARACTERES (no bytes): la columna del fin de línea es justo el
+     * nº de caracteres de la línea. +1 para la celda del '\n'. */
+    int dummy = 0, cols = 0;
+    buf_line_col(e->buf, le, &dummy, &cols);
+    return cols + 1;
 }
 
 /* ── Resaltado de selección ─────────────────────────────────────────────────
@@ -438,6 +442,40 @@ static void draw_substr(Editor *e, const char *line, int src, int len, int px,
     draw_text(e, tmp, px, y, c.r, c.g, c.b);
 }
 
+/** Nº de caracteres (codepoints) en el rango de bytes line[b0, b1). */
+static int count_cols(const char *line, int b0, int b1) {
+    int c = 0;
+    for (int i = b0; i < b1; i++)
+        if (!buf_is_cont(line[i])) c++;
+    return c;
+}
+
+/**
+ * @brief Dibuja el rango de bytes line[b0, b1) cuyo primer byte está en la
+ *        columna de caracteres @p col0, recortando por el scroll horizontal.
+ *
+ * Las columnas cuentan CARACTERES, no bytes, de modo que el texto multibyte
+ * (acentos, emojis) queda alineado con el cursor (1 carácter = 1 celda de
+ * @c char_w px). Salta los caracteres ocultos a la izquierda por el scroll.
+ */
+static void draw_seg(Editor *e, const char *line, int b0, int b1, int col0,
+                     int text_x, int y, Color c) {
+    if (b1 <= b0) return;
+    int sc = e->scroll_col;
+    int col = col0, b = b0;
+    /* avanzar (sin dibujar) por los caracteres ocultos por el scroll */
+    while (b < b1 && col < sc) {
+        b++;
+        while (b < b1 && buf_is_cont(line[b]))
+            b++;
+        col++;
+    }
+    if (b < b1) {
+        int x = text_x + (col - sc) * e->char_w;
+        draw_substr(e, line, b, b1 - b, x, y, c);
+    }
+}
+
 /**
  * @brief Dibuja una línea de texto con resaltado de sintaxis por tokens.
  *
@@ -452,81 +490,54 @@ static void draw_substr(Editor *e, const char *line, int src, int len, int px,
  */
 static void render_text_line(Editor *e, int li, int y, int text_x) {
     char line_buf[LINE_BUF_SZ];
-    /* texto expandido */
-    int line_len = get_line_text(e, li, line_buf, sizeof(line_buf));
+    /* texto expandido (bytes UTF-8); line_bytes = longitud en BYTES */
+    int line_bytes = get_line_text(e, li, line_buf, sizeof(line_buf));
     /* centrado vertical en la fila */
     int text_y = y + (e->line_height - e->font_size) / 2;
 
-    if (!(li < lexer_cache_count(e->lex) &&
-          lexer_cache_line(e->lex, li)->count > 0)) {
-        /* sin tokens: dibujar el resto de la línea en color por defecto */
-        /* saltar lo desplazado */
-        int start = e->scroll_col < line_len ? e->scroll_col : line_len;
-        if (start < line_len) {
-            Color dc = e->theme.tokens[TOK_DEFAULT];
-            draw_text(e, line_buf + start, text_x, text_y, dc.r, dc.g, dc.b);
-        }
+    LineTokens *lt =
+        (li < lexer_cache_count(e->lex)) ? lexer_cache_line(e->lex, li) : NULL;
+
+    /* Sin tokens: dibujar la línea entera en color por defecto. */
+    if (!lt || lt->count == 0) {
+        draw_seg(e, line_buf, 0, line_bytes, 0, text_x, text_y,
+                 e->theme.tokens[TOK_DEFAULT]);
         return;
     }
 
-    /* tokens cacheados de esta línea */
-    LineTokens *lt = lexer_cache_line(e->lex, li);
-    int drawn_to = 0; /* columna lógica ya cubierta */
+    /* Con tokens: en orden, los huecos (sin token) en color por defecto y cada
+     * token con el color de su tipo. Los tokens del lexer vienen en BYTES; aquí
+     * se posicionan por COLUMNAS de carácter (draw_seg) para alinear multibyte.
+     * `drawn` = byte ya cubierto; `col` = su columna de caracteres. */
+    int drawn = 0, col = 0;
     for (int ti = 0; ti < lt->count; ti++) {
         Token *tok = &lt->tokens[ti];
-        /* fin del token en coords de vista */
-        int col_end = tok->col + tok->len - e->scroll_col;
-        if (col_end <= 0) { /* token totalmente a la izquierda */
-            drawn_to = tok->col + tok->len;
-            continue;
-        }
+        int tok_start = tok->col;
+        int tok_end = tok->col + tok->len;
+        if (tok_start > line_bytes) tok_start = line_bytes;
+        if (tok_end > line_bytes) tok_end = line_bytes;
+        if (tok_start < drawn) tok_start = drawn; /* defensivo: solapes */
 
-        /* hueco (texto sin token) antes de este token: pintarlo en color por
-         * defecto */
-        if (drawn_to < tok->col) {
-            /* inicio del hueco en vista */
-            int gap_start = drawn_to - e->scroll_col;
-            if (gap_start < 0) gap_start = 0; /* recortar lo desplazado */
-            int gap_len = tok->col - e->scroll_col - gap_start;
-            if (gap_len > 0 && gap_start + e->scroll_col < line_len)
-                draw_substr(e, line_buf, gap_start + e->scroll_col, gap_len,
-                            text_x + gap_start * e->char_w, text_y,
-                            e->theme.tokens[TOK_DEFAULT]);
+        /* hueco antes del token */
+        if (drawn < tok_start) {
+            draw_seg(e, line_buf, drawn, tok_start, col, text_x, text_y,
+                     e->theme.tokens[TOK_DEFAULT]);
+            col += count_cols(line_buf, drawn, tok_start);
+            drawn = tok_start;
         }
-
-        /* columna de dibujo (vista) y rango real del token tras recortar el
-         * scroll */
-        int draw_col =
-            (tok->col > e->scroll_col) ? tok->col - e->scroll_col : 0;
-        int actual_start = tok->col < e->scroll_col ? e->scroll_col : tok->col;
-        int actual_len = tok->col + tok->len - actual_start;
-        if (actual_len <= 0) { /* nada visible de este token */
-            drawn_to = tok->col + tok->len;
-            continue;
+        /* el token */
+        if (drawn < tok_end) {
+            draw_seg(e, line_buf, drawn, tok_end, col, text_x, text_y,
+                     e->theme.tokens[tok->type]);
+            col += count_cols(line_buf, drawn, tok_end);
+            drawn = tok_end;
         }
-        if (actual_start + actual_len > line_len)
-            actual_len = line_len - actual_start; /* clamp */
-        if (actual_len <= 0) {
-            drawn_to = tok->col + tok->len;
-            continue;
-        }
-
-        /* dibujar el token con el color de su tipo */
-        draw_substr(e, line_buf, actual_start, actual_len,
-                    text_x + draw_col * e->char_w, text_y,
-                    e->theme.tokens[tok->type]);
-        drawn_to = tok->col + tok->len;
     }
 
     /* texto restante tras el último token (en color por defecto) */
-    if (drawn_to < line_len) {
-        int start = drawn_to - e->scroll_col;
-        if (start < 0) start = 0;
-        if (start < line_len)
-            draw_substr(e, line_buf, start, line_len - start,
-                        text_x + start * e->char_w, text_y,
-                        e->theme.tokens[TOK_DEFAULT]);
-    }
+    if (drawn < line_bytes)
+        draw_seg(e, line_buf, drawn, line_bytes, col, text_x, text_y,
+                 e->theme.tokens[TOK_DEFAULT]);
 }
 
 /**

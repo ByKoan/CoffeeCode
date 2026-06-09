@@ -94,9 +94,12 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
     if (visual_col < 0) visual_col = 0; /* clic en gutter/padding → col 0 */
     /* offset inicio línea */
     size_t line_start = editor_pos_from_line_col(e, ln, 0);
-    /* longitud real de la línea (sin el '\n') para no pasarse del final */
-    int line_len = (int)(buf_line_end(e->buf, line_start) - line_start);
-    if (visual_col > line_len) visual_col = line_len;
+    /* longitud real de la línea en CARACTERES (no bytes), para no pasarse del
+     * final: la columna del fin de línea es justo ese nº de caracteres. */
+    size_t line_end = buf_line_end(e->buf, line_start);
+    int dummy_line = 0, line_cols = 0;
+    buf_line_col(e->buf, line_end, &dummy_line, &line_cols);
+    if (visual_col > line_cols) visual_col = line_cols;
 
     *line = ln;
     *col = visual_col;
