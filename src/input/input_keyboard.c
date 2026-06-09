@@ -32,6 +32,7 @@ static void after_edit(Editor *e, int dirty_line) {
     editor_ensure_visible(e);
     e->modified = 1;
     e->needs_redraw = 1;
+    editor_cursor_blink_reset(e); /* cursor siempre visible tras editar */
 }
 
 /**
@@ -47,6 +48,7 @@ static void after_cursor_move(Editor *e) {
     editor_sync_cursor(e);
     editor_ensure_visible(e);
     e->needs_redraw = 1;
+    editor_cursor_blink_reset(e); /* cursor siempre visible tras moverse */
 }
 
 /**

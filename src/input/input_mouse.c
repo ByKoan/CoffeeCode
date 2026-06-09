@@ -557,13 +557,11 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int my = (int)ev->button.y;
     if (ev->button.button != SDL_BUTTON_LEFT) return; /* solo botón izquierdo */
 
-    /* Barra de pestañas */
-    if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
-        click_tabbar(e, mx, my);
-        return;
-    }
-
-    /* Menú "Archivo" abierto */
+    /* Menú "Archivo" abierto: tiene prioridad máxima sobre cualquier otra zona.
+     * Debe comprobarse ANTES de la barra de pestañas porque el menú se dibuja
+     * por encima de ella y sus items empiezan en y=NAVBAR_HEIGHT, que coincide
+     * con el rango de la tab bar; sin esta guarda, click_tabbar absorbería
+     * los clics sobre los items del menú antes de llegar aquí. */
     if (e->menu_open) {
         int item = menu_item_at(mx, my);
         /* clic en un item: ejecutarlo */
@@ -575,6 +573,12 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
             e->menu_hovered = -1;
             e->needs_redraw = 1;
         }
+        return;
+    }
+
+    /* Barra de pestañas */
+    if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
+        click_tabbar(e, mx, my);
         return;
     }
 
