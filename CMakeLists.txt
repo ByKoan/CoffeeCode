@@ -75,9 +75,9 @@ set(PACKAGE_VERSION_EXACT TRUE)
 ]])
 
 # -- SDL3_ttf 3.2.2 -----------------------------------------------------------
-# Usamos el flujo Declare+Populate+add_subdirectory para poder compilar
-# Freetype vendorizado antes de que SDL3_ttf lo busque.  CMP0169=OLD suprime
-# el warning de deprecación de FetchContent_Populate con detalles declarados.
+# Declare+Populate+add_subdirectory para fijar las opciones de SDL3_ttf antes de
+# configurarlo. CMP0169=OLD suprime el warning de deprecación de
+# FetchContent_Populate con detalles ya declarados.
 if(POLICY CMP0169)
     cmake_policy(SET CMP0169 OLD)
 endif()
@@ -90,51 +90,19 @@ FetchContent_Declare(
 )
 FetchContent_Populate(SDL3_ttf)
 
-# Compilar freetype vendored ANTES de que SDL3_ttf lo busque
-set(FREETYPE_SRC "${sdl3_ttf_SOURCE_DIR}/external/freetype")
-set(FREETYPE_BINARY "${CMAKE_BINARY_DIR}/_deps/freetype-build")
-
-# Deshabilitar dependencias opcionales de freetype que no tenemos
-set(FT_DISABLE_ZLIB    TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_BZIP2   TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_PNG     TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_HARFBUZZ TRUE CACHE BOOL "" FORCE)
-set(FT_DISABLE_BROTLI  TRUE CACHE BOOL "" FORCE)
-add_subdirectory("${FREETYPE_SRC}" "${FREETYPE_BINARY}")
-
-# Crear alias y variables que find_package(Freetype REQUIRED) espera encontrar
-if(NOT TARGET Freetype::Freetype)
-    add_library(Freetype::Freetype ALIAS freetype)
-endif()
-set(FREETYPE_FOUND        TRUE  CACHE BOOL   "" FORCE)
-set(FREETYPE_LIBRARY      freetype CACHE STRING "" FORCE)
-set(FREETYPE_LIBRARIES    freetype CACHE STRING "" FORCE)
-set(FREETYPE_INCLUDE_DIRS "${FREETYPE_SRC}/include" CACHE STRING "" FORCE)
-set(FREETYPE_INCLUDE_DIR  "${FREETYPE_SRC}/include" CACHE STRING "" FORCE)
-set(FREETYPE_VERSION_STRING "2.13" CACHE STRING "" FORCE)
-
-# Escribir el redirect ANTES de add_subdirectory(SDL3_ttf)
-file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/freetype-config.cmake" "
-set(FREETYPE_FOUND TRUE)
-set(FREETYPE_LIBRARIES freetype)
-set(FREETYPE_INCLUDE_DIRS \"${FREETYPE_SRC}/include\")
-set(FREETYPE_INCLUDE_DIR  \"${FREETYPE_SRC}/include\")
-if(NOT TARGET Freetype::Freetype)
-    add_library(Freetype::Freetype ALIAS freetype)
-endif()
-")
-file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/freetype-config-version.cmake" "
-set(PACKAGE_VERSION \"2.13\")
-set(PACKAGE_VERSION_COMPATIBLE TRUE)
-set(PACKAGE_VERSION_EXACT TRUE)
-")
-
-# Ahora configurar SDL3_ttf — encontrará Freetype via cache+redirect
-set(SDL3TTF_VENDORED  ON  CACHE BOOL "" FORCE)
-set(SDL3TTF_SAMPLES   OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_INSTALL   OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_HARFBUZZ  OFF CACHE BOOL "" FORCE)
-set(SDL3TTF_PLUTOSVG  OFF CACHE BOOL "" FORCE)
+# Opciones de SDL3_ttf. IMPORTANTE: las variables reales son SDLTTF_* (SIN el
+# "3"); usar SDL3TTF_* no tiene efecto y deja que SDL3_ttf elija sus defaults
+# (harfbuzz ON y freetype vendorizado), lo que en CI rompía el build.
+#
+# Dejamos que el propio SDL3_ttf vendorice y compile su freetype
+# (SDLTTF_FREETYPE_VENDORED = SDLTTF_VENDORED): así hay un ÚNICO target freetype
+# y no chocan dos definiciones. Desactivamos harfbuzz y plutosvg porque no los
+# necesitamos y evitan dependencias extra (harfbuzz, plutosvg, pkg-config...).
+set(SDLTTF_VENDORED ON  CACHE BOOL "" FORCE)
+set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)
+set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
+set(SDLTTF_SAMPLES  OFF CACHE BOOL "" FORCE)
+set(SDLTTF_INSTALL  OFF CACHE BOOL "" FORCE)
 add_subdirectory("${sdl3_ttf_SOURCE_DIR}" "${sdl3_ttf_BINARY_DIR}")
 
 # -- Icono (.ico en la raíz del proyecto) -------------------------------------
