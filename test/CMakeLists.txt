@@ -42,3 +42,7 @@ add_coffee_test(test_buffer  buffer/test_buffer.c
 add_coffee_test(test_lexer   lexer/test_lexer.c
     "${CMAKE_SOURCE_DIR}/src/lexer/lexer.c"
     "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+
+# --- encoding (puro, sin dependencias) -------------------------------------
+add_coffee_test(test_encoding encoding/test_encoding.c
+    "${CMAKE_SOURCE_DIR}/src/encoding/encoding.c")
