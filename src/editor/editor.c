@@ -305,6 +305,7 @@ int editor_init(Editor *e, const char *filepath) {
     settings_load(&e->settings);
     e->autosave = e->settings.autosave;
     e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
+    fonts_scan(&e->fonts); /* fuentes del sistema para el selector */
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -418,6 +419,7 @@ void editor_free(Editor *e) {
     for (int i = 0; i < e->tab_count; i++)
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);
+    fonts_free(&e->fonts);               /* lista de fuentes del sistema */
     if (e->font) TTF_CloseFont(e->font); /* liberar la fuente abierta */
     if (e->renderer)
         SDL_StopTextInput(e->window); /* desactivar eventos de texto */

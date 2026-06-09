@@ -523,6 +523,16 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
         editor_reload_font(e);
         settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_FONT, mx, my)) {
+        /* cicla: Predeterminada -> fuente 0 -> ... -> N-1 -> Predeterminada */
+        int next = fonts_index_of(&e->fonts, s->font_path) + 1;
+        if (e->fonts.count == 0 || next >= e->fonts.count)
+            s->font_path[0] = '\0'; /* volver a la fuente por defecto */
+        else
+            snprintf(s->font_path, sizeof s->font_path, "%s",
+                     e->fonts.items[next].path);
+        editor_reload_font(e);
+        settings_save(s);
     }
     e->needs_redraw = 1;
 }

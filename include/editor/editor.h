@@ -8,6 +8,7 @@
 
 #include "buffer/buffer.h"
 #include "filetree/filetree.h"
+#include "fonts/fonts.h"
 #include "lexer/lexer.h"
 #include "lsp/lsp.h"
 #include "lsp/lsp_install.h"
@@ -183,6 +184,9 @@ typedef struct {
     /* preferencias persistentes (tema, fuente, tab, autoguardado...) */
     Settings settings;
     int settings_open; /* 1 = mostrando la pantalla de preferencias */
+
+    /* fuentes del sistema descubiertas (para el selector de preferencias) */
+    FontList fonts;
 
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */

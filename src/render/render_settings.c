@@ -121,6 +121,9 @@ void render_settings_view(Editor *e) {
     pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
                 theme_name(e->settings.theme));
     y += PREF_ROW_H;
+    pref_choice(e, UI_PREF_FONT, x, y, col_w, "Fuente",
+                fonts_name_for(&e->fonts, e->settings.font_path));
+    y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_FONTSZ_DEC, UI_PREF_FONTSZ_INC, x, y, col_w,
                  "Tamano de fuente", e->settings.font_size);
     y += PREF_ROW_H + 12;
