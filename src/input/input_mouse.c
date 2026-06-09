@@ -499,6 +499,10 @@ static void handle_settings_click(Editor *e, int mx, int my) {
     Settings *s = &e->settings;
     if (ui_hit(&e->ui, UI_PREF_BACK, mx, my)) {
         e->settings_open = 0; /* volver al editor */
+    } else if (ui_hit(&e->ui, UI_PREF_THEME, mx, my)) {
+        s->theme = (s->theme + 1) % THEME_COUNT; /* siguiente preset */
+        e->theme = theme_preset(s->theme);       /* aplicar al instante */
+        settings_save(s);
     } else if (ui_hit(&e->ui, UI_PREF_AUTOSAVE, mx, my)) {
         e->autosave = !e->autosave;
         if (e->autosave) e->autosave_last_ms = SDL_GetTicks();

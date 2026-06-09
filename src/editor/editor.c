@@ -280,6 +280,7 @@ int editor_init(Editor *e, const char *filepath) {
      * inicial (las demás las leen render/input directamente de e->settings). */
     settings_load(&e->settings);
     e->autosave = e->settings.autosave;
+    e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG

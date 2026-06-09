@@ -32,16 +32,6 @@
 #define LINE_BUF_SZ 4096 /* buffer temporal por línea visible           */
 #define TOKEN_CHUNK 255  /* máx. caracteres por fragmento de texto       */
 
-/* Colores locales en formato R,G,B,A (los COL_* van con alfa; los TXT_* sin él,
- * porque draw_text fija el alfa a 255). Se pasan "desempaquetados" como
- * argumentos variádicos a las macros set_color/draw_text. */
-/* separador sobre la status bar */
-#define COL_STATUS_SEP 0x35, 0x3A, 0x45, 0xFF
-#define TXT_GUTTER_NUM 0x49, 0x50, 0x5E    /* gris de los números de línea  */
-#define TXT_STATUS 0x98, 0xC3, 0x79        /* verde del texto de estado     */
-#define TXT_WELCOME_TITLE 0x6B, 0x72, 0x88 /* título de la bienvenida       */
-#define TXT_WELCOME_HINT 0x45, 0x4C, 0x5E  /* pistas de la bienvenida       */
-
 /* ── Utilidades de dibujo compartidas ───────────────────────────────────────
  */
 
@@ -60,6 +50,17 @@
  */
 void set_color(SDL_Renderer *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) {
     SDL_SetRenderDrawColor(r, R, G, B, A);
+}
+
+/** Igual que ::set_color pero tomando un ::Color del tema (e->theme.*). */
+void set_color_c(SDL_Renderer *r, Color c) {
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+}
+
+/** Igual que ::draw_text pero tomando el color como ::Color (ignora el alfa).
+ */
+int draw_text_c(Editor *e, const char *text, int x, int y, Color c) {
+    return draw_text(e, text, x, y, c.r, c.g, c.b);
 }
 
 /**
@@ -238,7 +239,9 @@ void render_selection(Editor *e, int left_offset, int text_top,
     /* extremo final   -> (lín,col) */
     buf_line_col(e->buf, to, &to_line, &to_col);
 
-    set_color(r, COL_SEL_BG); /* azul de selección para todos los rectángulos */
+    set_color_c(
+        r,
+        e->theme.col_sel_bg); /* azul de selección para todos los rectángulos */
 
     /* Si to_col == 0 y to_line > from_line, el cursor está al inicio de
      * to_line: la selección cubre hasta el '\n' de (to_line-1), así que
@@ -288,12 +291,13 @@ void render_selection(Editor *e, int left_offset, int text_top,
 static void draw_status_bar(Editor *e, const char *text) {
     SDL_Renderer *r = e->renderer;
     int y = e->win_h - STATUS_HEIGHT; /* la barra va pegada al borde inferior */
-    set_color(r, COL_STATUS_BG);
+    set_color_c(r, e->theme.col_status_bg);
     fill_rect(r, 0, y, e->win_w, STATUS_HEIGHT); /* fondo de la barra */
-    set_color(r, COL_STATUS_SEP);
+    set_color_c(r, e->theme.col_status_sep);
     fill_rect(r, 0, y, e->win_w, 1); /* separador superior de 1 px */
     /* centrado vertical: (alto barra - alto fuente) / 2 */
-    draw_text(e, text, 0, y + (STATUS_HEIGHT - FONT_SIZE) / 2, TXT_STATUS);
+    draw_text_c(e, text, 0, y + (STATUS_HEIGHT - FONT_SIZE) / 2,
+                e->theme.txt_status);
 }
 
 /**
@@ -335,11 +339,11 @@ static void render_empty_screen(Editor *e) {
 
     /* título dos líneas por encima del centro; cada pista una línea más abajo
      */
-    draw_text(e, title, center_x - title_w / 2, mid_y - LINE_HEIGHT * 2,
-              TXT_WELCOME_TITLE);
+    draw_text_c(e, title, center_x - title_w / 2, mid_y - LINE_HEIGHT * 2,
+                e->theme.txt_welcome_title);
     for (int i = 0; i < 3; i++)
-        draw_text(e, hints[i], center_x - hint_w / 2, mid_y + LINE_HEIGHT * i,
-                  TXT_WELCOME_HINT);
+        draw_text_c(e, hints[i], center_x - hint_w / 2, mid_y + LINE_HEIGHT * i,
+                    e->theme.txt_welcome_hint);
 
     draw_status_bar(e, "  CoffeeCode");
     /* mostrar el frame (render_frame ya retornó) */
@@ -425,7 +429,7 @@ static void draw_substr(Editor *e, const char *line, int src, int len, int px,
  *
  * Obtiene el texto de la línea y, si tiene tokens cacheados, recorre cada token
  * dibujando: los huecos sin token en color por defecto y cada token en el color
- * de su tipo (@c TOKEN_COLORS). Todo se ajusta al scroll horizontal (@c
+ * de su tipo (@c e->theme.tokens). Todo se ajusta al scroll horizontal (@c
  * scroll_col): las columnas a la izquierda del scroll se recortan. Si la línea
  * no tiene tokens, dibuja el texto plano en color por defecto.
  *
@@ -445,7 +449,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         /* saltar lo desplazado */
         int start = e->scroll_col < line_len ? e->scroll_col : line_len;
         if (start < line_len) {
-            Color dc = TOKEN_COLORS[TOK_DEFAULT];
+            Color dc = e->theme.tokens[TOK_DEFAULT];
             draw_text(e, line_buf + start, text_x, text_y, dc.r, dc.g, dc.b);
         }
         return;
@@ -473,7 +477,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
             if (gap_len > 0 && gap_start + e->scroll_col < line_len)
                 draw_substr(e, line_buf, gap_start + e->scroll_col, gap_len,
                             text_x + gap_start * e->char_w, text_y,
-                            TOKEN_COLORS[TOK_DEFAULT]);
+                            e->theme.tokens[TOK_DEFAULT]);
         }
 
         /* columna de dibujo (vista) y rango real del token tras recortar el
@@ -496,7 +500,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         /* dibujar el token con el color de su tipo */
         draw_substr(e, line_buf, actual_start, actual_len,
                     text_x + draw_col * e->char_w, text_y,
-                    TOKEN_COLORS[tok->type]);
+                    e->theme.tokens[tok->type]);
         drawn_to = tok->col + tok->len;
     }
 
@@ -507,7 +511,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         if (start < line_len)
             draw_substr(e, line_buf, start, line_len - start,
                         text_x + start * e->char_w, text_y,
-                        TOKEN_COLORS[TOK_DEFAULT]);
+                        e->theme.tokens[TOK_DEFAULT]);
     }
 }
 
@@ -547,7 +551,7 @@ static void render_text_area(Editor *e, int left_offset, int text_top,
  */
 static void render_gutter(Editor *e, int left_offset, int text_top,
                           int text_height, int visible_lines, int total_lines) {
-    set_color(e->renderer, COL_GUTTER);
+    set_color_c(e->renderer, e->theme.col_gutter);
     /* fondo del gutter */
     fill_rect(e->renderer, left_offset, text_top, GUTTER_WIDTH, text_height);
 
@@ -558,8 +562,8 @@ static void render_gutter(Editor *e, int left_offset, int text_top,
         /* 1-based, alineado a la derecha */
         snprintf(num, sizeof(num), "%4d", li + 1);
         int y = text_top + vi * LINE_HEIGHT;
-        draw_text(e, num, left_offset + GUTTER_NUM_PAD,
-                  y + (LINE_HEIGHT - FONT_SIZE) / 2, TXT_GUTTER_NUM);
+        draw_text_c(e, num, left_offset + GUTTER_NUM_PAD,
+                    y + (LINE_HEIGHT - FONT_SIZE) / 2, e->theme.txt_gutter_num);
     }
 }
 
@@ -590,7 +594,7 @@ static void render_cursor(Editor *e, int left_offset, int text_top,
 
     int cx = left_offset + GUTTER_WIDTH + PADDING_LEFT + vis_col * e->char_w;
     int cy = text_top + vis_line * LINE_HEIGHT;
-    set_color(e->renderer, COL_CURSOR);
+    set_color_c(e->renderer, e->theme.col_cursor);
     /* barra vertical del cursor */
     fill_rect(e->renderer, cx, cy, CURSOR_W, LINE_HEIGHT);
 }
@@ -634,7 +638,7 @@ void render_frame(Editor *e) {
     int visible_lines = text_height / LINE_HEIGHT; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
-    set_color(r, COL_BG);
+    set_color_c(r, e->theme.col_bg);
     SDL_RenderClear(r); /* borra el frame con el color de fondo */
 
     if (e->tab_count == 0) {    /* sin archivos: pantalla de bienvenida */
@@ -650,7 +654,7 @@ void render_frame(Editor *e) {
     if (!e->sel_active) {
         int vi_cursor = e->cursor_line - e->scroll_line;
         if (vi_cursor >= 0 && vi_cursor < visible_lines) {
-            set_color(r, COL_CURSOR_LINE);
+            set_color_c(r, e->theme.col_cursor_line);
             fill_rect(r, 0, text_top + vi_cursor * LINE_HEIGHT, e->win_w,
                       LINE_HEIGHT);
         }

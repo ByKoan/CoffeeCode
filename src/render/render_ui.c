@@ -42,14 +42,6 @@ static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL,
 #define NAV_BTN_Y 2      /* Y del botón "Archivo" (px)            */
 #define NAV_BTN_MIN_W 90 /* ancho mínimo del botón "Archivo" (px) */
 #define NAV_TITLE_GAP 8  /* separación mínima entre botón y título */
-#define COL_NAVBAR_SEP 0x3A, 0x3F, 0x4A, 0xFF
-#define COL_MODIFIED_DOT 0xE0, 0x6C, 0x75, 0xFF
-#define TXT_NAVBAR_BTN 0xCC, 0xCC, 0xCC
-#define TXT_NAVBAR_TITLE 0x80, 0x85, 0x95
-#define COL_MENU_SHADOW 0x00, 0x00, 0x00, 0x60
-#define TXT_MENU_CHECK 0x98, 0xC3, 0x79
-#define TXT_MENU_ITEM 0xCC, 0xCC, 0xCC
-#define TXT_MENU_HINT 0x60, 0x65, 0x70
 
 /* ── Barra de pestañas ──────────────────────────────────────────────────────
  */
@@ -62,12 +54,6 @@ static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL,
 #define TAB_MOD_DOT_SZ 5     /* punto de "modificado"                 */
 #define TAB_CLOSE_GLYPH_H 14 /* alto del glifo "×" (para centrarlo)   */
 #define TAB_NEW_BTN_W 28     /* ancho del botón "+" de nueva pestaña  */
-#define COL_TABBAR_BG 0x16, 0x19, 0x1F, 255
-#define COL_TABBAR_SEP 0x2A, 0x2E, 0x38, 255
-#define COL_TAB_ACTIVE 0x1E, 0x22, 0x2B, 255
-#define COL_TAB_ACCENT 0x52, 0x8B, 0xD4, 255
-#define COL_TAB_MOD_DOT 0xE0, 0x90, 0x40, 255
-#define TXT_TAB_NEW 0x55, 0x5A, 0x6A
 
 /* ── Banda de atajos (badges) ───────────────────────────────────────────────
  */
@@ -77,20 +63,10 @@ static const char *MENU_HINTS[MENU_ITEMS] = {"Ctrl+N", "Ctrl+O", "Ctrl+K", NULL,
 #define BADGE_LABEL_GAP 14 /* tras la etiqueta, antes del siguiente */
 #define SHORTCUT_LEFT_PAD 10
 #define SHORTCUT_END_PAD 40 /* margen donde se deja de pintar atajos */
-#define COL_BADGE_BG 0x3A, 0x3F, 0x4C, 0xFF
-#define COL_BADGE_BORDER 0x52, 0x5A, 0x6E, 0xFF
-#define COL_BADGE_SHADOW 0x1A, 0x1D, 0x23, 0xFF
-#define COL_SHORTCUT_SEP 0x35, 0x3A, 0x45, 0xFF
-#define COL_SHORTCUT_BG 0x1E, 0x21, 0x28, 0xFF
-#define TXT_BADGE_KEY 0xD0, 0xD8, 0xEA
-#define TXT_BADGE_LABEL 0x5C, 0x62, 0x72
 
 /* ── Scrollbar ──────────────────────────────────────────────────────────────
  */
 #define SB_MIN_THUMB_H 20
-#define COL_SB_TRACK 0x1E, 0x21, 0x28, 0xFF
-#define COL_SB_THUMB 0x42, 0x48, 0x5A, 0xFF
-#define COL_SB_BORDER 0x35, 0x3A, 0x45, 0xFF
 
 /**
  * @brief Devuelve el último componente (nombre de archivo/carpeta) de una ruta.
@@ -124,9 +100,9 @@ static const char *last_path_component(const char *path) {
 void render_navbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
-    set_color(r, COL_NAVBAR_BG);
+    set_color_c(r, e->theme.col_navbar_bg);
     fill_rect(r, 0, 0, e->win_w, NAVBAR_HEIGHT); /* fondo de la navbar */
-    set_color(r, COL_NAVBAR_SEP);
+    set_color_c(r, e->theme.col_navbar_sep);
     fill_rect(r, 0, NAVBAR_HEIGHT - 1, e->win_w,
               1); /* separador inferior de 1 px */
 
@@ -173,10 +149,10 @@ void render_navbar(Editor *e) {
     /* no dejar que el título pise el botón "Archivo": empujarlo a su derecha */
     if (title_x < NAV_BTN_X + btn_w + NAV_TITLE_GAP)
         title_x = NAV_BTN_X + btn_w + NAV_TITLE_GAP;
-    draw_text(e, title, title_x, text_y, TXT_NAVBAR_TITLE);
+    draw_text_c(e, title, title_x, text_y, e->theme.txt_navbar_title);
 
     if (e->modified) { /* punto rojo de "hay cambios sin guardar" */
-        set_color(r, COL_MODIFIED_DOT);
+        set_color_c(r, e->theme.col_modified_dot);
         fill_rect(r, title_x + title_w + 6, text_y + FONT_SIZE / 2 - 3, 6, 6);
     }
 }
@@ -204,19 +180,20 @@ void render_menu(Editor *e) {
     for (int i = 0; i < MENU_ITEMS; i++)
         menu_h += MENU_LABELS[i] ? MENU_ITEM_H : MENU_SEP_H;
 
-    set_color(r, COL_MENU_SHADOW); /* sombra desplazada (semitransparente) */
+    set_color_c(
+        r, e->theme.col_menu_shadow); /* sombra desplazada (semitransparente) */
     fill_rect(r, menu_x + MENU_SHADOW, menu_y + MENU_SHADOW, MENU_WIDTH,
               menu_h);
-    set_color(r, COL_MENU_BG);
+    set_color_c(r, e->theme.col_menu_bg);
     fill_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h); /* fondo del menú */
-    set_color(r, COL_MENU_BORDER);
+    set_color_c(r, e->theme.col_menu_border);
     stroke_rect(r, menu_x, menu_y, MENU_WIDTH, menu_h); /* borde del menú */
 
     int item_y = menu_y; /* Y acumulada de la entrada en curso */
     for (int i = 0; i < MENU_ITEMS; i++) {
         if (!MENU_LABELS[i]) { /* separador (etiqueta NULL): línea fina centrada
                                 */
-            set_color(r, COL_MENU_SEP);
+            set_color_c(r, e->theme.col_menu_sep);
             fill_rect(r, menu_x + 8, item_y + 4, MENU_WIDTH - 16, 1);
             item_y += MENU_SEP_H;
             continue;
@@ -227,7 +204,7 @@ void render_menu(Editor *e) {
                    (Rect){menu_x, item_y, MENU_WIDTH, MENU_ITEM_H});
 
         if (e->menu_hovered == i) { /* fondo de resaltado bajo el ratón */
-            set_color(r, COL_MENU_HOVER);
+            set_color_c(r, e->theme.col_menu_hover);
             fill_rect(r, menu_x + 1, item_y, MENU_WIDTH - 2, MENU_ITEM_H);
         }
 
@@ -236,10 +213,11 @@ void render_menu(Editor *e) {
 
         /* Item "Autoguardado": tic (✓, \xe2\x9c\x93 en UTF-8) si está activo */
         if (i == MENU_AUTOSAVE_ITEM && e->autosave)
-            draw_text(e, "\xe2\x9c\x93", menu_x + 4, text_y, TXT_MENU_CHECK);
+            draw_text_c(e, "\xe2\x9c\x93", menu_x + 4, text_y,
+                        e->theme.txt_menu_check);
 
-        draw_text(e, MENU_LABELS[i], menu_x + 14, text_y,
-                  TXT_MENU_ITEM); /* etiqueta */
+        draw_text_c(e, MENU_LABELS[i], menu_x + 14, text_y,
+                    e->theme.txt_menu_item); /* etiqueta */
 
         if (MENU_HINTS[i]) { /* atajo alineado a la derecha del menú */
             int hint_w = 0, hint_h = 0, label_w = 0;
@@ -253,7 +231,8 @@ void render_menu(Editor *e) {
                 menu_x + 14 + label_w + 8; /* fin de la etiqueta */
             if (hint_x >
                 label_right) /* solo dibujar el atajo si no pisa la etiqueta */
-                draw_text(e, MENU_HINTS[i], hint_x, text_y, TXT_MENU_HINT);
+                draw_text_c(e, MENU_HINTS[i], hint_x, text_y,
+                            e->theme.txt_menu_hint);
         }
         item_y += MENU_ITEM_H;
     }
@@ -297,16 +276,17 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     ui_put_idx(&e->ui, UI_LIST_TAB, index, (Rect){tx, bar_y, tab_w, bar_h});
 
     if (active)
-        set_color(r, COL_TAB_ACTIVE); /* pestaña activa: fondo más claro */
+        set_color_c(
+            r, e->theme.col_tab_active); /* pestaña activa: fondo más claro */
     else
-        set_color(r, COL_TABBAR_BG);
+        set_color_c(r, e->theme.col_tabbar_bg);
     fill_rect(r, tx, bar_y, tab_w, bar_h);
 
-    set_color(r, COL_TABBAR_SEP); /* borde derecho separador */
+    set_color_c(r, e->theme.col_tabbar_sep); /* borde derecho separador */
     fill_rect(r, tx + tab_w - 1, bar_y, 1, bar_h);
 
     if (active) { /* línea de acento superior en la activa */
-        set_color(r, COL_TAB_ACCENT);
+        set_color_c(r, e->theme.col_tab_accent);
         fill_rect(r, tx, bar_y, tab_w, TAB_ACCENT_H);
     }
 
@@ -326,7 +306,7 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
         r, NULL); /* desactivar recorte (volver a dibujar libre) */
 
     if (t->modified) { /* punto de "cambios sin guardar" */
-        set_color(r, COL_TAB_MOD_DOT);
+        set_color_c(r, e->theme.col_tab_mod_dot);
         fill_rect(r, tx + TAB_PAD + text_max_w + 2, text_y + FONT_SIZE / 2 - 3,
                   TAB_MOD_DOT_SZ, TAB_MOD_DOT_SZ);
     }
@@ -360,9 +340,9 @@ void render_tabbar(Editor *e) {
     int bar_y = NAVBAR_HEIGHT;
     int bar_h = TAB_BAR_HEIGHT;
 
-    set_color(r, COL_TABBAR_BG);
+    set_color_c(r, e->theme.col_tabbar_bg);
     fill_rect(r, 0, bar_y, e->win_w, bar_h); /* fondo de la barra */
-    set_color(r, COL_TABBAR_SEP);
+    set_color_c(r, e->theme.col_tabbar_sep);
     fill_rect(r, 0, bar_y + bar_h - 1, e->win_w, 1); /* separador inferior */
 
     /* empezar tras el panel lateral (o su botón si está cerrado) */
@@ -371,9 +351,10 @@ void render_tabbar(Editor *e) {
         tx += draw_tab(e, i, tx, bar_y, bar_h); /* cada pestaña avanza tx */
 
     /* Botón + (nueva pestaña), justo después de la última */
-    set_color(r, COL_TABBAR_BG);
+    set_color_c(r, e->theme.col_tabbar_bg);
     fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
-    draw_text(e, "+", tx + 7, bar_y + (bar_h - FONT_SIZE) / 2, TXT_TAB_NEW);
+    draw_text_c(e, "+", tx + 7, bar_y + (bar_h - FONT_SIZE) / 2,
+                e->theme.txt_tab_new);
     /* registrar el botón "+" para el hit-test */
     ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
 }
@@ -400,19 +381,22 @@ static void draw_shortcut_badge(Editor *e, const char *key, const char *label,
     int badge_w = key_w + BADGE_PAD_X * 2; /* recuadro = texto + padding */
     int badge_h = FONT_SIZE + BADGE_PAD_Y * 2;
 
-    set_color(r, COL_BADGE_BG);
+    set_color_c(r, e->theme.col_badge_bg);
     fill_rect(r, *x, y, badge_w, badge_h); /* fondo del recuadro */
-    set_color(r, COL_BADGE_BORDER);
+    set_color_c(r, e->theme.col_badge_border);
     stroke_rect(r, *x, y, badge_w, badge_h); /* borde del recuadro */
-    set_color(r, COL_BADGE_SHADOW); /* línea de sombra inferior (efecto 3D) */
+    set_color_c(
+        r,
+        e->theme.col_badge_shadow); /* línea de sombra inferior (efecto 3D) */
     fill_rect(r, *x, y + badge_h, badge_w, 1);
 
-    draw_text(e, key, *x + BADGE_PAD_X, y + BADGE_PAD_Y,
-              TXT_BADGE_KEY);  /* texto de la tecla */
-    *x += badge_w + BADGE_GAP; /* avanzar tras el recuadro */
+    draw_text_c(e, key, *x + BADGE_PAD_X, y + BADGE_PAD_Y,
+                e->theme.txt_badge_key); /* texto de la tecla */
+    *x += badge_w + BADGE_GAP;           /* avanzar tras el recuadro */
 
     if (label && label[0]) { /* etiqueta a la derecha del badge */
-        int label_w = draw_text(e, label, *x, y + BADGE_PAD_Y, TXT_BADGE_LABEL);
+        int label_w = draw_text_c(e, label, *x, y + BADGE_PAD_Y,
+                                  e->theme.txt_badge_label);
         *x += label_w + BADGE_LABEL_GAP; /* avanzar tras la etiqueta */
     }
 }
@@ -435,9 +419,10 @@ void render_shortcuts(Editor *e) {
     int sep_y = e->win_h - STATUS_HEIGHT -
                 SHORTCUT_HEIGHT; /* Y del separador superior */
 
-    set_color(r, COL_SHORTCUT_SEP);
+    set_color_c(r, e->theme.col_shortcut_sep);
     fill_rect(r, 0, sep_y, e->win_w, 1); /* separador de 1 px */
-    set_color(r, COL_SHORTCUT_BG); /* fondo solo sobre el área del editor */
+    set_color_c(
+        r, e->theme.col_shortcut_bg); /* fondo solo sobre el área del editor */
     fill_rect(r, left_offset, sep_y + 1, e->win_w - left_offset,
               SHORTCUT_HEIGHT - 1);
 
@@ -497,7 +482,7 @@ void render_scrollbar(Editor *e, int left_offset) {
      */
     ui_put(&e->ui, UI_SCROLLBAR, (Rect){sb_x, sb_y, e->win_w - sb_x, sb_h});
 
-    set_color(r, COL_SB_TRACK);
+    set_color_c(r, e->theme.col_sb_track);
     fill_rect(r, sb_x, sb_y, SCROLLBAR_W, sb_h); /* carril de fondo */
 
     /* alto del thumb proporcional a (líneas visibles / total), con un mínimo */
@@ -512,8 +497,8 @@ void render_scrollbar(Editor *e, int left_offset) {
         sb_y +
         (int)(scroll_frac * (sb_h - thumb_h)); /* posición vertical del thumb */
 
-    set_color(r, COL_SB_THUMB);
+    set_color_c(r, e->theme.col_sb_thumb);
     fill_rect(r, sb_x + 1, thumb_y, SCROLLBAR_W - 2, thumb_h); /* thumb */
-    set_color(r, COL_SB_BORDER);
+    set_color_c(r, e->theme.col_sb_border);
     fill_rect(r, sb_x, sb_y, 1, sb_h); /* borde izquierdo del carril */
 }

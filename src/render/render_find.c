@@ -41,20 +41,7 @@
 #define FB_LABEL_MARGIN 4     /* margen extra de la columna de etiquetas  */
 #define FB_NORESULT_OFFSET 30 /* desplazamiento del texto "Sin resultados" */
 
-/* -- Colores de relleno/contorno (RGBA, para set_color) -------------------- */
-#define FB_COL_BG 0x1E, 0x22, 0x2A, 255
-#define FB_COL_BORDER 0x3A, 0x3F, 0x4A, 255
-#define FB_COL_FIELD 0x25, 0x29, 0x31, 255       /* campo sin foco         */
-#define FB_COL_FIELD_FOCUS 0x2A, 0x2E, 0x38, 255 /* campo con foco         */
-#define FB_COL_ACCENT 0x52, 0x8B, 0xD4, 255      /* borde con foco / acento */
-#define FB_COL_SEL 0x26, 0x4F, 0x78, 200         /* resaltado de selección */
 /* (los colores de los botones ↑/↓/Reemplazar viven en el tema: ui.h/ui.c) */
-
-/* -- Colores de texto (RGB, para draw_text) -------------------------------- */
-#define FB_TXT_LABEL 0x88, 0x8C, 0x99
-#define FB_TXT_FIELD 220, 220, 220
-#define FB_TXT_COUNTER 97, 175, 239
-#define FB_TXT_NORESULT 200, 80, 80
 
 /**
  * @brief Calcula la Y para centrar verticalmente el texto dentro de un campo.
@@ -85,15 +72,15 @@ static int field_text_y(int row_y) {
 static void draw_field_box(Editor *e, int x, int y, int w, int focused) {
     /* Color de relleno según foco: cada componente RGB se interpola entre el
      * tono "con foco" (0x2A,0x2E,0x38) y el "sin foco" (0x25,0x29,0x31). */
-    set_color(e->renderer, focused ? 0x2A : 0x25, focused ? 0x2E : 0x29,
-              focused ? 0x38 : 0x31, 255);
+    set_color_c(e->renderer,
+                focused ? e->theme.fb_col_field_focus : e->theme.fb_col_field);
     fill_rect(e->renderer, x, y, w,
               FB_FIELD_H); /* relleno del fondo del campo */
     /* Borde: color de acento si tiene foco, gris normal si no. */
     if (focused)
-        set_color(e->renderer, FB_COL_ACCENT);
+        set_color_c(e->renderer, e->theme.fb_col_accent);
     else
-        set_color(e->renderer, FB_COL_BORDER);
+        set_color_c(e->renderer, e->theme.fb_col_border);
     stroke_rect(e->renderer, x, y, w, FB_FIELD_H); /* contorno (solo líneas) */
 }
 
@@ -142,7 +129,7 @@ static void draw_field_selection(Editor *e, int field_x, int row_y,
     /* Pintar el rectángulo de resaltado: desplazado en X por el texto previo y
      * con la anchura del texto seleccionado; un pequeño inset vertical lo hace
      * más fino que el campo para que se vea el borde. */
-    set_color(e->renderer, FB_COL_SEL);
+    set_color_c(e->renderer, e->theme.fb_col_sel);
     fill_rect(e->renderer, field_x + FB_TEXT_PAD + before_w,
               row_y + FB_SEL_INSET, sel_w, FB_FIELD_H - 2 * FB_SEL_INSET);
 }
@@ -167,7 +154,8 @@ static void draw_field_text(Editor *e, int field_x, int row_y,
     /* Añadir "|" al final si toca mostrar el cursor en este instante de
      * parpadeo. */
     snprintf(buf, sizeof(buf), "%s%s", content, show_caret ? "|" : "");
-    draw_text(e, buf, field_x + FB_TEXT_PAD, field_text_y(row_y), FB_TXT_FIELD);
+    draw_text_c(e, buf, field_x + FB_TEXT_PAD, field_text_y(row_y),
+                e->theme.fb_txt_field);
 }
 
 /**
@@ -210,8 +198,8 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     Rect next_box = {next_x, row_y, arrow_w, FB_FIELD_H};
     ui_button(e, UI_FIND_PREV, prev_box, "↑", &UI_STYLE_BUTTON, UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
-    draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
-              FB_TXT_COUNTER);
+    draw_text_c(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
+                e->theme.fb_txt_counter);
     ui_button(e, UI_FIND_NEXT, next_box, "↓", &UI_STYLE_BUTTON, UI_NORMAL);
 }
 
@@ -279,14 +267,14 @@ void render_find_bar(Editor *e) {
     int blink = (SDL_GetTicks() / 500) % 2;
 
     /* -- Fondo + borde de la barra -- */
-    set_color(r, FB_COL_BG);
+    set_color_c(r, e->theme.fb_col_bg);
     fill_rect(r, bar_x, bar_y, bar_w, bar_h);
-    set_color(r, FB_COL_BORDER);
+    set_color_c(r, e->theme.fb_col_border);
     stroke_rect(r, bar_x, bar_y, bar_w, bar_h);
 
     /* -- Fila 1: Buscar -- */
-    draw_text(e, "Buscar:", label_x, field_text_y(row1_y),
-              FB_TXT_LABEL); /* etiqueta */
+    draw_text_c(e, "Buscar:", label_x, field_text_y(row1_y),
+                e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row1_y, search_field_w,
                    search_focused); /* caja del campo */
     /* Resaltado de selección (si la hay) debajo del texto. */
@@ -302,14 +290,14 @@ void render_find_bar(Editor *e) {
     if (fb->result_line >= 0 && fb->match_count > 0) {
         draw_match_nav(e, field_x, search_field_w, row1_y);
     } else if (fb->query_len > 0 && fb->match_count == 0) {
-        draw_text(e, "Sin resultados",
-                  field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
-                  field_text_y(row1_y), FB_TXT_NORESULT);
+        draw_text_c(e, "Sin resultados",
+                    field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
+                    field_text_y(row1_y), e->theme.fb_txt_noresult);
     }
 
     /* -- Fila 2: Reemplazar -- */
-    draw_text(e, "Reemplazar:", label_x, field_text_y(row2_y),
-              FB_TXT_LABEL); /* etiqueta */
+    draw_text_c(e, "Reemplazar:", label_x, field_text_y(row2_y),
+                e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row2_y, replace_field_w,
                    replace_focused); /* caja del campo */
     draw_field_selection(e, field_x, row2_y, fb->replace, fb->replace_len,

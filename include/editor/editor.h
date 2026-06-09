@@ -11,6 +11,7 @@
 #include "lexer/lexer.h"
 #include "lsp/lsp.h"
 #include "lsp/lsp_install.h"
+#include "render/theme.h"
 #include "render/ui_hit.h"
 #include "settings/settings.h"
 #include "structs/ring.h"
@@ -180,6 +181,10 @@ typedef struct {
     /* preferencias persistentes (tema, fuente, tab, autoguardado...) */
     Settings settings;
     int settings_open; /* 1 = mostrando la pantalla de preferencias */
+
+    /* paleta de colores activa (preset según settings.theme; ver
+     * render/theme.h) */
+    Theme theme;
 } Editor;
 
 /* -- Ciclo de vida -------------------------------------------------------- */

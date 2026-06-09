@@ -79,6 +79,21 @@ static int pref_section(Editor *e, int x, int y, const char *title) {
     return y + 28;
 }
 
+/**
+ * @brief Dibuja una fila "etiqueta + selector [valor]".
+ *
+ * El botón muestra el valor actual; al pulsarlo, input pasa al siguiente.
+ *
+ * @param id    Id de hit-test del selector.
+ * @param value Texto del valor actual.
+ */
+static void pref_choice(Editor *e, UiId id, int x, int y, int w,
+                        const char *label, const char *value) {
+    draw_text(e, label, x, row_text_y(y, PREF_ROW_H), PREF_LABEL);
+    Rect box = {x + w - PREF_CTRL_W, y + 6, PREF_CTRL_W, PREF_ROW_H - 12};
+    ui_button(e, id, box, value, &UI_STYLE_BUTTON, UI_NORMAL);
+}
+
 void render_settings_view(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
@@ -97,6 +112,12 @@ void render_settings_view(Editor *e) {
     if (col_w > PREF_COL_MAX) col_w = PREF_COL_MAX;
     int x = (e->win_w - col_w) / 2;
     int y = PREF_HEADER_H + 24;
+
+    /* -- Sección Apariencia -- */
+    y = pref_section(e, x, y, "Apariencia");
+    pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
+                theme_name(e->settings.theme));
+    y += PREF_ROW_H + 12;
 
     /* -- Sección Editor -- */
     y = pref_section(e, x, y, "Editor");

@@ -29,15 +29,6 @@
 #define FTREE_MIN_LABEL 3     /* nº mínimo de caracteres antes de truncar     */
 #define FTREE_FALLBACK_CW 8   /* ancho de carácter por defecto                */
 
-/* -- Colores (RGBA para set_color; RGB para draw_text) --------------------- */
-/* fondo del botón toggle */
-#define COL_FTREE_TOGGLE 0x2C, 0x31, 0x3C, 0xFF
-/* fondo de la cabecera */
-#define COL_FTREE_HEADER 0x17, 0x1A, 0x21, 0xFF
-#define FTREE_TXT_DIR 0xE5, 0xC0, 0x7B  /* carpetas                    */
-#define FTREE_TXT_FILE 0xAB, 0xB2, 0xBF /* archivos                    */
-#define FTREE_TXT_ROOT 0x61, 0xAF, 0xEF /* raíz / títulos              */
-
 /**
  * @brief Dibuja el botón de plegar/desplegar el panel con su glifo ("<" o ">").
  *
@@ -48,12 +39,12 @@
  * abrir).
  */
 static void draw_toggle_button(Editor *e, int x, int y, const char *glyph) {
-    set_color(e->renderer, COL_FTREE_TOGGLE); /* fondo del botón */
+    set_color_c(e->renderer, e->theme.col_ftree_toggle); /* fondo del botón */
     fill_rect(e->renderer, x, y, FTREE_TOGGLE_BTN_W, FTREE_TOGGLE_BTN_H);
     /* Glifo centrado verticalmente (alto del botón menos alto de fuente,
      * mitad). */
-    draw_text(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - FONT_SIZE) / 2,
-              FTREE_TXT_ROOT);
+    draw_text_c(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - FONT_SIZE) / 2,
+                e->theme.ftree_txt_root);
     /* registrar para el hit-test: input usa ui_hit(UI_TOGGLE_TREE) en vez de
      * recalcular esta misma geometría. */
     Rect box = {x, y, FTREE_TOGGLE_BTN_W, FTREE_TOGGLE_BTN_H};
@@ -110,7 +101,7 @@ static void draw_tree_entry(Editor *e, const FEntry *en, int row_y, int panel_w,
     SDL_Renderer *r = e->renderer;
     if (is_hovered) {
         /* Resaltado de hover: rectángulo de fondo bajo toda la fila. */
-        set_color(r, COL_FTREE_HOVER);
+        set_color_c(r, e->theme.col_ftree_hover);
         fill_rect(r, 0, row_y, panel_w - btn_w, FTREE_ITEM_H);
     }
 
@@ -120,7 +111,8 @@ static void draw_tree_entry(Editor *e, const FEntry *en, int row_y, int panel_w,
     int x = FTREE_PAD + en->depth * FTREE_INDENT;
     if (en->type == FTYPE_DIR)
         /* Icono de carpeta: "v " si está desplegada, "> " si está plegada. */
-        draw_text(e, en->expanded ? "v " : "> ", x, text_y, FTREE_TXT_DIR);
+        draw_text_c(e, en->expanded ? "v " : "> ", x, text_y,
+                    e->theme.ftree_txt_dir);
     x += FTREE_ICON_W; /* dejar hueco del icono antes del nombre */
 
     /* Cuántos caracteres caben en el ancho restante (fuente monoespaciada). */
@@ -132,9 +124,9 @@ static void draw_tree_entry(Editor *e, const FEntry *en, int row_y, int panel_w,
 
     /* Color del nombre según el tipo de entrada. */
     if (en->type == FTYPE_DIR)
-        draw_text(e, label, x, text_y, FTREE_TXT_DIR);
+        draw_text_c(e, label, x, text_y, e->theme.ftree_txt_dir);
     else
-        draw_text(e, label, x, text_y, FTREE_TXT_FILE);
+        draw_text_c(e, label, x, text_y, e->theme.ftree_txt_file);
 }
 
 /**
@@ -177,9 +169,10 @@ void render_filetree(Editor *e) {
     int panel_w = ft->width;
     int panel_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
 
-    set_color(r, COL_FTREE_BG); /* fondo del panel */
+    set_color_c(r, e->theme.col_ftree_bg); /* fondo del panel */
     fill_rect(r, panel_x, panel_y, panel_w, panel_h);
-    set_color(r, COL_FTREE_SEP); /* línea separadora derecha (1 px) */
+    set_color_c(r,
+                e->theme.col_ftree_sep); /* línea separadora derecha (1 px) */
     fill_rect(r, panel_x + panel_w - 1, panel_y, 1, panel_h);
 
     /* Botón toggle, centrado verticalmente en el área visible bajo las
@@ -196,7 +189,7 @@ void render_filetree(Editor *e) {
     /* Cabecera con el nombre de la carpeta raíz (o "CoffeeCode" si no hay
      * ninguna). */
     int header_y = content_top;
-    set_color(r, COL_FTREE_HEADER);
+    set_color_c(r, e->theme.col_ftree_header);
     fill_rect(r, panel_x, header_y, panel_w - btn_w, FTREE_HEADER_H);
 
     char root_label[64];
@@ -206,8 +199,9 @@ void render_filetree(Editor *e) {
                  path_basename(ft->root_path));
     else
         snprintf(root_label, sizeof(root_label), " CoffeeCode");
-    draw_text(e, root_label, panel_x + FTREE_PAD,
-              header_y + (FTREE_HEADER_H - FONT_SIZE) / 2, FTREE_TXT_ROOT);
+    draw_text_c(e, root_label, panel_x + FTREE_PAD,
+                header_y + (FTREE_HEADER_H - FONT_SIZE) / 2,
+                e->theme.ftree_txt_root);
 
     /* Ajustar el scroll al rango válido [0, max_scroll] según filas que caben.
      */
@@ -262,7 +256,7 @@ void render_filetree_toggle_closed(Editor *e) {
     /* botón centrado vertical */
     int btn_y = panel_y + (panel_h - FTREE_TOGGLE_BTN_H) / 2;
 
-    draw_toggle_button(e, 0, btn_y, ">"); /* ">" = abrir el panel */
-    set_color(r, COL_FTREE_SEP);          /* separador vertical de 1 px */
+    draw_toggle_button(e, 0, btn_y, ">");   /* ">" = abrir el panel */
+    set_color_c(r, e->theme.col_ftree_sep); /* separador vertical de 1 px */
     fill_rect(r, FTREE_TOGGLE_BTN_W - 1, panel_y, 1, panel_h);
 }
