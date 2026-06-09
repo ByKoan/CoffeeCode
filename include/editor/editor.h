@@ -32,13 +32,16 @@ typedef enum {
     UNDO_DELETE  /* se borraron `len` bytes en `pos`    */
 } UndoType;
 
+/* Una entrada del historial: una edición atómica que se puede deshacer/rehacer.
+ */
 typedef struct {
     UndoType type;
-    size_t pos; /* posición lógica en el buffer        */
-    char *text; /* bytes afectados (malloc'd)          */
-    size_t len; /* longitud en bytes                   */
-    int cursor_line_after;
-    int cursor_col_after;
+    size_t pos;            /* posición lógica en el buffer        */
+    char *text;            /* bytes afectados (malloc'd)          */
+    size_t len;            /* longitud en bytes                   */
+    int cursor_line_after; /* línea del cursor tras la edición (para restaurar)
+                            */
+    int cursor_col_after;  /* columna del cursor tras la edición  */
 } UndoEntry;
 
 typedef struct {
@@ -46,65 +49,72 @@ typedef struct {
     int redo_top; /* cuántas entradas se pueden rehacer                       */
 } UndoStack;
 
-/* -- Pestaña (archivo abierto) ------------------------------------------- */
+/* -- Pestaña (archivo abierto) -------------------------------------------
+ * Cada pestaña POSEE su almacenamiento (buf/lex/undo); los punteros del Editor
+ * apuntan a la pestaña activa. Aquí se guardan también los escalares de la
+ * pestaña cuando no es la activa (cursor, scroll, selección). */
 typedef struct {
-    Buffer buf;
-    LexerCache lex;
-    UndoStack undo;
+    Buffer buf;            /* gap buffer con el texto del archivo            */
+    LexerCache lex;        /* cache de tokens por línea (resaltado)          */
+    UndoStack undo;        /* pila de undo/redo de esta pestaña              */
     const Highlighter *hl; /* resaltador según el lenguaje del archivo */
-    char filepath[512];
-    int modified;
+    char filepath[512];    /* ruta del archivo, o "" si es nuevo sin guardar */
+    int modified;          /* 1 si hay cambios sin guardar                   */
     long loaded_mtime; /* mtime del fichero en la última carga desde disco */
-    int cursor_line, cursor_col;
-    int scroll_line, scroll_col;
-    int sel_active;
-    int sel_anchor_line, sel_anchor_col;
+    int cursor_line, cursor_col; /* posición del cursor guardada            */
+    int scroll_line, scroll_col; /* desplazamiento de la vista guardado     */
+    int sel_active;              /* 1 si la selección está activa           */
+    int sel_anchor_line, sel_anchor_col; /* ancla (inicio) de la selección  */
     /* geometría para click detection (calculado en render) */
-    int tab_x, tab_w;
-    int close_x, close_y;
+    int tab_x, tab_w;     /* X y ancho de la pestaña en la barra (px)       */
+    int close_x, close_y; /* posición del botón "x" de cerrar (px)          */
 } EditorTab;
 
 /* -- Barra de búsqueda ---------------------------------------------------- */
 #define FIND_BAR_MAX 256
 
 typedef struct {
-    int visible;
-    char query[FIND_BAR_MAX];
-    int query_len;
-    int result_line; /* -1 = sin resultado                        */
-    int result_col;
-    int match_count; /* total de coincidencias (0 = sin resultados) */
-    int match_index; /* índice de la coincidencia actual (0-based)  */
+    int visible;              /* 1 = barra de búsqueda mostrada            */
+    char query[FIND_BAR_MAX]; /* texto a buscar                           */
+    int query_len;            /* longitud actual de `query`                */
+    int result_line;          /* -1 = sin resultado                        */
+    int result_col;           /* columna de la coincidencia actual         */
+    int match_count;          /* total de coincidencias (0 = sin resultados) */
+    int match_index;          /* índice de la coincidencia actual (0-based)  */
     /* reemplazo */
-    char replace[FIND_BAR_MAX];
-    int replace_len;
-    int replace_focused; /* 0 = foco en buscar, 1 = foco en reemplazar */
-    int bar_focused;     /* 1 = teclado va a la barra, 0 = va al editor */
+    char replace[FIND_BAR_MAX]; /* texto de reemplazo                     */
+    int replace_len;            /* longitud actual de `replace`           */
+    int replace_focused;        /* 0 = foco en buscar, 1 = foco en reemplazar */
+    int bar_focused; /* 1 = teclado va a la barra, 0 = va al editor */
     /* selección de texto dentro de los inputs (-1 = sin selección) */
-    int query_sel_start, query_sel_end;
-    int replace_sel_start, replace_sel_end;
+    int query_sel_start, query_sel_end; /* rango seleccionado en buscar    */
+    int replace_sel_start,
+        replace_sel_end; /* rango seleccionado en reemplazar */
     /* geometría para click detection (calculado en render) */
-    int bar_x, bar_y, bar_w, bar_h;
-    int field_x, row1_y, row2_y, field_h;
-    int replace_btn_x, replace_btn_y, replace_btn_w, replace_btn_h;
+    int bar_x, bar_y, bar_w, bar_h; /* caja de toda la barra (px)        */
+    int field_x, row1_y, row2_y, field_h; /* X de campos, Y de filas, alto */
+    int replace_btn_x, replace_btn_y, replace_btn_w,
+        replace_btn_h; /* botón "Reemplazar" */
     /* botones flecha prev/next en fila de búsqueda */
-    int prev_btn_x, prev_btn_y, prev_btn_w, prev_btn_h;
-    int next_btn_x, next_btn_y, next_btn_w, next_btn_h;
+    int prev_btn_x, prev_btn_y, prev_btn_w,
+        prev_btn_h; /* botón coincidencia anterior */
+    int next_btn_x, next_btn_y, next_btn_w,
+        next_btn_h; /* botón coincidencia siguiente */
 } FindBar;
 
 /* -- Estado global del editor --------------------------------------------- */
 typedef struct {
     /* SDL */
-    SDL_Window *window;
-    SDL_Renderer *renderer;
-    TTF_Font *font;
-    int win_w, win_h;
-    int char_w;
+    SDL_Window *window;     /* ventana del sistema operativo            */
+    SDL_Renderer *renderer; /* contexto de dibujo 2D acelerado          */
+    TTF_Font *font;         /* fuente monoespaciada cargada en runtime  */
+    int win_w, win_h;       /* tamaño de la ventana en píxeles          */
+    int char_w;             /* ancho de un carácter en px (monoespaciada) */
 
     /* -- pestañas -- */
-    EditorTab tabs[MAX_TABS];
-    int tab_count;
-    int active_tab;
+    EditorTab tabs[MAX_TABS]; /* archivos abiertos (array fijo)         */
+    int tab_count;            /* nº de pestañas abiertas                */
+    int active_tab;           /* índice de la pestaña activa            */
 
     /* Punteros al tab activo — NUNCA copias por valor.
      * Apuntan directamente a tabs[active_tab].buf/lex/undo;
@@ -114,19 +124,19 @@ typedef struct {
     const Highlighter *hl; /* resaltador del tab activo */
 
     /* vista */
-    int scroll_line;
-    int scroll_col;
-    int cursor_line;
-    int cursor_col;
+    int scroll_line; /* primera línea visible (celdas, no px)          */
+    int scroll_col;  /* primera columna visible                        */
+    int cursor_line; /* línea del cursor                               */
+    int cursor_col;  /* columna del cursor                             */
 
     /* selección */
-    int sel_active;
-    int sel_anchor_line;
-    int sel_anchor_col;
+    int sel_active;      /* 1 si hay selección activa                  */
+    int sel_anchor_line; /* línea del ancla (donde empezó la selección) */
+    int sel_anchor_col;  /* columna del ancla                          */
 
     /* archivo */
-    char filepath[512];
-    int modified;
+    char filepath[512]; /* ruta del archivo de la pestaña activa         */
+    int modified;       /* 1 si hay cambios sin guardar                  */
 
     /* navbar / menú archivo */
     int menu_open;    /* 1 = desplegable visible */
@@ -149,14 +159,14 @@ typedef struct {
     int mouse_selecting; /* 1 = botón izq. pulsado sobre texto   */
 
     /* -- scrollbar draggable -------------------------------------------- */
-    int tab_new_btn_x; /* botón + para nuevo tab */
-    int scrollbar_dragging;
-    int scrollbar_drag_start_y;
-    int scrollbar_drag_start_line;
+    int tab_new_btn_x;             /* X del botón + para nuevo tab (px)     */
+    int scrollbar_dragging;        /* 1 mientras se arrastra la scrollbar   */
+    int scrollbar_drag_start_y;    /* Y del ratón al empezar a arrastrar    */
+    int scrollbar_drag_start_line; /* scroll_line al empezar a arrastrar   */
 
     /* estado */
-    int running;
-    int needs_redraw;
+    int running;      /* 0 termina el bucle principal                   */
+    int needs_redraw; /* 1 = hay que redibujar en el próximo frame      */
 } Editor;
 
 /* -- Ciclo de vida -------------------------------------------------------- */
@@ -171,8 +181,10 @@ void editor_ensure_visible(Editor *e);
 size_t editor_pos_from_line_col(Editor *e, int line, int col);
 
 /* -- NUEVO: undo/redo API (usada desde input.c) --------------------------- */
-void editor_undo_push_insert(Editor *e, size_t pos, const char *text, size_t len);
-void editor_undo_push_delete(Editor *e, size_t pos, const char *text, size_t len);
+void editor_undo_push_insert(Editor *e, size_t pos, const char *text,
+                             size_t len);
+void editor_undo_push_delete(Editor *e, size_t pos, const char *text,
+                             size_t len);
 void editor_undo(Editor *e);
 void editor_redo(Editor *e);
 
