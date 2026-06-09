@@ -9,10 +9,9 @@
  * (rasteriza texto con SDL_ttf y devuelve su ancho en px). Para medir texto sin
  * dibujarlo se usa @c TTF_GetStringSize, imprescindible para centrar y para
  * dimensionar botones según su etiqueta. El patrón recurrente es: pintar fondo
- * → pintar bordes/acentos → escribir texto encima. Muchas de estas funciones,
- * además de dibujar, guardan la geometría de los elementos (p. ej. la X de
- * cerrar pestaña) en el @c Editor para que el módulo de input sepa dónde se
- * hizo clic.
+ * → pintar bordes/acentos → escribir texto encima. Varias de estas funciones,
+ * además de dibujar, registran la geometría de los controles en @c e->ui (ver
+ * render/ui_hit.h) para que el módulo de input detecte los clics con ui_hit().
  */
 #include "render_internal.h"
 #include <stdio.h>
@@ -286,8 +285,8 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     if (tab_w < TAB_MIN_W) tab_w = TAB_MIN_W;
     if (tab_w > TAB_MAX_W) tab_w = TAB_MAX_W;
 
-    t->tab_x = tx; /* guardar geometría para el input (clic en la pestaña) */
-    t->tab_w = tab_w;
+    /* registrar el rectángulo de la pestaña para el hit-test (por índice) */
+    ui_put_idx(&e->ui, UI_LIST_TAB, index, (Rect){tx, bar_y, tab_w, bar_h});
 
     if (active)
         set_color(r, COL_TAB_ACTIVE); /* pestaña activa: fondo más claro */
@@ -327,8 +326,10 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     /* Botón × de cerrar (más visible en la activa); se guarda su posición */
     int close_x = tx + tab_w - TAB_CLOSE_W - 2;
     int close_y = bar_y + (bar_h - TAB_CLOSE_GLYPH_H) / 2;
-    t->close_x = close_x;
-    t->close_y = close_y;
+    /* botón cerrar: zona pulsable cuadrada (TAB_CLOSE_W) registrada por índice
+     */
+    ui_put_idx(&e->ui, UI_LIST_TAB_CLOSE, index,
+               (Rect){close_x, close_y, TAB_CLOSE_W, TAB_CLOSE_W});
     uint8_t close_shade =
         active ? 0x88 : 0x44; /* gris (un mismo valor en R=G=B) */
     draw_text(e, "×", close_x, close_y, close_shade, close_shade, close_shade);
@@ -362,10 +363,11 @@ void render_tabbar(Editor *e) {
         tx += draw_tab(e, i, tx, bar_y, bar_h); /* cada pestaña avanza tx */
 
     /* Botón + (nueva pestaña), justo después de la última */
-    e->tab_new_btn_x = tx; /* guardar para el input */
     set_color(r, COL_TABBAR_BG);
     fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
     draw_text(e, "+", tx + 7, bar_y + (bar_h - FONT_SIZE) / 2, TXT_TAB_NEW);
+    /* registrar el botón "+" para el hit-test */
+    ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
 }
 
 /**

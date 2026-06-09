@@ -22,17 +22,12 @@
 /* líneas desplazadas por "muesca" de rueda */
 #define SCROLL_LINES_PER_NOTCH 3
 
-/* Geometría usada para hit-testing — debe coincidir con la de render.
- * Son medidas fijas (en píxeles) de los rectángulos que dibuja render.c; para
- * saber si un clic cae dentro de un widget las repetimos aquí. Si cambian en
- * render hay que cambiarlas también aquí, o los clics dejarán de cuadrar. */
+/* Geometría usada para hit-testing que aún no pasa por el registro e->ui.
+ * Son medidas fijas (en píxeles) que deben coincidir con las de render. A
+ * medida que los controles migran a ui_put/ui_hit, estas constantes
+ * desaparecen. */
 /* alto de la cabecera del panel del explorador */
 #define HIT_FTREE_HEADER_H 26
-/* alto del botón que abre/cierra el panel */
-#define HIT_FTREE_TOGGLE_H 40
-#define HIT_TAB_CLOSE_W 16 /* lado de la "x" para cerrar una pestaña */
-/* ancho del botón "+" de nueva pestaña */
-#define HIT_NEW_TAB_BTN_W 28
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
 #define HIT_SCROLLBAR_X 9 /* ancho de la pista + borde (SCROLLBAR_W + 1) */
@@ -407,34 +402,30 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param my Coordenada Y del clic en píxeles.
  */
 static void click_tabbar(Editor *e, int mx, int my) {
-    if (mx >= e->tab_new_btn_x && mx < e->tab_new_btn_x + HIT_NEW_TAB_BTN_W) {
+    if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
         editor_tab_new(e); /* botón "+": pestaña nueva */
         return;
     }
-    for (int i = 0; i < e->tab_count; i++) {
-        EditorTab *t = &e->tabs[i];
-        /* no es esta */
-        if (mx < t->tab_x || mx >= t->tab_x + t->tab_w) continue;
+    /* La geometría de cada pestaña y de su "x" la registró el render por
+     * índice; el botón de cerrar está dentro de la pestaña, así que se
+     * comprueba antes. */
+    int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
+    int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
+    if (close_i < 0 && tab_i < 0) return; /* no se pulsó ninguna pestaña */
 
-        /* ¿el clic cayó dentro del cuadradito de cerrar de esta pestaña? */
-        int on_close = (mx >= t->close_x && mx < t->close_x + HIT_TAB_CLOSE_W &&
-                        my >= t->close_y && my < t->close_y + HIT_TAB_CLOSE_W);
-        if (on_close) {
-            editor_tab_save_state(e); /* guardar estado de la pestaña actual */
-            e->active_tab = i;        /* apuntar a la que se va a cerrar      */
-            editor_tab_close(e);
-        } else {
-            editor_tab_switch(e, i); /* cambiar a la pestaña pulsada */
-        }
-        /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
-         * nombre */
-        const char *path =
-            (e->tab_count > 0 && e->tabs[e->active_tab].filepath[0])
-                ? e->tabs[e->active_tab].filepath
-                : "CoffeeCode - Sin título";
-        SDL_SetWindowTitle(e->window, path);
-        return;
+    if (close_i >= 0) {           /* "x": cerrar esa pestaña */
+        editor_tab_save_state(e); /* guardar estado de la pestaña actual */
+        e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
+        editor_tab_close(e);
+    } else {
+        editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
     }
+    /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
+     * nombre */
+    const char *path = (e->tab_count > 0 && e->tabs[e->active_tab].filepath[0])
+                           ? e->tabs[e->active_tab].filepath
+                           : "CoffeeCode - Sin título";
+    SDL_SetWindowTitle(e->window, path);
 }
 
 /**

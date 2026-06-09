@@ -72,9 +72,9 @@ typedef struct {
     int scroll_line, scroll_col; /* desplazamiento de la vista guardado     */
     int sel_active;              /* 1 si la selección está activa           */
     int sel_anchor_line, sel_anchor_col; /* ancla (inicio) de la selección  */
-    /* geometría para click detection (calculado en render) */
-    int tab_x, tab_w;     /* X y ancho de la pestaña en la barra (px)       */
-    int close_x, close_y; /* posición del botón "x" de cerrar (px)          */
+    /* La geometría de la pestaña (su rectángulo y el botón de cerrar) la
+     * registra el render en e->ui por índice (UI_LIST_TAB / UI_LIST_TAB_CLOSE).
+     */
 } EditorTab;
 
 /* -- Barra de búsqueda ---------------------------------------------------- */
@@ -159,7 +159,6 @@ typedef struct {
     int mouse_selecting; /* 1 = botón izq. pulsado sobre texto   */
 
     /* -- scrollbar draggable -------------------------------------------- */
-    int tab_new_btn_x;             /* X del botón + para nuevo tab (px)     */
     int scrollbar_dragging;        /* 1 mientras se arrastra la scrollbar   */
     int scrollbar_drag_start_y;    /* Y del ratón al empezar a arrastrar    */
     int scrollbar_drag_start_line; /* scroll_line al empezar a arrastrar   */
