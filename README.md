@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/desmonHak/CoffeeCode/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/desmonHak/CoffeeCode/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Lenguaje C11" src="https://img.shields.io/badge/Lenguaje-C11-00599C?logo=c&logoColor=white">
   <img alt="Plataformas" src="https://img.shields.io/badge/Plataformas-Windows%20%7C%20Linux-2ea44f">
   <img alt="Gráficos SDL3" src="https://img.shields.io/badge/Gr%C3%A1ficos-SDL3-1e90ff">
