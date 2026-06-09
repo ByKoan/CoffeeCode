@@ -1,5 +1,10 @@
 # archivos ocultos y de configuración
 .*
+# ...pero sí trackear la config de formato del proyecto
+!.clang-format
+# ...y el CI de GitHub Actions
+!.github/
+!.github/**
 
 # carpetas de configuración de IDEs y entornos virtuales
 .idea
