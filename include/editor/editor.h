@@ -11,6 +11,7 @@
 #include "lexer/lexer.h"
 #include "lsp/lsp.h"
 #include "lsp/lsp_install.h"
+#include "render/ui_hit.h"
 #include "structs/ring.h"
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -176,6 +177,10 @@ typedef struct {
     /* cursor parpadeante */
     Uint64 cursor_blink_ms;  /* timestamp del último cambio de estado del cursor */
     int    cursor_visible;   /* 1 = cursor visible, 0 = cursor oculto (blink)    */
+
+    /* geometría de los controles de UI del último frame (hit-test compartido
+     * entre render e input; ver render/ui_hit.h). */
+    UiRegistry ui;
 } Editor;
 
 /* -- Ciclo de vida -------------------------------------------------------- */

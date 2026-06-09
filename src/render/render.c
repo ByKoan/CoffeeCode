@@ -613,6 +613,9 @@ static void render_cursor(Editor *e, int left_offset, int text_top,
  */
 void render_frame(Editor *e) {
     SDL_Renderer *r = e->renderer;
+    /* vaciar el registro de hit-test: se rellena al dibujar los controles de
+     * este frame (ver render/ui_hit.h). */
+    ui_reset(&e->ui);
     /* offset izquierdo: ancho del panel si está abierto, o el del botón si
      * cerrado */
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;

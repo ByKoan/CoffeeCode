@@ -54,6 +54,10 @@ static void draw_toggle_button(Editor *e, int x, int y, const char *glyph) {
      * mitad). */
     draw_text(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - FONT_SIZE) / 2,
               FTREE_TXT_ROOT);
+    /* registrar para el hit-test: input usa ui_hit(UI_TOGGLE_TREE) en vez de
+     * recalcular esta misma geometría. */
+    Rect box = {x, y, FTREE_TOGGLE_BTN_W, FTREE_TOGGLE_BTN_H};
+    ui_put(&e->ui, UI_TOGGLE_TREE, box);
 }
 
 /**

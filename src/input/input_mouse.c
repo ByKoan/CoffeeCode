@@ -151,19 +151,13 @@ static int ftree_entry_at_row(FileTree *ft, int target_row) {
 void handle_ftree_click(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
     int content_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT; /* inicio Y del panel */
-    int content_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - TAB_BAR_HEIGHT;
 
-    /* Botón toggle (borde derecho del panel, o x=0 si está cerrado) */
-    int toggle_x = ft->open ? (ft->width - FTREE_TOGGLE_BTN_W) : 0;
-    /* dentro en X */
-    if (mx >= toggle_x && mx < toggle_x + FTREE_TOGGLE_BTN_W) {
-        /* centrado */
-        int btn_y = content_top + (content_h - HIT_FTREE_TOGGLE_H) / 2;
-        if (my >= btn_y && my < btn_y + HIT_FTREE_TOGGLE_H) { /* dentro en Y */
-            ft->open = !ft->open; /* alternar abierto/cerrado */
-            e->needs_redraw = 1;
-            return;
-        }
+    /* Botón toggle: su geometría la registró el render (UI_TOGGLE_TREE), así no
+     * hay que recalcularla aquí ni mantenerla sincronizada con el dibujo. */
+    if (ui_hit(&e->ui, UI_TOGGLE_TREE, mx, my)) {
+        ft->open = !ft->open; /* alternar abierto/cerrado */
+        e->needs_redraw = 1;
+        return;
     }
 
     if (!ft->open) return; /* panel cerrado: no hay árbol donde clicar */
