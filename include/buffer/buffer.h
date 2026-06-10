@@ -1,6 +1,7 @@
 #pragma once
 #include "structs/vec.h"
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @file buffer.h
@@ -83,8 +84,13 @@ size_t buf_length(const Buffer *b);            /* nº de caracteres     */
 char buf_char_at(const Buffer *b, size_t pos); /* carácter en pos lóg. */
 size_t buf_cursor_pos(const Buffer *b);        /* posición lógica      */
 
+/* Decodifica el carácter UTF-8 en la posición lógica @p pos (sin pasar de
+ * @p end); *cp = punto de código. Devuelve el nº de bytes del carácter (>=1).
+ */
+int buf_decode_at(const Buffer *b, size_t pos, size_t end, uint32_t *cp);
+
 /* utilidades — ahora O(1) gracias al índice de líneas */
-/* (line, col) de pos; O(log n); devuelve 1 siempre */
+/* (line, col) de pos; col = ANCHO de display (celdas) hasta pos; devuelve 1 */
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col);
 size_t buf_line_start(const Buffer *b, size_t pos); /* inicio de la línea   */
 size_t buf_line_end(const Buffer *b, size_t pos);   /* fin de la línea      */

@@ -16,6 +16,7 @@
 #include "editor_internal.h"
 #include "input/input.h"
 #include "render/render.h"
+#include "utf8/utf8.h"
 
 /**
  * @brief Abre la fuente TrueType del editor desde disco.
@@ -118,17 +119,21 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     /* fin de la línea (sin el '\n'): O(longitud de la línea) */
     size_t line_end = buf_line_end(b, line_start);
 
-    /* La columna cuenta CARACTERES, no bytes: avanzar `col` caracteres desde el
-     * inicio de la línea saltando los bytes de continuación UTF-8, sin pasar
-     * del final real de la línea. */
+    /* La columna es ANCHO DE DISPLAY (celdas): avanzar carácter a carácter
+     * acumulando su ancho hasta alcanzar `col`, sin pasar del final de la
+     * línea. Si `col` cae DENTRO de un carácter de doble ancho, se para justo
+     * antes (el cursor se ajusta al límite de carácter más cercano por la
+     * izquierda). */
     if (col < 0) col = 0;
     size_t p = line_start;
-    int c = 0;
-    while (p < line_end && c < col) {
-        p++; /* byte inicial del carácter */
-        while (p < line_end && buf_is_cont(buf_char_at(b, p)))
-            p++; /* sus bytes de continuación */
-        c++;
+    int w = 0;
+    while (p < line_end && w < col) {
+        uint32_t cp;
+        int n = buf_decode_at(b, p, line_end, &cp);
+        int cw = utf8_cp_width(cp);
+        if (w + cw > col) break; /* col cae dentro de un carácter ancho */
+        w += cw;
+        p += (size_t)n;
     }
     return p;
 }

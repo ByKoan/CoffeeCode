@@ -22,6 +22,7 @@
  * abajo.
  */
 #include "render_internal.h"
+#include "utf8/utf8.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -442,12 +443,16 @@ static void draw_substr(Editor *e, const char *line, int src, int len, int px,
     draw_text(e, tmp, px, y, c.r, c.g, c.b);
 }
 
-/** Nº de caracteres (codepoints) en el rango de bytes line[b0, b1). */
+/** Ancho de display (celdas) del rango de bytes line[b0, b1). */
 static int count_cols(const char *line, int b0, int b1) {
-    int c = 0;
-    for (int i = b0; i < b1; i++)
-        if (!buf_is_cont(line[i])) c++;
-    return c;
+    int w = 0, i = b0;
+    while (i < b1) {
+        uint32_t cp;
+        int n = utf8_decode(line + i, b1 - i, &cp);
+        w += utf8_cp_width(cp);
+        i += n;
+    }
+    return w;
 }
 
 /**
@@ -465,10 +470,10 @@ static void draw_seg(Editor *e, const char *line, int b0, int b1, int col0,
     int col = col0, b = b0;
     /* avanzar (sin dibujar) por los caracteres ocultos por el scroll */
     while (b < b1 && col < sc) {
-        b++;
-        while (b < b1 && buf_is_cont(line[b]))
-            b++;
-        col++;
+        uint32_t cp;
+        int n = utf8_decode(line + b, b1 - b, &cp);
+        col += utf8_cp_width(cp);
+        b += n;
     }
     if (b < b1) {
         int x = text_x + (col - sc) * e->char_w;

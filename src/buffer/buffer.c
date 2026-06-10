@@ -32,6 +32,7 @@
  * de reconstruirse entero, salvo al cargar un archivo (::li_rebuild).
  */
 #include "buffer/buffer.h"
+#include "utf8/utf8.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -594,16 +595,33 @@ size_t buf_line_start(const Buffer *b, size_t pos) {
  * @param[out] col  Columna (base 0).
  * @return 1 siempre (firma uniforme para el llamante).
  */
+int buf_decode_at(const Buffer *b, size_t pos, size_t end, uint32_t *cp) {
+    /* Leer hasta 4 bytes (sin pasar de end) a un buffer contiguo y decodificar;
+     * buf_char_at salta el hueco internamente. */
+    char tmp[4];
+    int n = 0;
+    while (n < 4 && pos + (size_t)n < end)
+        tmp[n] = buf_char_at(b, pos + (size_t)n), n++;
+    int used = utf8_decode(tmp, n, cp);
+    return used > 0 ? used : 1; /* nunca avanzar 0 (evita bucles infinitos) */
+}
+
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
     int ln = li_line_of(b, pos);
     *line = ln;
-    /* Columna = nº de CARACTERES (no bytes) entre el inicio de línea y pos:
-     * se cuentan los bytes que inician carácter (no los de continuación). */
+    /* Columna = ANCHO DE DISPLAY (celdas) entre el inicio de línea y pos: se
+     * suma el ancho de cada carácter (1, 2 ó 0 para combinantes). Así el cursor
+     * se alinea con el texto aunque haya acentos (1 celda) o CJK/emoji (2). */
     size_t start = LI(b)[ln];
-    int c = 0;
-    for (size_t i = start; i < pos; i++)
-        if (!buf_is_cont(buf_char_at(b, i))) c++;
-    *col = c;
+    int w = 0;
+    size_t i = start;
+    while (i < pos) {
+        uint32_t cp;
+        int n = buf_decode_at(b, i, pos, &cp);
+        w += utf8_cp_width(cp);
+        i += (size_t)n;
+    }
+    *col = w;
     return 1;
 }
 

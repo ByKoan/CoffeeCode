@@ -77,9 +77,13 @@ static void begin_selection(Editor *e) {
  * @return Distinto de 0 si es letra, dígito o guion bajo; 0 si es separador.
  */
 static int is_word_char(char c) {
-    /* el cast a unsigned char evita comportamiento indefinido de isalnum con
-     * valores negativos (bytes >= 0x80 en char con signo) */
-    return isalnum((unsigned char)c) || c == '_';
+    /* Los bytes >= 0x80 forman parte de un carácter UTF-8 multibyte (letras
+     * acentuadas, CJK, emoji...): se consideran "de palabra" para que "café" o
+     * "niño" cuenten como una sola palabra y para que el salto de palabra
+     * aterrice siempre en un límite de carácter (nunca en medio de uno). El
+     * cast a unsigned char evita el UB de isalnum con valores negativos. */
+    unsigned char u = (unsigned char)c;
+    return u >= 0x80 || isalnum(u) || c == '_';
 }
 
 /* ── Movimiento del cursor ──────────────────────────────────────────────────

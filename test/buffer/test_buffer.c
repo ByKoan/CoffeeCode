@@ -153,6 +153,28 @@ static void test_utf8_cursor(void) {
     buf_free(&b);
 }
 
+/** Columnas = ancho de display: un carácter CJK ocupa 2 celdas. */
+static void test_utf8_width(void) {
+    Buffer b;
+    buf_init(&b);
+    /* "a日b": 日 = U+65E5 (E6 97 A5, 3 bytes, ancho 2 celdas) */
+    buf_insert_str(&b,
+                   "a\xE6\x97\xA5"
+                   "b",
+                   5);
+    EXPECT_EQ_INT((int)buf_length(&b), 5); /* 5 bytes */
+
+    int line, col;
+    buf_line_col(&b, buf_cursor_pos(&b), &line, &col);
+    EXPECT_EQ_INT(col, 4); /* a(1) + 日(2) + b(1) = 4 celdas */
+
+    /* a mitad: justo tras 日 -> columna 3 (1 + 2) */
+    buf_move_left(&b); /* cursor antes de 'b' */
+    buf_line_col(&b, buf_cursor_pos(&b), &line, &col);
+    EXPECT_EQ_INT(col, 3);
+    buf_free(&b);
+}
+
 int main(void) {
     tt_suite("buffer");
     tt_run("init deja un buffer vacio con 1 linea", test_init_vacio);
@@ -163,5 +185,6 @@ int main(void) {
     tt_run("borrar un salto de linea une dos lineas",
            test_borrar_salto_une_lineas);
     tt_run("cursor y borrado UTF-8 (caracter completo)", test_utf8_cursor);
+    tt_run("columnas por ancho de display (CJK = 2 celdas)", test_utf8_width);
     return tt_summary();
 }
