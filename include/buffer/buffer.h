@@ -1,6 +1,7 @@
 #pragma once
 #include "structs/vec.h"
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @file buffer.h
@@ -70,13 +71,26 @@ void buf_move_left(Buffer *b);           /* un carácter a la izquierda (O(1)) *
 void buf_move_right(Buffer *b);          /* un carácter a la derecha   (O(1)) */
 void buf_move_to(Buffer *b, size_t pos); /* posición lógica            */
 
+/* ¿es @p c un byte de continuación UTF-8 (10xxxxxx)? No inicia un carácter.
+ * Las "columnas" del editor cuentan caracteres (codepoints), no bytes: un
+ * carácter multibyte (acento, emoji) ocupa varios bytes pero una sola columna.
+ */
+static inline int buf_is_cont(char c) {
+    return ((unsigned char)c & 0xC0) == 0x80;
+}
+
 /* consulta */
 size_t buf_length(const Buffer *b);            /* nº de caracteres     */
 char buf_char_at(const Buffer *b, size_t pos); /* carácter en pos lóg. */
 size_t buf_cursor_pos(const Buffer *b);        /* posición lógica      */
 
+/* Decodifica el carácter UTF-8 en la posición lógica @p pos (sin pasar de
+ * @p end); *cp = punto de código. Devuelve el nº de bytes del carácter (>=1).
+ */
+int buf_decode_at(const Buffer *b, size_t pos, size_t end, uint32_t *cp);
+
 /* utilidades — ahora O(1) gracias al índice de líneas */
-/* (line, col) de pos; O(log n); devuelve 1 siempre */
+/* (line, col) de pos; col = ANCHO de display (celdas) hasta pos; devuelve 1 */
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col);
 size_t buf_line_start(const Buffer *b, size_t pos); /* inicio de la línea   */
 size_t buf_line_end(const Buffer *b, size_t pos);   /* fin de la línea      */
@@ -85,5 +99,7 @@ int buf_line_count(const Buffer *b);                /* nº de líneas (O(1))  */
 size_t buf_line_offset(const Buffer *b, int line);
 
 /* carga / guarda */
-int buf_load_file(Buffer *b, const char *path);       /* carga archivo; 1/0 */
+int buf_load_file(Buffer *b, const char *path); /* carga archivo; 1/0 */
+/* carga el contenido desde memoria (texto ya decodificado); 1/0 */
+int buf_load_mem(Buffer *b, const char *data, size_t len);
 int buf_save_file(const Buffer *b, const char *path); /* guarda archivo; 1/0 */
