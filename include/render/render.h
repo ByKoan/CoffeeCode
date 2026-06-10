@@ -7,9 +7,8 @@
  */
 #include "editor/editor.h"
 
-/* Altura de la banda de atajos de teclado entre el editor y la status bar.
- * A 0 la banda queda oculta (no se reserva espacio ni se ve). */
-#define SHORTCUT_HEIGHT 0
+/* SHORTCUT_HEIGHT (alto de la banda de atajos) y los helpers de dimensión
+ * efectiva (gutter / atajos según preferencias) viven en editor/editor.h. */
 
 /**
  * @brief Dibuja un frame completo del editor (clear → secciones → present).

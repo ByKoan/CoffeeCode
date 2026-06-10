@@ -28,8 +28,9 @@
 #define STATUS_HEIGHT 24
 #define NAVBAR_HEIGHT 30
 #define TAB_SIZE 4
-#define TAB_BAR_HEIGHT 28 /* altura de la barra de pestañas */
-#define MAX_TABS 16       /* máximo de archivos abiertos    */
+#define TAB_BAR_HEIGHT 28  /* altura de la barra de pestañas */
+#define MAX_TABS 16        /* máximo de archivos abiertos    */
+#define SHORTCUT_HEIGHT 26 /* alto de la banda de atajos (si se muestra) */
 
 /* -- Undo/Redo ------------------------------------------------------------ */
 #define UNDO_MAX 256 /* máximo de entradas en la pila de undo */
@@ -201,6 +202,16 @@ typedef struct {
      * render/theme.h) */
     Theme theme;
 } Editor;
+
+/* -- Dimensiones efectivas según preferencias ----------------------------- */
+/** Ancho del gutter (0 si los números de línea están ocultos). */
+static inline int editor_gutter_w(const Editor *e) {
+    return e->settings.show_line_numbers ? GUTTER_WIDTH : 0;
+}
+/** Alto de la barra de atajos inferior (0 si está oculta). */
+static inline int editor_shortcut_h(const Editor *e) {
+    return e->settings.show_shortcuts ? SHORTCUT_HEIGHT : 0;
+}
 
 /* -- Ciclo de vida -------------------------------------------------------- */
 int editor_init(Editor *e, const char *filepath);

@@ -411,11 +411,12 @@ static void draw_shortcut_badge(Editor *e, const char *key, const char *label,
  * ::draw_shortcut_badge, parando cuando se acerca al borde derecho de la
  * ventana.
  *
- * @note Con @c SHORTCUT_HEIGHT a 0 esta banda no se ve; la función existe
- * igualmente.
+ * @note Solo se dibuja si está activada en preferencias (@c show_shortcuts); si
+ * no, no se reserva espacio (::editor_shortcut_h devuelve 0) ni se pinta.
  * @param e Editor.
  */
 void render_shortcuts(Editor *e) {
+    if (!e->settings.show_shortcuts) return; /* barra de atajos oculta */
     SDL_Renderer *r = e->renderer;
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int sep_y = e->win_h - STATUS_HEIGHT -

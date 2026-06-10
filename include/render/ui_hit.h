@@ -47,6 +47,8 @@ typedef enum {
     UI_PREF_BACK,       /**< Botón "← Volver" de preferencias.        */
     UI_PREF_AUTOSAVE,   /**< Toggle de autoguardado.                  */
     UI_PREF_LINENUM,    /**< Toggle de números de línea.              */
+    UI_PREF_HLLINE,     /**< Toggle de resaltar la línea activa.      */
+    UI_PREF_SHORTCUTS,  /**< Toggle de la barra de atajos.            */
     UI_PREF_THEME,      /**< Selector cíclico de tema.                */
     UI_PREF_FONT,       /**< Selector cíclico de fuente.              */
     UI_PREF_TABW_DEC,   /**< Stepper ancho de tab: −.                 */

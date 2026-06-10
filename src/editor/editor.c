@@ -170,10 +170,10 @@ void editor_sync_cursor(Editor *e) {
 void editor_ensure_visible(Editor *e) {
     int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT -
-                     SHORTCUT_HEIGHT) /
+                     editor_shortcut_h(e)) /
                     e->line_height;
     int vis_cols =
-        (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
+        (e->win_w - left_off - editor_gutter_w(e) - PADDING_LEFT) / e->char_w;
 
     if (e->cursor_line < e->scroll_line) e->scroll_line = e->cursor_line;
     if (e->cursor_line >= e->scroll_line + vis_lines)

@@ -23,6 +23,9 @@ typedef struct {
     int font_size; /**< Tamaño de fuente en px [8..48].                */
     int autosave;  /**< 1 = autoguardado activado.                     */
     int show_line_numbers; /**< 1 = mostrar el gutter de números de línea. */
+    int highlight_current_line; /**< 1 = resaltar la banda de la línea activa.
+                                 */
+    int show_shortcuts;  /**< 1 = mostrar la barra de atajos inferior.       */
     char font_path[512]; /**< Ruta a la fuente; "" = fuente por defecto.     */
 } Settings;
 

@@ -22,6 +22,8 @@ void settings_defaults(Settings *s) {
     s->font_size = 16;
     s->autosave = 0;
     s->show_line_numbers = 1;
+    s->highlight_current_line = 1;
+    s->show_shortcuts = 1;
     s->font_path[0] = '\0';
 }
 
@@ -71,6 +73,10 @@ void settings_load(Settings *s) {
             s->autosave = atoi(val) ? 1 : 0;
         else if (!strcmp(key, "show_line_numbers"))
             s->show_line_numbers = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "highlight_current_line"))
+            s->highlight_current_line = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "show_shortcuts"))
+            s->show_shortcuts = atoi(val) ? 1 : 0;
         else if (!strcmp(key, "font_path")) {
             strncpy(s->font_path, val, sizeof s->font_path - 1);
             s->font_path[sizeof s->font_path - 1] = '\0';
@@ -90,6 +96,8 @@ void settings_save(const Settings *s) {
     fprintf(f, "font_size=%d\n", s->font_size);
     fprintf(f, "autosave=%d\n", s->autosave);
     fprintf(f, "show_line_numbers=%d\n", s->show_line_numbers);
+    fprintf(f, "highlight_current_line=%d\n", s->highlight_current_line);
+    fprintf(f, "show_shortcuts=%d\n", s->show_shortcuts);
     fprintf(f, "font_path=%s\n", s->font_path);
     fclose(f);
 }

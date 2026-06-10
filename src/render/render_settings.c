@@ -186,6 +186,15 @@ void render_settings_view(Editor *e) {
     y = pref_section(e, x, y, "Editor");
     pref_toggle(e, UI_PREF_AUTOSAVE, x, y, col_w, "Autoguardado", e->autosave);
     y += PREF_ROW_H;
+    pref_toggle(e, UI_PREF_LINENUM, x, y, col_w, "Numeros de linea",
+                e->settings.show_line_numbers);
+    y += PREF_ROW_H;
+    pref_toggle(e, UI_PREF_HLLINE, x, y, col_w, "Resaltar linea actual",
+                e->settings.highlight_current_line);
+    y += PREF_ROW_H;
+    pref_toggle(e, UI_PREF_SHORTCUTS, x, y, col_w, "Barra de atajos",
+                e->settings.show_shortcuts);
+    y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_TABW_DEC, UI_PREF_TABW_INC, x, y, col_w,
                  "Ancho de tabulacion", e->settings.tab_width);
     y += PREF_ROW_H + 12;

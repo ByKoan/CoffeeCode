@@ -73,7 +73,7 @@ int get_left_offset(Editor *e) {
 static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
                               int *col) {
     /* X donde arranca el texto: panel lateral + gutter (números) + padding. */
-    int text_x = get_left_offset(e) + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* ancho de un carácter; si por lo que sea no se midió, usar el de reserva
      */
     int char_px = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
@@ -205,7 +205,7 @@ void handle_scroll(Editor *e, float wheel_dy) {
  * @param my Coordenada Y del clic en píxeles.
  */
 void handle_text_click(Editor *e, int mx, int my) {
-    int text_x = get_left_offset(e) + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* fuera del texto */
     if (mx < text_x || e->tab_count == 0 || !e->buf) return;
     int line, col;
@@ -282,7 +282,7 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
     if (e->tab_count == 0) return;
     /* alto de la pista de la scrollbar = área de texto sin las barras de UI */
     int text_height = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT -
-                      STATUS_HEIGHT - SHORTCUT_HEIGHT;
+                      STATUS_HEIGHT - editor_shortcut_h(e);
     int total_lines = buf_line_count(e->buf);
     /* líneas que caben en pantalla */
     int visible_lines = text_height / e->line_height;
@@ -529,6 +529,15 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         e->autosave = !e->autosave;
         if (e->autosave) e->autosave_last_ms = SDL_GetTicks();
         s->autosave = e->autosave;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_LINENUM, mx, my)) {
+        s->show_line_numbers = !s->show_line_numbers;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_HLLINE, mx, my)) {
+        s->highlight_current_line = !s->highlight_current_line;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_SHORTCUTS, mx, my)) {
+        s->show_shortcuts = !s->show_shortcuts;
         settings_save(s);
     } else if (ui_hit(&e->ui, UI_PREF_TABW_DEC, mx, my)) {
         if (s->tab_width > SETTINGS_TAB_MIN) s->tab_width--;

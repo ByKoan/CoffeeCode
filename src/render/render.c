@@ -241,7 +241,7 @@ void render_selection(Editor *e, int left_offset, int text_top,
 
     SDL_Renderer *r = e->renderer;
     /* X del primer carácter */
-    int text_x = left_offset + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = left_offset + editor_gutter_w(e) + PADDING_LEFT;
     int total_lines = buf_line_count(e->buf);
 
     int from_line, from_col, to_line, to_col;
@@ -559,7 +559,7 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
 static void render_text_area(Editor *e, int left_offset, int text_top,
                              int visible_lines, int total_lines) {
     /* X del primer carácter */
-    int text_x = left_offset + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = left_offset + editor_gutter_w(e) + PADDING_LEFT;
     for (int vi = 0; vi < visible_lines; vi++) {
         int li = e->scroll_line + vi; /* línea lógica de esta fila */
         if (li >= total_lines) break; /* no hay más texto */
@@ -581,6 +581,8 @@ static void render_text_area(Editor *e, int left_offset, int text_top,
  */
 static void render_gutter(Editor *e, int left_offset, int text_top,
                           int text_height, int visible_lines, int total_lines) {
+    if (!e->settings.show_line_numbers)
+        return; /* gutter oculto: nada que pintar */
     set_color_c(e->renderer, e->theme.col_gutter);
     /* fondo del gutter */
     fill_rect(e->renderer, left_offset, text_top, GUTTER_WIDTH, text_height);
@@ -623,7 +625,8 @@ static void render_cursor(Editor *e, int left_offset, int text_top,
     if (vis_line < 0 || vis_line >= visible_lines || vis_col < 0)
         return; /* fuera de vista */
 
-    int cx = left_offset + GUTTER_WIDTH + PADDING_LEFT + vis_col * e->char_w;
+    int cx =
+        left_offset + editor_gutter_w(e) + PADDING_LEFT + vis_col * e->char_w;
     int cy = text_top + vis_line * e->line_height;
     set_color_c(e->renderer, e->theme.col_cursor);
     /* barra vertical del cursor */
@@ -665,7 +668,7 @@ void render_frame(Editor *e) {
     int text_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
     /* alto del área de texto = ventana menos las bandas de UI */
     int text_height = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT -
-                      STATUS_HEIGHT - SHORTCUT_HEIGHT;
+                      STATUS_HEIGHT - editor_shortcut_h(e);
     int visible_lines = text_height / e->line_height; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
@@ -680,9 +683,9 @@ void render_frame(Editor *e) {
     /* re-tokenizar líneas sucias antes de dibujar texto */
     update_lexer_cache(e);
 
-    /* resaltado de la línea activa (banda completa; solo si no hay selección)
-     */
-    if (!e->sel_active) {
+    /* resaltado de la línea activa (banda completa; solo si está activado en
+     * preferencias y no hay selección) */
+    if (e->settings.highlight_current_line && !e->sel_active) {
         int vi_cursor = e->cursor_line - e->scroll_line;
         if (vi_cursor >= 0 && vi_cursor < visible_lines) {
             set_color_c(r, e->theme.col_cursor_line);
