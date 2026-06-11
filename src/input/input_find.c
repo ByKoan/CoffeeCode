@@ -330,8 +330,6 @@ void open_find_bar(Editor *e) {
     f->replace_sel_start = f->replace_sel_end = -1;
     f->match_count = 0;
     f->match_index = 0;
-    f->prev_btn_w = 0; /* anchos a 0: render aún no ha colocado los botones */
-    f->next_btn_w = 0;
     e->needs_redraw = 1;
 }
 

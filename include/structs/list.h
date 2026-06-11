@@ -21,12 +21,26 @@
 #include <stddef.h>
 
 /**
+ * @brief Tipo con la máxima alineación fundamental (equivalente a @c max_align_t).
+ *
+ * Se usa como base del almacenamiento "inline" del nodo para que el elemento
+ * quede correctamente alineado sea cual sea su tipo. Lo definimos nosotros, como
+ * unión de los tipos escalares más exigentes, en vez de usar @c max_align_t
+ * porque MSVC no lo expone al compilar en modo C.
+ */
+typedef union {
+    long long ll;
+    long double ld;
+    void *p;
+} ListMaxAlign;
+
+/**
  * @brief Nodo de la lista. El dato va inmediatamente después, max-alineado.
  */
 typedef struct ListNode {
     struct ListNode *prev; /**< Nodo anterior, o @c NULL si es la cabeza. */
     struct ListNode *next; /**< Nodo siguiente, o @c NULL si es la cola. */
-    max_align_t data[];    /**< Almacenamiento del elemento (array flexible). */
+    ListMaxAlign data[];   /**< Almacenamiento del elemento (array flexible). */
 } ListNode;
 
 /**

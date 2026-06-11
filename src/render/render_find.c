@@ -21,6 +21,7 @@
  * cajas.
  */
 #include "render_internal.h"
+#include "ui.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -40,23 +41,7 @@
 #define FB_LABEL_MARGIN 4     /* margen extra de la columna de etiquetas  */
 #define FB_NORESULT_OFFSET 30 /* desplazamiento del texto "Sin resultados" */
 
-/* -- Colores de relleno/contorno (RGBA, para set_color) -------------------- */
-#define FB_COL_BG 0x1E, 0x22, 0x2A, 255
-#define FB_COL_BORDER 0x3A, 0x3F, 0x4A, 255
-#define FB_COL_FIELD 0x25, 0x29, 0x31, 255       /* campo sin foco         */
-#define FB_COL_FIELD_FOCUS 0x2A, 0x2E, 0x38, 255 /* campo con foco         */
-#define FB_COL_ACCENT 0x52, 0x8B, 0xD4, 255      /* borde con foco / acento */
-#define FB_COL_SEL 0x26, 0x4F, 0x78, 200         /* resaltado de selección */
-#define FB_COL_NAV_BTN 0x2A, 0x2E, 0x38, 255     /* fondo botones ↑/↓      */
-#define FB_COL_REPLACE_BTN 0x2C, 0x5F, 0x8C, 255 /* fondo botón Reemplazar */
-
-/* -- Colores de texto (RGB, para draw_text) -------------------------------- */
-#define FB_TXT_LABEL 0x88, 0x8C, 0x99
-#define FB_TXT_FIELD 220, 220, 220
-#define FB_TXT_ARROW 180, 200, 230
-#define FB_TXT_COUNTER 97, 175, 239
-#define FB_TXT_BTN 210, 230, 255
-#define FB_TXT_NORESULT 200, 80, 80
+/* (los colores de los botones ↑/↓/Reemplazar viven en el tema: ui.h/ui.c) */
 
 /**
  * @brief Calcula la Y para centrar verticalmente el texto dentro de un campo.
@@ -67,8 +52,8 @@
  * @param row_y Coordenada Y (arriba) de la fila/campo.
  * @return Coordenada Y donde empezar a dibujar el texto centrado.
  */
-static int field_text_y(int row_y) {
-    return row_y + (FB_FIELD_H - FONT_SIZE) / 2;
+static int field_text_y(Editor *e, int row_y) {
+    return row_y + (FB_FIELD_H - e->font_size) / 2;
 }
 
 /**
@@ -87,15 +72,15 @@ static int field_text_y(int row_y) {
 static void draw_field_box(Editor *e, int x, int y, int w, int focused) {
     /* Color de relleno según foco: cada componente RGB se interpola entre el
      * tono "con foco" (0x2A,0x2E,0x38) y el "sin foco" (0x25,0x29,0x31). */
-    set_color(e->renderer, focused ? 0x2A : 0x25, focused ? 0x2E : 0x29,
-              focused ? 0x38 : 0x31, 255);
+    set_color_c(e->renderer,
+                focused ? e->theme.fb_col_field_focus : e->theme.fb_col_field);
     fill_rect(e->renderer, x, y, w,
               FB_FIELD_H); /* relleno del fondo del campo */
     /* Borde: color de acento si tiene foco, gris normal si no. */
     if (focused)
-        set_color(e->renderer, FB_COL_ACCENT);
+        set_color_c(e->renderer, e->theme.fb_col_accent);
     else
-        set_color(e->renderer, FB_COL_BORDER);
+        set_color_c(e->renderer, e->theme.fb_col_border);
     stroke_rect(e->renderer, x, y, w, FB_FIELD_H); /* contorno (solo líneas) */
 }
 
@@ -144,7 +129,7 @@ static void draw_field_selection(Editor *e, int field_x, int row_y,
     /* Pintar el rectángulo de resaltado: desplazado en X por el texto previo y
      * con la anchura del texto seleccionado; un pequeño inset vertical lo hace
      * más fino que el campo para que se vea el borde. */
-    set_color(e->renderer, FB_COL_SEL);
+    set_color_c(e->renderer, e->theme.fb_col_sel);
     fill_rect(e->renderer, field_x + FB_TEXT_PAD + before_w,
               row_y + FB_SEL_INSET, sel_w, FB_FIELD_H - 2 * FB_SEL_INSET);
 }
@@ -169,30 +154,8 @@ static void draw_field_text(Editor *e, int field_x, int row_y,
     /* Añadir "|" al final si toca mostrar el cursor en este instante de
      * parpadeo. */
     snprintf(buf, sizeof(buf), "%s%s", content, show_caret ? "|" : "");
-    draw_text(e, buf, field_x + FB_TEXT_PAD, field_text_y(row_y), FB_TXT_FIELD);
-}
-
-/**
- * @brief Dibuja un botón cuadrado de flecha (↑ / ↓) con su glifo centrado.
- *
- * @param e     Editor (renderer + fuente).
- * @param x     X (izquierda) del botón en píxeles.
- * @param row_y Y (arriba) de la fila en píxeles.
- * @param size  Lado del botón en píxeles (es cuadrado: ancho = alto del campo).
- * @param glyph Cadena del glifo a dibujar (p. ej. "↑" o "↓").
- */
-static void draw_arrow_button(Editor *e, int x, int row_y, int size,
-                              const char *glyph) {
-    SDL_Renderer *r = e->renderer;
-    set_color(r, FB_COL_NAV_BTN); /* fondo del botón */
-    fill_rect(r, x, row_y, size, FB_FIELD_H);
-    set_color(r, FB_COL_BORDER); /* borde gris */
-    stroke_rect(r, x, row_y, size, FB_FIELD_H);
-    /* Medir el glifo para centrarlo horizontalmente dentro del botón. */
-    int glyph_w = 0, glyph_h = 0;
-    TTF_GetStringSize(e->font, glyph, 0, &glyph_w, &glyph_h);
-    draw_text(e, glyph, x + (size - glyph_w) / 2, field_text_y(row_y),
-              FB_TXT_ARROW);
+    draw_text_c(e, buf, field_x + FB_TEXT_PAD, field_text_y(e, row_y),
+                e->theme.fb_txt_field);
 }
 
 /**
@@ -229,22 +192,17 @@ static void draw_match_nav(Editor *e, int field_x, int field_w, int row_y) {
     int next_x = prev_x + arrow_w + FB_NAV_GAP + counter_w +
                  FB_NAV_GAP; /* X de "siguiente" */
 
-    /* Guardar la geometría de los botones para que la detección de clics
-     * (ratón) sepa dónde están. */
-    e->find.prev_btn_x = prev_x;
-    e->find.prev_btn_y = row_y;
-    e->find.prev_btn_w = arrow_w;
-    e->find.prev_btn_h = FB_FIELD_H;
-    e->find.next_btn_x = next_x;
-    e->find.next_btn_y = row_y;
-    e->find.next_btn_w = arrow_w;
-    e->find.next_btn_h = FB_FIELD_H;
-
-    draw_arrow_button(e, prev_x, row_y, arrow_w, "↑"); /* flecha anterior */
+    /* Flechas como botones reutilizables (estilo del tema); ui_button registra
+     * su rect (UI_FIND_PREV / UI_FIND_NEXT) para el hit-test. */
+    Rect prev_box = {prev_x, row_y, arrow_w, FB_FIELD_H};
+    Rect next_box = {next_x, row_y, arrow_w, FB_FIELD_H};
+    ui_button(e, UI_FIND_PREV, prev_box, "↑", &e->theme.style_button,
+              UI_NORMAL);
     /* contador "X/N" entre las dos flechas */
-    draw_text(e, counter, prev_x + arrow_w + FB_NAV_GAP, field_text_y(row_y),
-              FB_TXT_COUNTER);
-    draw_arrow_button(e, next_x, row_y, arrow_w, "↓"); /* flecha siguiente */
+    draw_text_c(e, counter, prev_x + arrow_w + FB_NAV_GAP,
+                field_text_y(e, row_y), e->theme.fb_txt_counter);
+    ui_button(e, UI_FIND_NEXT, next_box, "↓", &e->theme.style_button,
+              UI_NORMAL);
 }
 
 /**
@@ -311,14 +269,14 @@ void render_find_bar(Editor *e) {
     int blink = (SDL_GetTicks() / 500) % 2;
 
     /* -- Fondo + borde de la barra -- */
-    set_color(r, FB_COL_BG);
+    set_color_c(r, e->theme.fb_col_bg);
     fill_rect(r, bar_x, bar_y, bar_w, bar_h);
-    set_color(r, FB_COL_BORDER);
+    set_color_c(r, e->theme.fb_col_border);
     stroke_rect(r, bar_x, bar_y, bar_w, bar_h);
 
     /* -- Fila 1: Buscar -- */
-    draw_text(e, "Buscar:", label_x, field_text_y(row1_y),
-              FB_TXT_LABEL); /* etiqueta */
+    draw_text_c(e, "Buscar:", label_x, field_text_y(e, row1_y),
+                e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row1_y, search_field_w,
                    search_focused); /* caja del campo */
     /* Resaltado de selección (si la hay) debajo del texto. */
@@ -334,14 +292,14 @@ void render_find_bar(Editor *e) {
     if (fb->result_line >= 0 && fb->match_count > 0) {
         draw_match_nav(e, field_x, search_field_w, row1_y);
     } else if (fb->query_len > 0 && fb->match_count == 0) {
-        draw_text(e, "Sin resultados",
-                  field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
-                  field_text_y(row1_y), FB_TXT_NORESULT);
+        draw_text_c(e, "Sin resultados",
+                    field_x + search_field_w / 2 - FB_NORESULT_OFFSET,
+                    field_text_y(e, row1_y), e->theme.fb_txt_noresult);
     }
 
     /* -- Fila 2: Reemplazar -- */
-    draw_text(e, "Reemplazar:", label_x, field_text_y(row2_y),
-              FB_TXT_LABEL); /* etiqueta */
+    draw_text_c(e, "Reemplazar:", label_x, field_text_y(e, row2_y),
+                e->theme.fb_txt_label); /* etiqueta */
     draw_field_box(e, field_x, row2_y, replace_field_w,
                    replace_focused); /* caja del campo */
     draw_field_selection(e, field_x, row2_y, fb->replace, fb->replace_len,
@@ -349,32 +307,19 @@ void render_find_bar(Editor *e) {
     draw_field_text(e, field_x, row2_y, fb->replace,
                     replace_focused && fb->replace_sel_start < 0 && blink);
 
-    /* Botón "Reemplazar" (fondo de acento + borde + texto centrado). */
-    set_color(r, FB_COL_REPLACE_BTN);
-    fill_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
-    set_color(r, FB_COL_ACCENT);
-    stroke_rect(r, replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H);
-    {
-        /* Medir el texto del botón para centrarlo dentro de su rectángulo. */
-        int text_w = 0, text_h = 0;
-        TTF_GetStringSize(e->font, "Reemplazar", 0, &text_w, &text_h);
-        draw_text(e, "Reemplazar", replace_btn_x + (replace_btn_w - text_w) / 2,
-                  field_text_y(row2_y), FB_TXT_BTN);
-    }
+    /* Botón "Reemplazar": estilo de acción del tema (registra UI_FIND_REPLACE).
+     */
+    Rect replace_box = {replace_btn_x, row2_y, replace_btn_w, FB_FIELD_H};
+    ui_button(e, UI_FIND_REPLACE, replace_box, "Reemplazar",
+              &e->theme.style_primary, UI_NORMAL);
 
-    /* -- Geometría para la detección de clics (la usa input_mouse.c) -- */
-    fb->replace_btn_x = replace_btn_x; /* rectángulo del botón Reemplazar */
-    fb->replace_btn_y = row2_y;
-    fb->replace_btn_w = replace_btn_w;
-    fb->replace_btn_h = FB_FIELD_H;
-    fb->bar_x =
-        bar_x; /* rectángulo de la barra completa (para clics dentro/fuera) */
-    fb->bar_y = bar_y;
-    fb->bar_w = bar_w;
-    fb->bar_h = bar_h;
-    fb->field_x =
-        field_x; /* X común de los campos y Y de cada fila + alto del campo */
-    fb->row1_y = row1_y;
-    fb->row2_y = row2_y;
-    fb->field_h = FB_FIELD_H;
+    /* -- Hit-test: registrar campos y marco en e->ui (lo lee input_mouse) --
+     * El área "clicable" de cada campo abarca toda la fila hasta el borde
+     * derecho de la barra (igual que el comportamiento anterior). */
+    int bar_right = bar_x + bar_w;
+    ui_put(&e->ui, UI_FIND_QUERY,
+           (Rect){field_x, row1_y, bar_right - field_x, FB_FIELD_H});
+    ui_put(&e->ui, UI_FIND_REPL,
+           (Rect){field_x, row2_y, bar_right - field_x, FB_FIELD_H});
+    ui_put(&e->ui, UI_FIND_BAR, (Rect){bar_x, bar_y, bar_w, bar_h});
 }

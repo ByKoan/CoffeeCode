@@ -12,7 +12,7 @@
  * @param type Tipo de token a buscar.
  * @return 1 si existe alguno de ese tipo; 0 si no.
  */
-static int has_type(const LineTokens *lt, TokenType type) {
+static int has_type(const LineTokens *lt, LexTokenType type) {
     for (int i = 0; i < lt->count; i++)
         if (lt->tokens[i].type == type) return 1;
     return 0;

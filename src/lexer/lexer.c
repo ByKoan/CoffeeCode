@@ -34,7 +34,7 @@
 /**
  * @brief Paleta de colores de los tokens (tema oscuro).
  *
- * Indexada por ::TokenType: @c TOKEN_COLORS[token.type] da el color RGBA con el
+ * Indexada por ::LexTokenType: @c TOKEN_COLORS[token.type] da el color RGBA con el
  * que el render pinta ese token. Usa inicializadores designados @c [TOK_x] =
  * ... para que el índice y el valor queden visualmente emparejados y no
  * dependan del orden de declaración del enum.
@@ -207,7 +207,7 @@ static int lexer_tokenize_line(const char *text, int len, LineTokens *out,
         if (c == '/' && i + 1 < len &&
             text[i + 1] == '*') { /* inicio de bloque */
             int start = i;
-            i += 2; /* saltar el "/*" de apertura */
+            i += 2; // saltar el apertura de bloque
             /* ¿se cierra en esta línea? */
             in_block_comment = scan_to_comment_end(text, len, &i);
             PUSH(start, i - start, TOK_COMMENT);
@@ -267,7 +267,7 @@ static int lexer_tokenize_line(const char *text, int len, LineTokens *out,
                    (isalnum((unsigned char)text[i]) || text[i] == '_'))
                 i++;
             int wlen = i - start;      /* longitud de la palabra leída */
-            TokenType t = TOK_DEFAULT; /* por defecto: identificador normal */
+            LexTokenType t = TOK_DEFAULT; /* por defecto: identificador normal */
             /* clasificar la palabra: primero keyword, si no tipo, si no normal
              */
             if (in_word_list(KEYWORDS, text + start, wlen))

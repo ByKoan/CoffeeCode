@@ -22,20 +22,10 @@
 /* líneas desplazadas por "muesca" de rueda */
 #define SCROLL_LINES_PER_NOTCH 3
 
-/* Geometría usada para hit-testing — debe coincidir con la de render.
- * Son medidas fijas (en píxeles) de los rectángulos que dibuja render.c; para
- * saber si un clic cae dentro de un widget las repetimos aquí. Si cambian en
- * render hay que cambiarlas también aquí, o los clics dejarán de cuadrar. */
-/* alto de la cabecera del panel del explorador */
-#define HIT_FTREE_HEADER_H 26
-/* alto del botón que abre/cierra el panel */
-#define HIT_FTREE_TOGGLE_H 40
-#define HIT_TAB_CLOSE_W 16 /* lado de la "x" para cerrar una pestaña */
-/* ancho del botón "+" de nueva pestaña */
-#define HIT_NEW_TAB_BTN_W 28
+/* Única medida fija que aún necesita el input para el hit-test (el resto de la
+ * geometría de controles ya viene del registro e->ui). */
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
-#define HIT_SCROLLBAR_X 9 /* ancho de la pista + borde (SCROLLBAR_W + 1) */
 
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
@@ -83,14 +73,15 @@ int get_left_offset(Editor *e) {
 static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
                               int *col) {
     /* X donde arranca el texto: panel lateral + gutter (números) + padding. */
-    int text_x = get_left_offset(e) + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* ancho de un carácter; si por lo que sea no se midió, usar el de reserva
      */
     int char_px = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
 
     /* fila en pantalla: quitar navbar + pestañas y dividir por el alto de línea
      */
-    int visual_line = (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / LINE_HEIGHT;
+    int visual_line =
+        (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / e->line_height;
     if (visual_line < 0) visual_line = 0;  /* clic sobre las barras → fila 0 */
     int ln = e->scroll_line + visual_line; /* fila visible → línea real      */
     int total = buf_line_count(e->buf);
@@ -103,35 +94,15 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
     if (visual_col < 0) visual_col = 0; /* clic en gutter/padding → col 0 */
     /* offset inicio línea */
     size_t line_start = editor_pos_from_line_col(e, ln, 0);
-    /* longitud real de la línea (sin el '\n') para no pasarse del final */
-    int line_len = (int)(buf_line_end(e->buf, line_start) - line_start);
-    if (visual_col > line_len) visual_col = line_len;
+    /* longitud real de la línea en CARACTERES (no bytes), para no pasarse del
+     * final: la columna del fin de línea es justo ese nº de caracteres. */
+    size_t line_end = buf_line_end(e->buf, line_start);
+    int dummy_line = 0, line_cols = 0;
+    buf_line_col(e->buf, line_end, &dummy_line, &line_cols);
+    if (visual_col > line_cols) visual_col = line_cols;
 
     *line = ln;
     *col = visual_col;
-}
-
-/**
- * @brief Índice de la entrada visible nº @p target_row del árbol, o -1.
- *
- * En el explorador, las carpetas colapsadas ocultan a sus hijos: el array de
- * entradas tiene más elementos que filas dibujadas. Para mapear "fila N en
- * pantalla" → "índice en el array" hay que recorrer saltándose las entradas no
- * visibles y contar solo las visibles.
- *
- * @param ft         Árbol de archivos.
- * @param target_row Fila visible (0 = primera entrada dibujada del árbol).
- * @return Índice en el array de entradas, o -1 si esa fila no existe.
- */
-static int ftree_entry_at_row(FileTree *ft, int target_row) {
-    int visible = 0; /* cuántas entradas visibles llevamos vistas */
-    for (int i = 0; i < ftree_count(ft); i++) {
-        /* saltar entradas ocultas */
-        if (!ftree_entry(ft, i)->visible) continue;
-        if (visible == target_row) return i; /* es la fila buscada      */
-        visible++;
-    }
-    return -1; /* la fila pedida cae más allá de la última entrada visible */
 }
 
 /**
@@ -150,33 +121,22 @@ static int ftree_entry_at_row(FileTree *ft, int target_row) {
  */
 void handle_ftree_click(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
-    int content_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT; /* inicio Y del panel */
-    int content_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - TAB_BAR_HEIGHT;
 
-    /* Botón toggle (borde derecho del panel, o x=0 si está cerrado) */
-    int toggle_x = ft->open ? (ft->width - FTREE_TOGGLE_BTN_W) : 0;
-    /* dentro en X */
-    if (mx >= toggle_x && mx < toggle_x + FTREE_TOGGLE_BTN_W) {
-        /* centrado */
-        int btn_y = content_top + (content_h - HIT_FTREE_TOGGLE_H) / 2;
-        if (my >= btn_y && my < btn_y + HIT_FTREE_TOGGLE_H) { /* dentro en Y */
-            ft->open = !ft->open; /* alternar abierto/cerrado */
-            e->needs_redraw = 1;
-            return;
-        }
+    /* Botón toggle: su geometría la registró el render (UI_TOGGLE_TREE), así no
+     * hay que recalcularla aquí ni mantenerla sincronizada con el dibujo. */
+    if (ui_hit(&e->ui, UI_TOGGLE_TREE, mx, my)) {
+        ft->open = !ft->open; /* alternar abierto/cerrado */
+        e->needs_redraw = 1;
+        return;
     }
 
     if (!ft->open) return; /* panel cerrado: no hay árbol donde clicar */
 
-    /* primera fila tras cabecera */
-    int content_y = content_top + HIT_FTREE_HEADER_H;
-    if (my < content_y) return; /* clic en la cabecera */
-
-    /* fila pulsada = (offset Y / alto de fila) + scroll del propio panel */
-    int target_row = (my - content_y) / FTREE_ITEM_H + ft->scroll;
-    /* fila visible → índice real */
-    int idx = ftree_entry_at_row(ft, target_row);
-    if (idx < 0) return; /* fila vacía */
+    /* Fila del árbol bajo el clic: su rect lo registró el render por índice de
+     * array, así que ui_hit_idx devuelve directamente el índice de la entrada.
+     */
+    int idx = ui_hit_idx(&e->ui, UI_LIST_TREE_ROW, mx, my);
+    if (idx < 0) return; /* clic en la cabecera o zona vacía */
 
     FEntry *en = ftree_entry(ft, idx);
     if (en->type == FTYPE_DIR) {
@@ -192,27 +152,19 @@ void handle_ftree_click(Editor *e, int mx, int my) {
 /**
  * @brief Actualiza la entrada del árbol bajo el cursor (hover).
  *
- * Calcula qué fila del árbol está bajo el ratón y, si difiere de la resaltada
- * antes, la actualiza y pide redibujar (para mostrar el resaltado de hover). La
- * X no importa aquí: basta estar dentro del panel, por eso se ignora con
- * (void).
+ * Consulta qué fila del árbol está bajo el ratón (con la geometría que registró
+ * el render) y, si difiere de la resaltada antes, la actualiza y pide
+ * redibujar.
  *
  * @param e  Editor.
- * @param mx Coordenada X del ratón (no usada, solo Y determina la fila).
+ * @param mx Coordenada X del ratón en píxeles.
  * @param my Coordenada Y del ratón en píxeles.
  */
 void handle_ftree_hover(Editor *e, int mx, int my) {
     FileTree *ft = &e->ftree;
     if (!ft->open) return;
-    (void)mx; /* la fila depende solo de Y */
 
-    int content_y = NAVBAR_HEIGHT + TAB_BAR_HEIGHT + HIT_FTREE_HEADER_H;
-    int hovered = -1;
-    /* por debajo de la cabecera: hay fila bajo el cursor */
-    if (my >= content_y)
-        hovered = ftree_entry_at_row(ft, (my - content_y) / FTREE_ITEM_H +
-                                             ft->scroll);
-
+    int hovered = ui_hit_idx(&e->ui, UI_LIST_TREE_ROW, mx, my);
     if (ft->hovered != hovered) { /* solo redibujar si cambió el resaltado */
         ft->hovered = hovered;
         e->needs_redraw = 1;
@@ -253,7 +205,7 @@ void handle_scroll(Editor *e, float wheel_dy) {
  * @param my Coordenada Y del clic en píxeles.
  */
 void handle_text_click(Editor *e, int mx, int my) {
-    int text_x = get_left_offset(e) + GUTTER_WIDTH + PADDING_LEFT;
+    int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* fuera del texto */
     if (mx < text_x || e->tab_count == 0 || !e->buf) return;
     int line, col;
@@ -281,6 +233,24 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
     float cursor_xf = 0.0f, cursor_yf = 0.0f;
     SDL_GetMouseState(&cursor_xf, &cursor_yf);
     int cursor_x = (int)cursor_xf;
+    int cursor_y = (int)cursor_yf;
+
+    /* Preferencias abiertas: la rueda sobre la lista de fuentes la desplaza
+     * (ui_list recorta el scroll a un rango válido al dibujar). */
+    if (e->settings_open) {
+        if (ui_hit(&e->ui, UI_PREF_FONT_LIST, cursor_x, cursor_y))
+            e->font_list_scroll -= (int)ev->wheel.y;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Popup de codificación: la rueda desplaza su lista. */
+    if (e->enc_popup) {
+        if (ui_hit(&e->ui, UI_ENC_LIST, cursor_x, cursor_y))
+            e->enc_popup_scroll -= (int)ev->wheel.y;
+        e->needs_redraw = 1;
+        return;
+    }
 
     if (e->ftree.open && cursor_x < get_left_offset(e)) {
         /* la rueda sobre el panel desplaza el árbol */
@@ -312,10 +282,10 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
     if (e->tab_count == 0) return;
     /* alto de la pista de la scrollbar = área de texto sin las barras de UI */
     int text_height = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT -
-                      STATUS_HEIGHT - SHORTCUT_HEIGHT;
+                      STATUS_HEIGHT - editor_shortcut_h(e);
     int total_lines = buf_line_count(e->buf);
     /* líneas que caben en pantalla */
-    int visible_lines = text_height / LINE_HEIGHT;
+    int visible_lines = text_height / e->line_height;
     int max_scroll = total_lines - visible_lines; /* scroll máximo alcanzable */
     if (max_scroll < 0) max_scroll = 0; /* todo cabe: no hay scroll     */
 
@@ -358,7 +328,8 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
 
     if (e->menu_open) { /* menú desplegado: actualizar el item resaltado */
         int prev = e->menu_hovered;
-        e->menu_hovered = menu_item_at(mouse_x, mouse_y);
+        e->menu_hovered =
+            ui_hit_idx(&e->ui, UI_LIST_MENU_ITEM, mouse_x, mouse_y);
         if (e->menu_hovered != prev) e->needs_redraw = 1; /* solo si cambió */
     }
 
@@ -413,34 +384,30 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param my Coordenada Y del clic en píxeles.
  */
 static void click_tabbar(Editor *e, int mx, int my) {
-    if (mx >= e->tab_new_btn_x && mx < e->tab_new_btn_x + HIT_NEW_TAB_BTN_W) {
+    if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
         editor_tab_new(e); /* botón "+": pestaña nueva */
         return;
     }
-    for (int i = 0; i < e->tab_count; i++) {
-        EditorTab *t = &e->tabs[i];
-        /* no es esta */
-        if (mx < t->tab_x || mx >= t->tab_x + t->tab_w) continue;
+    /* La geometría de cada pestaña y de su "x" la registró el render por
+     * índice; el botón de cerrar está dentro de la pestaña, así que se
+     * comprueba antes. */
+    int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
+    int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
+    if (close_i < 0 && tab_i < 0) return; /* no se pulsó ninguna pestaña */
 
-        /* ¿el clic cayó dentro del cuadradito de cerrar de esta pestaña? */
-        int on_close = (mx >= t->close_x && mx < t->close_x + HIT_TAB_CLOSE_W &&
-                        my >= t->close_y && my < t->close_y + HIT_TAB_CLOSE_W);
-        if (on_close) {
-            editor_tab_save_state(e); /* guardar estado de la pestaña actual */
-            e->active_tab = i;        /* apuntar a la que se va a cerrar      */
-            editor_tab_close(e);
-        } else {
-            editor_tab_switch(e, i); /* cambiar a la pestaña pulsada */
-        }
-        /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
-         * nombre */
-        const char *path =
-            (e->tab_count > 0 && e->tabs[e->active_tab].filepath[0])
-                ? e->tabs[e->active_tab].filepath
-                : "CoffeeCode - Sin título";
-        SDL_SetWindowTitle(e->window, path);
-        return;
+    if (close_i >= 0) {           /* "x": cerrar esa pestaña */
+        editor_tab_save_state(e); /* guardar estado de la pestaña actual */
+        e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
+        editor_tab_close(e);
+    } else {
+        editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
     }
+    /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
+     * nombre */
+    const char *path = (e->tab_count > 0 && e->tabs[e->active_tab].filepath[0])
+                           ? e->tabs[e->active_tab].filepath
+                           : "CoffeeCode - Sin título";
+    SDL_SetWindowTitle(e->window, path);
 }
 
 /**
@@ -460,50 +427,41 @@ static int click_find_bar(Editor *e, int mx, int my) {
     FindBar *fb = &e->find;
     if (!fb->visible) return 0; /* barra oculta: no consume nada */
 
-    /* Botón "Reemplazar" */
-    if (mx >= fb->replace_btn_x && mx < fb->replace_btn_x + fb->replace_btn_w &&
-        my >= fb->replace_btn_y && my < fb->replace_btn_y + fb->replace_btn_h) {
+    /* La geometría de cada control la registró el render en e->ui; aquí solo se
+     * pregunta con ui_hit. Los botones prev/next solo están registrados cuando
+     * se dibujan (hay coincidencias), así que ui_hit devuelve 0 si no los hay.
+     */
+    if (ui_hit(&e->ui, UI_FIND_REPLACE, mx, my)) {
         fb->bar_focused = 1;
         do_replace(e);
         return 1;
     }
-    /* Botón "anterior" (solo si está dibujado: prev_btn_w > 0) */
-    if (fb->prev_btn_w > 0 && mx >= fb->prev_btn_x &&
-        mx < fb->prev_btn_x + fb->prev_btn_w && my >= fb->prev_btn_y &&
-        my < fb->prev_btn_y + fb->prev_btn_h) {
+    if (ui_hit(&e->ui, UI_FIND_PREV, mx, my)) {
         fb->bar_focused = 1;
         find_prev(e);
         return 1;
     }
-    /* Botón "siguiente" (solo si está dibujado: next_btn_w > 0) */
-    if (fb->next_btn_w > 0 && mx >= fb->next_btn_x &&
-        mx < fb->next_btn_x + fb->next_btn_w && my >= fb->next_btn_y &&
-        my < fb->next_btn_y + fb->next_btn_h) {
+    if (ui_hit(&e->ui, UI_FIND_NEXT, mx, my)) {
         fb->bar_focused = 1;
         find_jump(e);
         return 1;
     }
-    /* Fila 1: campo de búsqueda → darle foco (no es el de reemplazo) */
-    if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w && my >= fb->row1_y &&
-        my < fb->row1_y + fb->field_h) {
+    if (ui_hit(&e->ui, UI_FIND_QUERY, mx, my)) { /* campo buscar → foco */
         fb->replace_focused = 0;
         fb->bar_focused = 1;
         e->needs_redraw = 1;
         return 1;
     }
-    /* Fila 2: campo de reemplazo → darle foco */
-    if (mx >= fb->field_x && mx < fb->bar_x + fb->bar_w && my >= fb->row2_y &&
-        my < fb->row2_y + fb->field_h) {
+    if (ui_hit(&e->ui, UI_FIND_REPL, mx, my)) { /* campo reemplazar → foco */
         fb->replace_focused = 1;
         fb->bar_focused = 1;
         e->needs_redraw = 1;
         return 1;
     }
-    /* Dentro del marco de la barra pero no en un widget concreto */
-    if (mx >= fb->bar_x && mx < fb->bar_x + fb->bar_w && my >= fb->bar_y &&
-        my < fb->bar_y + fb->bar_h) {
-        return 1; /* clic dentro de la barra pero fuera de campos: lo consume */
-    }
+    /* Dentro del marco de la barra pero fuera de un control: consumir el clic.
+     */
+    if (ui_hit(&e->ui, UI_FIND_BAR, mx, my)) return 1;
+
     if (fb->bar_focused) { /* clic fuera: el foco vuelve al editor */
         fb->bar_focused = 0;
         e->needs_redraw = 1;
@@ -552,10 +510,121 @@ static void start_text_selection(Editor *e, int mx, int my) {
  * @param e  Editor.
  * @param ev Evento SDL; se usan @c ev->button.x/y y @c ev->button.button.
  */
+/**
+ * @brief Procesa un clic en la pantalla de preferencias.
+ *
+ * Los controles (botones y steppers) los registró render_settings_view en
+ * e->ui; aquí se resuelven con ui_hit, se aplica el cambio y se persiste con
+ * settings_save.
+ */
+static void handle_settings_click(Editor *e, int mx, int my) {
+    Settings *s = &e->settings;
+    if (ui_hit(&e->ui, UI_PREF_BACK, mx, my)) {
+        e->settings_open = 0; /* volver al editor */
+    } else if (ui_hit(&e->ui, UI_PREF_THEME, mx, my)) {
+        s->theme = (s->theme + 1) % THEME_COUNT; /* siguiente preset */
+        e->theme = theme_preset(s->theme);       /* aplicar al instante */
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_AUTOSAVE, mx, my)) {
+        e->autosave = !e->autosave;
+        if (e->autosave) e->autosave_last_ms = SDL_GetTicks();
+        s->autosave = e->autosave;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_LINENUM, mx, my)) {
+        s->show_line_numbers = !s->show_line_numbers;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_HLLINE, mx, my)) {
+        s->highlight_current_line = !s->highlight_current_line;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_SHORTCUTS, mx, my)) {
+        s->show_shortcuts = !s->show_shortcuts;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_TABW_DEC, mx, my)) {
+        if (s->tab_width > SETTINGS_TAB_MIN) s->tab_width--;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_TABW_INC, mx, my)) {
+        if (s->tab_width < SETTINGS_TAB_MAX) s->tab_width++;
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_FONTSZ_DEC, mx, my)) {
+        if (s->font_size > SETTINGS_FONT_MIN) s->font_size--;
+        editor_reload_font(e); /* recargar la fuente al nuevo tamaño */
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_FONTSZ_INC, mx, my)) {
+        if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
+        editor_reload_font(e);
+        settings_save(s);
+    } else {
+        /* Lista de fuentes: un clic sobre una fila la selecciona. La fila 0 es
+         * "Predeterminada" (vuelve a la fuente por defecto). */
+        int frow = ui_hit_idx(&e->ui, UI_LIST_PREF_FONT, mx, my);
+        if (frow == 0) {
+            s->font_path[0] = '\0';
+            editor_reload_font(e);
+            settings_save(s);
+        } else if (frow > 0) {
+            snprintf(s->font_path, sizeof s->font_path, "%s",
+                     e->fonts.items[frow - 1].path);
+            editor_reload_font(e);
+            settings_save(s);
+        }
+    }
+    e->needs_redraw = 1;
+}
+
+/**
+ * @brief Procesa un clic en el popup del selector de codificación.
+ *
+ * Botones de modo (Reabrir/Guardar como) cambian @c enc_popup_mode; un clic en
+ * una fila aplica esa codificación (reabrir desde disco o guardar) y cierra; un
+ * clic fuera del popup lo cierra.
+ */
+static void handle_enc_popup_click(Editor *e, int mx, int my) {
+    if (ui_hit(&e->ui, UI_ENC_MODE_REOPEN, mx, my)) {
+        e->enc_popup_mode = 0;
+    } else if (ui_hit(&e->ui, UI_ENC_MODE_SAVE, mx, my)) {
+        e->enc_popup_mode = 1;
+    } else {
+        int row = ui_hit_idx(&e->ui, UI_LIST_ENC, mx, my);
+        if (row >= 0) {
+            TextEncoding enc = (TextEncoding)row;
+            if (e->enc_popup_mode == 0) {
+                editor_reopen_with_encoding(e, enc); /* re-decodificar disco */
+            } else {
+                e->encoding = enc; /* guardar con esta codificación */
+                save_file(e);
+            }
+            e->enc_popup = 0;
+        } else if (!ui_hit(&e->ui, UI_ENC_LIST, mx, my)) {
+            e->enc_popup = 0; /* clic fuera del popup: cerrar */
+        }
+    }
+    e->needs_redraw = 1;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
     if (ev->button.button != SDL_BUTTON_LEFT) return; /* solo botón izquierdo */
+
+    /* Preferencias abiertas: la pantalla es modal y consume todo el ratón. */
+    if (e->settings_open) {
+        handle_settings_click(e, mx, my);
+        return;
+    }
+
+    /* Popup de codificación abierto: consume el ratón. */
+    if (e->enc_popup) {
+        handle_enc_popup_click(e, mx, my);
+        return;
+    }
+
+    /* Clic en la codificación de la barra de estado: abrir el selector. */
+    if (ui_hit(&e->ui, UI_STATUS_ENC, mx, my)) {
+        e->enc_popup = 1;
+        e->enc_popup_mode = 0;
+        e->needs_redraw = 1;
+        return;
+    }
 
     /* Menú "Archivo" abierto: tiene prioridad máxima sobre cualquier otra zona.
      * Debe comprobarse ANTES de la barra de pestañas porque el menú se dibuja
@@ -563,7 +632,7 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
      * con el rango de la tab bar; sin esta guarda, click_tabbar absorbería
      * los clics sobre los items del menú antes de llegar aquí. */
     if (e->menu_open) {
-        int item = menu_item_at(mx, my);
+        int item = ui_hit_idx(&e->ui, UI_LIST_MENU_ITEM, mx, my);
         /* clic en un item: ejecutarlo */
         if (item >= 0)
             menu_exec(e, item);
@@ -582,9 +651,8 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* Botón "Archivo" en la navbar */
-    if (my >= 0 && my < NAVBAR_HEIGHT && mx >= BTN_FILE_X &&
-        mx < BTN_FILE_X + BTN_FILE_W) {
+    /* Botón "Archivo" en la navbar (geometría registrada por render) */
+    if (ui_hit(&e->ui, UI_BTN_FILE, mx, my)) {
         e->menu_open = 1; /* abrir el menú desplegable */
         e->menu_hovered = -1;
         e->needs_redraw = 1;
@@ -598,8 +666,8 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     /* Área principal (bajo navbar + pestañas) */
     if (my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) return; /* clic en navbar vacía */
 
-    /* Clic en la scrollbar: iniciar arrastre del thumb */
-    if (mx >= e->win_w - HIT_SCROLLBAR_X) {
+    /* Clic en la scrollbar (registrada por render solo si existe): arrastrar */
+    if (ui_hit(&e->ui, UI_SCROLLBAR, mx, my)) {
         e->scrollbar_dragging = 1;      /* activar modo arrastre del thumb  */
         e->scrollbar_drag_start_y = my; /* Y de partida del arrastre        */
         e->scrollbar_drag_start_line = e->scroll_line; /* scroll de partida */

@@ -22,21 +22,13 @@
 #include <string.h>   /* memmove, strlen, strcmp, strncmp */
 #include <sys/stat.h> /* stat (mtime de archivos al guardar) */
 
-/* -- Geometría del menú (debe coincidir con render.c) ----------------------
- * Estas medidas se duplican aquí porque el ratón (input) necesita saber dónde
- * dibujó render el menú para detectar clics; deben mantenerse sincronizadas. */
-/* alto en píxeles de cada entrada del menú desplegable */
-#define MENU_ITEM_H 26
-#define MENU_WIDTH 210 /* ancho en píxeles del menú desplegable */
-#define MENU_ITEMS 6   /* número de entradas del menú */
-#define BTN_FILE_X 4   /* x del botón "Archivo" en la barra de navegación */
-#define BTN_FILE_W 90  /* ancho del botón "Archivo" */
+/* La geometría del menú "Archivo" y del botón de la navbar la registra ahora
+ * el render en e->ui (UI_BTN_FILE / UI_LIST_MENU_ITEM); el input la consulta
+ * con ui_hit/ui_hit_idx, así que ya no se duplica aquí. */
 
 /* ── Geometría / utilidades (input_mouse.c, input.c) ────────────────────────
  */
-int menu_item_at(int mx, int my); /* entrada de menú bajo (mx,my), o -1 */
-int menu_total_h(void);           /* alto total del menú desplegado */
-int get_left_offset(Editor *e);   /* ancho del panel lateral izquierdo */
+int get_left_offset(Editor *e); /* ancho del panel lateral izquierdo */
 /* clic en el explorador de archivos */
 void handle_ftree_click(Editor *e, int mx, int my);
 /* hover en el explorador de archivos */

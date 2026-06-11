@@ -32,6 +32,7 @@
  * de reconstruirse entero, salvo al cargar un archivo (::li_rebuild).
  */
 #include "buffer/buffer.h"
+#include "utf8/utf8.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -362,9 +363,13 @@ void buf_insert_str(Buffer *b, const char *s, size_t len) {
  */
 void buf_delete_before(Buffer *b) {
     if (b->gap_start == 0) return; /* nada a la izquierda */
-    size_t pos = b->gap_start - 1;
-    li_after_delete(b, pos, pos + 1);
-    b->gap_start--;
+    /* Borrar el CARÁCTER completo (no un byte): retroceder hasta el byte
+     * inicial del carácter, saltando los bytes de continuación UTF-8. */
+    size_t start = b->gap_start - 1;
+    while (start > 0 && buf_is_cont(b->data[start]))
+        start--;
+    li_after_delete(b, start, b->gap_start);
+    b->gap_start = start; /* el carácter pasa a formar parte del hueco */
 }
 
 /**
@@ -376,9 +381,13 @@ void buf_delete_before(Buffer *b) {
  */
 void buf_delete_after(Buffer *b) {
     if (b->gap_end == b->size) return; /* nada a la derecha */
-    size_t pos = b->gap_start;
-    li_after_delete(b, pos, pos + 1);
-    b->gap_end++;
+    /* Borrar el CARÁCTER completo: avanzar tras su byte inicial y todos sus
+     * bytes de continuación UTF-8. */
+    size_t end = b->gap_end + 1;
+    while (end < b->size && buf_is_cont(b->data[end]))
+        end++;
+    li_after_delete(b, b->gap_start, b->gap_start + (end - b->gap_end));
+    b->gap_end = end;
 }
 
 /* -- edición de rangos ----------------------------------------------------- */
@@ -439,10 +448,15 @@ size_t buf_get_text(const Buffer *b, size_t from, size_t to, char *out) {
  */
 void buf_move_left(Buffer *b) {
     if (b->gap_start == 0) return; /* ya al inicio del texto */
-    b->gap_end--;
-    b->data[b->gap_end] =
-        b->data[b->gap_start - 1]; /* carácter cruza el hueco */
-    b->gap_start--;
+    /* Mover un CARÁCTER completo: trasladar bytes a través del hueco hasta que
+     * el byte que queda a la derecha del cursor inicie un carácter (no sea de
+     * continuación UTF-8). */
+    do {
+        b->gap_end--;
+        b->data[b->gap_end] =
+            b->data[b->gap_start - 1]; /* byte cruza el hueco */
+        b->gap_start--;
+    } while (b->gap_start > 0 && buf_is_cont(b->data[b->gap_end]));
 }
 
 /**
@@ -454,10 +468,14 @@ void buf_move_left(Buffer *b) {
  * @param b Buffer.
  */
 void buf_move_right(Buffer *b) {
-    if (b->gap_end == b->size) return;           /* ya al final del texto */
-    b->data[b->gap_start] = b->data[b->gap_end]; /* carácter cruza el hueco */
-    b->gap_start++;
-    b->gap_end++;
+    if (b->gap_end == b->size) return; /* ya al final del texto */
+    /* Mover un CARÁCTER completo: tras cruzar el byte inicial, seguir mientras
+     * el siguiente byte a la derecha sea de continuación UTF-8. */
+    do {
+        b->data[b->gap_start] = b->data[b->gap_end]; /* byte cruza el hueco */
+        b->gap_start++;
+        b->gap_end++;
+    } while (b->gap_end < b->size && buf_is_cont(b->data[b->gap_end]));
 }
 
 /**
@@ -577,10 +595,33 @@ size_t buf_line_start(const Buffer *b, size_t pos) {
  * @param[out] col  Columna (base 0).
  * @return 1 siempre (firma uniforme para el llamante).
  */
+int buf_decode_at(const Buffer *b, size_t pos, size_t end, uint32_t *cp) {
+    /* Leer hasta 4 bytes (sin pasar de end) a un buffer contiguo y decodificar;
+     * buf_char_at salta el hueco internamente. */
+    char tmp[4];
+    int n = 0;
+    while (n < 4 && pos + (size_t)n < end)
+        tmp[n] = buf_char_at(b, pos + (size_t)n), n++;
+    int used = utf8_decode(tmp, n, cp);
+    return used > 0 ? used : 1; /* nunca avanzar 0 (evita bucles infinitos) */
+}
+
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col) {
     int ln = li_line_of(b, pos);
     *line = ln;
-    *col = (int)(pos - LI(b)[ln]); /* columna = offset relativo al inicio */
+    /* Columna = ANCHO DE DISPLAY (celdas) entre el inicio de línea y pos: se
+     * suma el ancho de cada carácter (1, 2 ó 0 para combinantes). Así el cursor
+     * se alinea con el texto aunque haya acentos (1 celda) o CJK/emoji (2). */
+    size_t start = LI(b)[ln];
+    int w = 0;
+    size_t i = start;
+    while (i < pos) {
+        uint32_t cp;
+        int n = buf_decode_at(b, i, pos, &cp);
+        w += utf8_cp_width(cp);
+        i += (size_t)n;
+    }
+    *col = w;
     return 1;
 }
 
@@ -618,6 +659,32 @@ size_t buf_line_end(const Buffer *b, size_t pos) {
  * @return 1 si se cargó (o el archivo estaba vacío); 0 si no se pudo
  * abrir/alojar.
  */
+int buf_load_mem(Buffer *b, const char *data, size_t len) {
+    /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza
+     */
+    free(b->data);
+    b->data = NULL;
+    if (b->lines.elem == 0) /* defensivo: por si nunca se inicializó */
+        vec_init(&b->lines, sizeof(size_t));
+
+    if (len == 0) return buf_set_empty(b); /* contenido vacío */
+
+    /* Alojar exactamente lo necesario + hueco mínimo */
+    b->data = malloc(len + BUFFER_GAP_MIN);
+    if (!b->data) return 0;
+    memcpy(b->data, data, len);
+
+    /* El texto ocupa [0, len); el hueco va detrás. Cursor al final del texto.
+     */
+    b->gap_start = len;
+    b->gap_end = len + BUFFER_GAP_MIN;
+    b->size = len + BUFFER_GAP_MIN;
+    memset(b->data + len, 0, BUFFER_GAP_MIN); /* limpiar el hueco (higiene) */
+
+    b->lines.len = 0;     /* li_rebuild lo rellena */
+    return li_rebuild(b); /* construir índice en una pasada O(n) */
+}
+
 int buf_load_file(Buffer *b, const char *path) {
     FILE *f = fopen(path, "rb"); /* binario: no traducir saltos de línea */
     if (!f) return 0;
@@ -627,37 +694,22 @@ int buf_load_file(Buffer *b, const char *path) {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    /* Liberar texto anterior; el índice de líneas (Vec) se conserva y reutiliza
-     */
-    free(b->data);
-    b->data = NULL;
-    if (b->lines.elem == 0) /* defensivo: por si nunca se inicializó */
-        vec_init(&b->lines, sizeof(size_t));
-
     if (fsize <= 0) {
         fclose(f);
-        return buf_set_empty(b); /* archivo vacío */
+        return buf_load_mem(b, NULL, 0); /* archivo vacío */
     }
 
-    /* Alojar exactamente lo necesario + hueco mínimo */
-    b->data = malloc((size_t)fsize + BUFFER_GAP_MIN);
-    if (!b->data) {
+    char *tmp = malloc((size_t)fsize);
+    if (!tmp) {
         fclose(f);
         return 0;
     }
-
-    size_t nread = fread(b->data, 1, (size_t)fsize, f);
+    size_t nread = fread(tmp, 1, (size_t)fsize, f);
     fclose(f);
 
-    /* El texto ocupa [0, nread); el hueco va detrás. Cursor al final del texto.
-     */
-    b->gap_start = nread;
-    b->gap_end = nread + BUFFER_GAP_MIN;
-    b->size = nread + BUFFER_GAP_MIN;
-    memset(b->data + nread, 0, BUFFER_GAP_MIN); /* limpiar el hueco (higiene) */
-
-    b->lines.len = 0;     /* li_rebuild lo rellena */
-    return li_rebuild(b); /* construir índice en una pasada O(n) */
+    int ok = buf_load_mem(b, tmp, nread); /* copia los bytes tal cual */
+    free(tmp);
+    return ok;
 }
 
 /**

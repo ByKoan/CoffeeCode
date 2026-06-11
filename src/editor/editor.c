@@ -16,6 +16,7 @@
 #include "editor_internal.h"
 #include "input/input.h"
 #include "render/render.h"
+#include "utf8/utf8.h"
 
 /**
  * @brief Abre la fuente TrueType del editor desde disco.
@@ -37,7 +38,12 @@
  *         El llamante es dueño del puntero y debe cerrarlo con @c
  * TTF_CloseFont.
  */
-static TTF_Font *load_editor_font(float size) {
+static TTF_Font *load_editor_font(float size, const char *path) {
+    /* 1) ruta explícita elegida en preferencias (settings.font_path) */
+    if (path && path[0]) {
+        TTF_Font *f = TTF_OpenFont(path, size);
+        if (f) return f;
+    }
     /* getenv: si el usuario definió COFFEECODE_FONT, esa fuente tiene
      * prioridad. */
     const char *env = getenv("COFFEECODE_FONT");
@@ -68,6 +74,25 @@ static TTF_Font *load_editor_font(float size) {
     return TTF_OpenFont("font.ttf", size);
 }
 
+void editor_reload_font(Editor *e) {
+    /* Cargar la nueva fuente en una variable temporal: si falla (ruta inválida
+     * o tamaño imposible) se conserva la actual y no se rompe el editor. */
+    TTF_Font *nf =
+        load_editor_font(e->settings.font_size, e->settings.font_path);
+    if (!nf) return;
+
+    if (e->font) TTF_CloseFont(e->font);
+    e->font = nf;
+    e->font_size = e->settings.font_size;
+    e->line_height = e->settings.font_size + 4;
+
+    /* Re-medir el ancho de carácter de la fuente nueva. */
+    int w = 0, h = 0;
+    TTF_GetStringSize(e->font, "M", 1, &w, &h);
+    e->char_w = w > 0 ? w : e->font_size / 2;
+    e->needs_redraw = 1;
+}
+
 /**
  * @brief Convierte una coordenada (línea, columna) a posición lógica del
  * buffer.
@@ -94,12 +119,23 @@ size_t editor_pos_from_line_col(Editor *e, int line, int col) {
     /* fin de la línea (sin el '\n'): O(longitud de la línea) */
     size_t line_end = buf_line_end(b, line_start);
 
-    /* recortar la columna para no pasar del final real de la línea */
-    int line_len = (int)(line_end - line_start);
+    /* La columna es ANCHO DE DISPLAY (celdas): avanzar carácter a carácter
+     * acumulando su ancho hasta alcanzar `col`, sin pasar del final de la
+     * línea. Si `col` cae DENTRO de un carácter de doble ancho, se para justo
+     * antes (el cursor se ajusta al límite de carácter más cercano por la
+     * izquierda). */
     if (col < 0) col = 0;
-    if (col > line_len) col = line_len;
-
-    return line_start + (size_t)col;
+    size_t p = line_start;
+    int w = 0;
+    while (p < line_end && w < col) {
+        uint32_t cp;
+        int n = buf_decode_at(b, p, line_end, &cp);
+        int cw = utf8_cp_width(cp);
+        if (w + cw > col) break; /* col cae dentro de un carácter ancho */
+        w += cw;
+        p += (size_t)n;
+    }
+    return p;
 }
 
 /**
@@ -134,10 +170,10 @@ void editor_sync_cursor(Editor *e) {
 void editor_ensure_visible(Editor *e) {
     int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT -
-                     SHORTCUT_HEIGHT) /
-                    LINE_HEIGHT;
+                     editor_shortcut_h(e)) /
+                    e->line_height;
     int vis_cols =
-        (e->win_w - left_off - GUTTER_WIDTH - PADDING_LEFT) / e->char_w;
+        (e->win_w - left_off - editor_gutter_w(e) - PADDING_LEFT) / e->char_w;
 
     if (e->cursor_line < e->scroll_line) e->scroll_line = e->cursor_line;
     if (e->cursor_line >= e->scroll_line + vis_lines)
@@ -167,6 +203,29 @@ void editor_update_lexer(Editor *e, int from_line) {
     int total = buf_line_count(e->buf);
     lexer_cache_resize(e->lex, total);
     lexer_cache_dirty(e->lex, from_line);
+
+    /* Notificar al servidor LSP del cambio de contenido.
+     * Solo se notifica si hay un cliente LSP activo para la pestaña actual.
+     * La solicitud de tokens semánticos se hace de forma "perezosa": solo si
+     * from_line == 0 (recarga completa) para no saturar el servidor con cada
+     * pulsación de tecla. La actualización continua se delega al sistema de
+     * dirty lines; los tokens LSP se refresca en cada recarga o guardado. */
+    if (e->tab_count > 0) {
+        EditorTab *t = &e->tabs[e->active_tab];
+        if (t->lsp_active && t->lsp.initialized) {
+            size_t txt_len = buf_length(e->buf);
+            char *txt = (char *)malloc(txt_len + 1);
+            if (txt) {
+                buf_get_text(e->buf, 0, txt_len, txt);
+                txt[txt_len] = '\0';
+                lsp_change(&t->lsp, txt);
+                free(txt);
+                /* Solicitar tokens solo en recargas completas para no bloquear
+                 * el hilo principal en cada keystroke */
+                if (from_line == 0) lsp_tokens_full(&t->lsp);
+            }
+        }
+    }
 }
 
 /**
@@ -250,8 +309,15 @@ int editor_init(Editor *e, const char *filepath) {
     e->needs_redraw = 1;
     e->menu_hovered = -1;
     e->find.result_line = -1;
-    e->cursor_visible = 1;          /* cursor visible al arrancar */
+    e->cursor_visible = 1;               /* cursor visible al arrancar */
     e->cursor_blink_ms = SDL_GetTicks(); /* iniciar timer del parpadeo */
+
+    /* preferencias persistentes: cargarlas y aplicar las que afectan al estado
+     * inicial (las demás las leen render/input directamente de e->settings). */
+    settings_load(&e->settings);
+    e->autosave = e->settings.autosave;
+    e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
+    fonts_scan(&e->fonts); /* fuentes del sistema para el selector */
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -303,7 +369,9 @@ int editor_init(Editor *e, const char *filepath) {
 #ifdef _DEBUG
     fprintf(stderr, "STEP: load font\n");
 #endif
-    e->font = load_editor_font(FONT_SIZE);
+    e->font_size = e->settings.font_size;
+    e->line_height = e->settings.font_size + 4; /* alto de línea (16 -> 20) */
+    e->font = load_editor_font(e->font_size, e->settings.font_path);
     if (!e->font) {
         fprintf(
             stderr,
@@ -320,7 +388,7 @@ int editor_init(Editor *e, const char *filepath) {
         int w = 0, h = 0;
         TTF_GetStringSize(e->font, "M", 1, &w, &h);
         e->char_w =
-            w > 0 ? w : FONT_SIZE / 2; /* fallback si la medida fallara */
+            w > 0 ? w : e->font_size / 2; /* fallback si la medida fallara */
     }
 
     /* -- Panel explorador de archivos -- */
@@ -363,6 +431,7 @@ void editor_free(Editor *e) {
     for (int i = 0; i < e->tab_count; i++)
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);
+    fonts_free(&e->fonts);               /* lista de fuentes del sistema */
     if (e->font) TTF_CloseFont(e->font); /* liberar la fuente abierta */
     if (e->renderer)
         SDL_StopTextInput(e->window); /* desactivar eventos de texto */
@@ -382,17 +451,78 @@ void editor_free(Editor *e) {
  *     marcando needs_redraw cuando cambia de estado para no dibujar de más.
  *   - Se redibuja si algo cambió (needs_redraw activo).
  *
- * Así la app mantiene respuesta inmediata ante entrada del usuario Y animaciones
- * fluidas (cursor parpadeante) sin quemar CPU cuando no hay actividad.
+ * Así la app mantiene respuesta inmediata ante entrada del usuario Y
+ * animaciones fluidas (cursor parpadeante) sin quemar CPU cuando no hay
+ * actividad.
  */
-#define CURSOR_BLINK_MS 530  /* medio periodo del parpadeo del cursor (ms) */
+#define CURSOR_BLINK_MS 530 /* medio periodo del parpadeo del cursor (ms) */
+
+/**
+ * @brief Sondea las instalaciones LSP en curso y arranca el servidor cuando
+ *        el instalador termina con exito.
+ *
+ * Se llama una vez por frame desde editor_run(). Para cada pestana con una
+ * instalacion en curso (lsp_install.status == LSP_INSTALL_RUNNING) llama a
+ * lsp_install_poll(). Si la instalacion termino bien, reintenta lsp_start()
+ * y arranca el cliente LSP normalmente.
+ *
+ * @param e Editor.
+ */
+static void editor_poll_lsp_install(Editor *e) {
+    for (int i = 0; i < e->tab_count; i++) {
+        EditorTab *t = &e->tabs[i];
+        if (t->lsp_active) continue; /* ya tiene LSP activo */
+        if (t->lsp_install.status != LSP_INSTALL_RUNNING) continue;
+
+        LspInstallStatus st = lsp_install_poll(&t->lsp_install);
+
+        if (st == LSP_INSTALL_DONE) {
+            /* Instalacion completada: intentar arrancar el servidor LSP */
+            const char *lang = lsp_language_id_for_path(t->filepath);
+            const char *cmd = lang ? lsp_server_cmd_for_language(lang) : NULL;
+            if (cmd && t->filepath[0]) {
+                char ws_uri[512], ws_path[512];
+                strncpy(ws_path, t->filepath, sizeof(ws_path) - 1);
+                char *sep = strrchr(ws_path, '/');
+#ifdef _WIN32
+                char *sep2 = strrchr(ws_path, '\\');
+                if (!sep || (sep2 && sep2 > sep)) sep = sep2;
+#endif
+                if (sep)
+                    *sep = '\0';
+                else
+                    strncpy(ws_path, ".", sizeof(ws_path) - 1);
+                path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
+
+                if (lsp_start(&t->lsp, cmd, ws_uri)) {
+                    size_t txt_len = buf_length(&t->buf);
+                    char *txt = (char *)malloc(txt_len + 1);
+                    if (txt) {
+                        buf_get_text(&t->buf, 0, txt_len, txt);
+                        txt[txt_len] = '\0';
+                        lsp_open(&t->lsp, t->filepath, lang, txt);
+                        free(txt);
+                        lsp_tokens_full(&t->lsp);
+                        t->lsp_active = 1;
+                        /* Forzar re-tokenizado de todas las lineas */
+                        lexer_cache_dirty(&t->lex, 0);
+                        e->needs_redraw = 1;
+                    }
+                }
+            }
+        }
+        /* Si fallo (LSP_INSTALL_FAILED) simplemente no se hace nada:
+         * el editor sigue funcionando con el resaltado estatico. */
+    }
+}
 
 void editor_run(Editor *e) {
     SDL_Event ev;
     while (e->running) {
         /* Esperar un evento hasta 16 ms (= 1 frame a 60 Hz).
          * Si llega antes, procesarlo; si no, el timeout fuerza la siguiente
-         * iteración garantizando que siempre revisamos el blink y redibujamos. */
+         * iteración garantizando que siempre revisamos el blink y redibujamos.
+         */
         if (SDL_WaitEventTimeout(&ev, 16)) {
             input_handle_event(e, &ev);
             /* Drenar el resto de la cola sin bloquear */
@@ -427,6 +557,9 @@ void editor_run(Editor *e) {
             }
         }
 
+        /* Sondear instalaciones LSP en curso */
+        editor_poll_lsp_install(e);
+
         /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
          * Solo se marca needs_redraw cuando cambia el estado, evitando
          * redibujos innecesarios cuando el cursor no ha cambiado. */
@@ -446,4 +579,3 @@ void editor_run(Editor *e) {
         }
     }
 }
-
