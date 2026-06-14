@@ -25,6 +25,8 @@ void settings_defaults(Settings *s) {
     s->highlight_current_line = 1;
     s->show_shortcuts = 1;
     s->font_path[0] = '\0';
+    s->background_path[0] = '\0';  /* NUEVO: sin fondo personalizado por defecto */
+    s->background_enabled = 0;      /* NUEVO: deshabilitado por defecto */
 }
 
 /**
@@ -81,6 +83,14 @@ void settings_load(Settings *s) {
             strncpy(s->font_path, val, sizeof s->font_path - 1);
             s->font_path[sizeof s->font_path - 1] = '\0';
         }
+        /* NUEVO: Cargar ruta de fondo personalizado */
+        else if (!strcmp(key, "background_path")) {
+            strncpy(s->background_path, val, sizeof s->background_path - 1);
+            s->background_path[sizeof s->background_path - 1] = '\0';
+        }
+        /* NUEVO: Cargar estado del fondo personalizado */
+        else if (!strcmp(key, "background_enabled"))
+            s->background_enabled = atoi(val) ? 1 : 0;
     }
     fclose(f);
 }
@@ -99,5 +109,8 @@ void settings_save(const Settings *s) {
     fprintf(f, "highlight_current_line=%d\n", s->highlight_current_line);
     fprintf(f, "show_shortcuts=%d\n", s->show_shortcuts);
     fprintf(f, "font_path=%s\n", s->font_path);
+    /* NUEVO: Guardar ruta y estado del fondo personalizado */
+    fprintf(f, "background_path=%s\n", s->background_path);
+    fprintf(f, "background_enabled=%d\n", s->background_enabled);
     fclose(f);
 }

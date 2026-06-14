@@ -8,36 +8,52 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Tipo de build por defecto cuando no se pasa -DCMAKE_BUILD_TYPE.
-# La optimización la dicta el tipo de build (Release => -O3, Debug => -g -O0).
+# La optimización la dicta el tipo de build (Release => -O3, Debug => -g -O0)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Tipo de build (Debug/Release/RelWithDebInfo)" FORCE)
 endif()
 
 # Modo "native": optimiza para la microarquitectura de ESTA máquina (-march=native).
 # El binario resultante puede no ejecutar en otras CPUs. Lo activa Compile.bat native.
-option(COFFEE_NATIVE "Compilar optimizado para la CPU local (-march=native)" OFF)
+option(COFFEE_NATIVE     "Compilar optimizado para la CPU local (-march=native)" OFF)
 
 # Sanitizers (ASan + UBSan) en builds Debug. OFF por defecto: en TDM-GCC/Windows
 # puede no enlazar por falta de runtime; funciona en Linux o con Clang.
-option(COFFEE_SANITIZE "Activar AddressSanitizer + UBSan en Debug" OFF)
+option(COFFEE_SANITIZE   "Activar AddressSanitizer + UBSan en Debug" OFF)
 
 # Compilar la batería de tests unitarios (con la librería ctests, auto-descargada).
-# ON por defecto; desactívala con -DCOFFEE_BUILD_TESTS=OFF si solo quieres el editor.
 option(COFFEE_BUILD_TESTS "Compilar los tests unitarios (ctests)" ON)
 
-# Compilar la aplicación CoffeeCode (y sus dependencias SDL3/SDL3_ttf). Ponlo en
-# OFF para compilar SOLO los tests, sin descargar ni construir SDL (mucho más
-# rápido). Lo usa "Compile.bat test".
-option(COFFEE_BUILD_APP "Compilar la aplicación CoffeeCode (requiere SDL)" ON)
+# Compilar la aplicación CoffeeCode (y sus dependencias SDL3/SDL3_ttf).
+option(COFFEE_BUILD_APP  "Compilar la aplicación CoffeeCode (requiere SDL)" ON)
 
 # Force static everywhere — must be set before any FetchContent configures
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
+# ---------------------------------------------------------------------------
+# Silenciar warnings de dependencias externas (SDL, freetype, libjpeg…)
+# Se aplica ANTES de FetchContent para que las subdeps lo hereden.
+# Solo afecta a compiladores GCC/Clang; MSVC usa /w directamente.
+# ---------------------------------------------------------------------------
+if(NOT MSVC)
+    # Quitar -Wall/-Wextra del scope global para que las subdeps no los vean
+    string(REPLACE "-Wall"   "" CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}")
+    string(REPLACE "-Wextra" "" CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}")
+    string(REPLACE "-Wall"   "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "-Wextra" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+
+    # Añadir -w al scope global: silencia warnings en TODAS las subdeps
+    # (se sobreescribirá solo para CoffeeCode con -Wall más adelante)
+    add_compile_options(-w)
+else()
+    add_compile_options(/w)
+endif()
+
 include(FetchContent)
 
-# === Aplicación CoffeeCode (SDL3/SDL3_ttf + el ejecutable) ===================
-# Todo este bloque solo se procesa si COFFEE_BUILD_APP=ON. Con OFF se omite la
-# descarga de SDL y la app, dejando únicamente los tests (build mucho más ligero).
+# ===========================================================================
+# Aplicación CoffeeCode (SDL3 / SDL3_ttf / SDL3_image + ejecutable)
+# ===========================================================================
 if(COFFEE_BUILD_APP)
 
 # -- SDL3 3.2.6 ---------------------------------------------------------------
@@ -75,9 +91,6 @@ set(PACKAGE_VERSION_EXACT TRUE)
 ]])
 
 # -- SDL3_ttf 3.2.2 -----------------------------------------------------------
-# Declare+Populate+add_subdirectory para fijar las opciones de SDL3_ttf antes de
-# configurarlo. CMP0169=OLD suprime el warning de deprecación de
-# FetchContent_Populate con detalles ya declarados.
 if(POLICY CMP0169)
     cmake_policy(SET CMP0169 OLD)
 endif()
@@ -90,14 +103,6 @@ FetchContent_Declare(
 )
 FetchContent_Populate(SDL3_ttf)
 
-# Opciones de SDL3_ttf. IMPORTANTE: las variables reales son SDLTTF_* (SIN el
-# "3"); usar SDL3TTF_* no tiene efecto y deja que SDL3_ttf elija sus defaults
-# (harfbuzz ON y freetype vendorizado), lo que en CI rompía el build.
-#
-# Dejamos que el propio SDL3_ttf vendorice y compile su freetype
-# (SDLTTF_FREETYPE_VENDORED = SDLTTF_VENDORED): así hay un ÚNICO target freetype
-# y no chocan dos definiciones. Desactivamos harfbuzz y plutosvg porque no los
-# necesitamos y evitan dependencias extra (harfbuzz, plutosvg, pkg-config...).
 set(SDLTTF_VENDORED ON  CACHE BOOL "" FORCE)
 set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)
 set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
@@ -105,10 +110,37 @@ set(SDLTTF_SAMPLES  OFF CACHE BOOL "" FORCE)
 set(SDLTTF_INSTALL  OFF CACHE BOOL "" FORCE)
 add_subdirectory("${sdl3_ttf_SOURCE_DIR}" "${sdl3_ttf_BINARY_DIR}")
 
-# -- Icono (.ico en la raíz del proyecto) -------------------------------------
-# Fuentes: main.c en la raíz de src/ + cada módulo en src/<modulo>/<modulo>.c
-# CONFIGURE_DEPENDS: CMake re-escanea en cada build, así un módulo nuevo
-# (src/<modulo>/<modulo>.c) se recoge sin reconfigurar a mano.
+# -- SDL3_image 3.2.0 ---------------------------------------------------------
+# SDLIMAGE_BACKEND_STB=ON  → usa stb_image (C puro) para JPEG y PNG.
+#   Efecto: NO se compila libjpeg-turbo ni libpng vendorizados, por lo que
+#   NO se necesita Perl (que libjpeg-turbo usa para generar tablas SIMD).
+#
+# AVIF y TIFF los desactivamos porque su cadena de deps (libavif/dav1d/libtiff)
+# es enorme, lenta de compilar y no la necesitamos en un editor de código.
+# WEBP también lo desactivamos (libwebp vendorizado añade minutos de build).
+# Los formatos simples sin deps pesadas (BMP, GIF, QOI, TGA, SVG…) se mantienen.
+FetchContent_Declare(
+    SDL3_image
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
+    GIT_TAG        release-3.2.0
+    GIT_SHALLOW    FALSE
+)
+set(SDLIMAGE_VENDORED      ON  CACHE BOOL "" FORCE)
+set(SDLIMAGE_SAMPLES       OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_INSTALL       OFF CACHE BOOL "" FORCE)
+
+# Usar stb_image para JPEG+PNG → elimina libjpeg-turbo → elimina Perl
+set(SDLIMAGE_BACKEND_STB   ON  CACHE BOOL "" FORCE)
+
+# Desactivar formatos con dependencias pesadas que no necesita un editor de código
+set(SDLIMAGE_AVIF          OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_TIF           OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_WEBP          OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_JXL           OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(SDL3_image)
+
+# -- Fuentes ------------------------------------------------------------------
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.c")
 
 if(WIN32)
@@ -120,8 +152,6 @@ if(WIN32)
             @ONLY
         )
         list(APPEND SOURCES "${CMAKE_BINARY_DIR}/app_configured.rc")
-        # windres no declara que el recurso depende del .ico. Lo hacemos explicito
-        # para que cambiar el icono fuerce recompilar el .rc (si no, queda cacheado).
         set_source_files_properties(
             "${CMAKE_BINARY_DIR}/app_configured.rc"
             PROPERTIES OBJECT_DEPENDS "${ICON_ICO}"
@@ -134,23 +164,18 @@ endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
-# La fuente ya no va embebida: se carga en runtime (SDL_GetBasePath()/font.ttf).
-# Copiamos font.ttf junto al ejecutable tras compilar.
 add_custom_command(TARGET CoffeeCode POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/assets/font.ttf"
             "$<TARGET_FILE_DIR:CoffeeCode>/font.ttf"
     COMMENT "Copiando font.ttf junto al ejecutable")
 
-# Cabeceras en include/, organizadas en subcarpetas por módulo
-# (los includes usan prefijo de módulo: #include "editor/editor.h")
 target_include_directories(CoffeeCode PRIVATE "${CMAKE_SOURCE_DIR}/include")
 
-target_link_libraries(CoffeeCode PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf)
+target_link_libraries(CoffeeCode PRIVATE SDL3::SDL3-static SDL3_ttf::SDL3_ttf SDL3_image::SDL3_image)
 
 # -- Platform -----------------------------------------------------------------
 if(WIN32)
-    # Consola visible en Debug (ver stdout/printf); ventana sin consola en el resto
     set_target_properties(CoffeeCode PROPERTIES
         WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>)
     if(MSVC)
@@ -158,7 +183,6 @@ if(WIN32)
     else()
         target_link_options(CoffeeCode PRIVATE -Wl,--entry,mainCRTStartup)
     endif()
-    # ole32/uuid/shell32: diálogos nativos modernos (IFileOpenDialog)
     target_link_libraries(CoffeeCode PRIVATE winmm imm32 version setupapi
                                              ole32 uuid shell32)
 endif()
@@ -167,25 +191,23 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(CoffeeCode PRIVATE m dl pthread)
 endif()
 
-# -- Compile flags ------------------------------------------------------------
+# -- Flags de compilación (SOLO para CoffeeCode, no para las deps) ------------
 if(MSVC)
     target_compile_options(CoffeeCode PRIVATE /W3 /utf-8)
     target_compile_definitions(CoffeeCode PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(COFFEE_NATIVE)
-        # MSVC no tiene -march=native; AVX2 es la aproximación razonable.
         target_compile_options(CoffeeCode PRIVATE /arch:AVX2)
     endif()
 else()
-    # Sin -O fijo: el nivel de optimización lo aporta CMAKE_BUILD_TYPE.
-    target_compile_options(CoffeeCode PRIVATE -Wall
+    # Reactivar warnings SOLO para nuestro código (sobreescribe el -w global)
+    target_compile_options(CoffeeCode PRIVATE
+        -Wall
         -Wno-unused-function
         -Wno-unused-parameter
         -Wno-stringop-truncation)
     if(COFFEE_NATIVE)
         target_compile_options(CoffeeCode PRIVATE -march=native -mtune=native)
     endif()
-    # Info de depuración rica SOLO en Debug: macros (-g3), formato gdb (-ggdb3),
-    # sin optimizar (-O0), frames fiables y DWARF-4 (compatible con el gdb de CLion/MinGW).
     target_compile_options(CoffeeCode PRIVATE
         $<$<CONFIG:Debug>:-g3>
         $<$<CONFIG:Debug>:-ggdb3>
@@ -194,12 +216,9 @@ else()
         $<$<CONFIG:Debug>:-gdwarf-4>)
 endif()
 
-# Define COFFEE_DEBUG solo en builds Debug (asserts / logging condicional en el código)
 target_compile_definitions(CoffeeCode PRIVATE $<$<CONFIG:Debug>:COFFEE_DEBUG>)
 
-# Sanitizers (ASan + UBSan) en Debug cuando COFFEE_SANITIZE=ON. Antes de aplicarlos
-# se comprueba que el toolchain pueda enlazarlos (TDM-GCC/MinGW no suele traer
-# libasan): si no, se avisa y se ignoran, en vez de fallar con un error de enlace.
+# -- Sanitizers ---------------------------------------------------------------
 if(COFFEE_SANITIZE AND NOT MSVC)
     include(CheckLinkerFlag)
     check_linker_flag(C "-fsanitize=address,undefined" COFFEE_SAN_LINKS)
@@ -212,14 +231,11 @@ if(COFFEE_SANITIZE AND NOT MSVC)
         message(STATUS "Sanitizers: ASan+UBSan activos en Debug")
     else()
         message(WARNING "COFFEE_SANITIZE=ON pero el toolchain no enlaza sanitizers "
-                        "(falta libasan/libubsan). Se ignoran. Usa Clang/LLVM-MinGW "
-                        "o compila en Linux para ASan/UBSan.")
+                        "(falta libasan/libubsan). Se ignoran.")
     endif()
 endif()
 
-# -- LTO / IPO (optimización entre módulos) -----------------------------------
-# Se activa en Release y RelWithDebInfo, lo que cubre los modos release y native
-# de Compile.bat (ambos compilan con CMAKE_BUILD_TYPE=Release).
+# -- LTO / IPO ----------------------------------------------------------------
 include(CheckIPOSupported)
 check_ipo_supported(RESULT COFFEE_IPO_OK OUTPUT COFFEE_IPO_MSG)
 if(COFFEE_IPO_OK)
@@ -232,10 +248,7 @@ endif()
 
 endif() # COFFEE_BUILD_APP
 
-# -- Tests unitarios (ctests) -------------------------------------------------
-# La librería de tests se auto-descarga con FetchContent (no hay que instalarla).
-# Solo cubre los módulos "puros" (sin SDL): structs, buffer y lexer.
-# Ejecuta la batería con:   ctest --test-dir <build> --output-on-failure
+# -- Tests unitarios ----------------------------------------------------------
 if(COFFEE_BUILD_TESTS)
     FetchContent_Declare(
         ctests
@@ -248,7 +261,7 @@ if(COFFEE_BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
-# -- Resumen de configuración -------------------------------------------------
+# -- Resumen ------------------------------------------------------------------
 message(STATUS "----------------------------------------------")
 message(STATUS " CoffeeCode")
 message(STATUS "   build type   : ${CMAKE_BUILD_TYPE}")

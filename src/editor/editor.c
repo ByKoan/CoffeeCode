@@ -17,6 +17,7 @@
 #include "input/input.h"
 #include "render/render.h"
 #include "utf8/utf8.h"
+#include <SDL3_image/SDL_image.h>
 
 /**
  * @brief Abre la fuente TrueType del editor desde disco.
@@ -319,6 +320,15 @@ int editor_init(Editor *e, const char *filepath) {
     e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
     fonts_scan(&e->fonts); /* fuentes del sistema para el selector */
 
+    /* fondo personalizado: inicializar y cargar si estaba habilitado */
+    e->background_texture = NULL;
+    e->background_w = 0;
+    e->background_h = 0;
+    if (e->settings.background_enabled && e->settings.background_path[0]) {
+        /* Se carga después de crear el renderer (más abajo); guardamos el flag
+         * para hacerlo en el momento correcto. Por ahora solo inicializamos. */
+    }
+
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_Init\n"); /* trazas de arranque solo en debug */
@@ -394,6 +404,11 @@ int editor_init(Editor *e, const char *filepath) {
     /* -- Panel explorador de archivos -- */
     ftree_init(&e->ftree);
 
+    /* Cargar fondo personalizado ahora que el renderer ya está creado */
+    if (e->settings.background_enabled && e->settings.background_path[0]) {
+        editor_load_background(e, e->settings.background_path);
+    }
+
     /* -- Pestañas --
      * Si se pasó un filepath, abrir ese archivo en la primera pestaña; si no,
      * arrancar sin pestañas (tab_count = 0 → render muestra la bienvenida).
@@ -432,6 +447,8 @@ void editor_free(Editor *e) {
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);
     fonts_free(&e->fonts);               /* lista de fuentes del sistema */
+    if (e->background_texture)
+        SDL_DestroyTexture(e->background_texture); /* liberar textura de fondo */
     if (e->font) TTF_CloseFont(e->font); /* liberar la fuente abierta */
     if (e->renderer)
         SDL_StopTextInput(e->window); /* desactivar eventos de texto */
@@ -578,4 +595,65 @@ void editor_run(Editor *e) {
             e->needs_redraw = 0;
         }
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * FONDO PERSONALIZADO
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/**
+ * @brief Carga una imagen como textura de fondo del editor.
+ *
+ * Usa SDL_image para soportar PNG, JPG, BMP, GIF (primer frame), TIFF, WebP,
+ * etc. La textura se sube a GPU una sola vez y se reutiliza en cada frame,
+ * sin coste de CPU adicional.
+ *
+ * Si @p path es NULL o vacío, libera la textura actual (queda sin fondo).
+ *
+ * @param e    Editor destino (debe tener e->renderer ya inicializado).
+ * @param path Ruta a la imagen. "" o NULL = limpiar el fondo actual.
+ * @return 1 si se cargó (o limpió) correctamente; 0 si falló la carga.
+ */
+int editor_load_background(Editor *e, const char *path) {
+    /* Si no hay ruta o está vacía, limpiar el fondo actual */
+    if (!path || !path[0]) {
+        if (e->background_texture) {
+            SDL_DestroyTexture(e->background_texture);
+            e->background_texture = NULL;
+            e->background_w = 0;
+            e->background_h = 0;
+        }
+        return 1;
+    }
+
+    /* Cargar la imagen con SDL_image */
+    SDL_Surface *surf = IMG_Load(path);
+    if (!surf) {
+        fprintf(stderr, "[CoffeeCode] No se pudo cargar la imagen de fondo: %s\n"
+                        "             Razón: %s\n", path, SDL_GetError());
+        return 0;
+    }
+
+    /* Destruir la textura anterior si existía */
+    if (e->background_texture) {
+        SDL_DestroyTexture(e->background_texture);
+        e->background_texture = NULL;
+    }
+
+    /* Convertir la superficie (CPU) a textura (GPU) */
+    e->background_texture = SDL_CreateTextureFromSurface(e->renderer, surf);
+    e->background_w = surf->w;
+    e->background_h = surf->h;
+    SDL_DestroySurface(surf);
+
+    if (!e->background_texture) {
+        fprintf(stderr, "[CoffeeCode] Error creando textura de fondo: %s\n",
+                SDL_GetError());
+        return 0;
+    }
+
+    fprintf(stdout, "[CoffeeCode] Fondo cargado: %s (%dx%d)\n",
+            path, e->background_w, e->background_h);
+    return 1;
 }

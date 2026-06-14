@@ -201,6 +201,11 @@ typedef struct {
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */
     Theme theme;
+
+    /* fondo personalizado del editor */
+    SDL_Texture *background_texture; /**< Textura de imagen de fondo (NULL si no hay). */
+    int background_w;                /**< Ancho original de la imagen de fondo.         */
+    int background_h;                /**< Alto original de la imagen de fondo.          */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -254,3 +259,16 @@ void editor_tab_open(Editor *e, const char *path);
 void editor_tab_close(Editor *e);
 void editor_tab_switch(Editor *e, int i);
 void editor_tab_save_state(Editor *e);
+
+/* -- Fondo personalizado --------------------------------------------------- */
+/**
+ * @brief Carga una imagen como textura de fondo del editor.
+ *
+ * Si @p path está vacío o es NULL, libera el fondo actual. La imagen se carga
+ * con SDL_image y se sube a GPU como textura para un renderizado eficiente.
+ *
+ * @param e    Editor destino.
+ * @param path Ruta a la imagen (PNG, JPG, BMP, etc.). "" o NULL limpia el fondo.
+ * @return 1 si se cargó (o limpió) exitosamente; 0 en caso de error.
+ */
+int editor_load_background(Editor *e, const char *path);

@@ -178,6 +178,25 @@ void render_settings_view(Editor *e) {
     pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
                 theme_name(e->settings.theme));
     y += PREF_ROW_H;
+    pref_toggle(e, UI_PREF_BG_ENABLED, x, y, col_w, "Fondo personalizado",
+                e->settings.background_enabled);
+    y += PREF_ROW_H;
+    {
+        /* Mostrar solo el nombre del archivo, no la ruta completa */
+        const char *bg_label = "Seleccionar...";
+        char bg_name[64] = {0};
+        if (e->settings.background_path[0]) {
+            const char *p = e->settings.background_path;
+            const char *last = p;
+            for (; *p; p++)
+                if (*p == '/' || *p == '\\') last = p + 1;
+            snprintf(bg_name, sizeof bg_name, "%s", last);
+            bg_label = bg_name;
+        }
+        pref_choice(e, UI_PREF_BG_LOAD, x, y, col_w, "Imagen de fondo",
+                    bg_label);
+    }
+    y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_FONTSZ_DEC, UI_PREF_FONTSZ_INC, x, y, col_w,
                  "Tamano de fuente", e->settings.font_size);
     y += PREF_ROW_H + 12;

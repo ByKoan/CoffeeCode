@@ -27,6 +27,8 @@ typedef struct {
                                  */
     int show_shortcuts;  /**< 1 = mostrar la barra de atajos inferior.       */
     char font_path[512]; /**< Ruta a la fuente; "" = fuente por defecto.     */
+    char background_path[512]; /**< Ruta a imagen de fondo personalizado.     */
+    int background_enabled; /**< 1 = usar fondo personalizado.                */
 } Settings;
 
 /** Rellena @p s con los valores por defecto. */
