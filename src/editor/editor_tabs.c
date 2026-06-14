@@ -287,51 +287,6 @@ void editor_tab_open(Editor *e, const char *path) {
     editor_update_lexer(e, 0); /* marcar todas las líneas para re-tokenizar */
     editor_sync_cursor(e); /* fijar cursor_line/col desde la pos del buffer */
 
-    /* Arrancar cliente LSP si hay servidor disponible para este lenguaje */
-    {
-        const char *lang = lsp_language_id_for_path(path);
-        const char *cmd = lang ? lsp_server_cmd_for_language(lang) : NULL;
-        if (cmd) {
-            /* Construir URI del workspace (directorio del archivo) */
-            char ws_uri[512];
-            char ws_path[512];
-            strncpy(ws_path, path, sizeof(ws_path) - 1);
-            char *last_sep = strrchr(ws_path, '/');
-#ifdef _WIN32
-            char *last_sep2 = strrchr(ws_path, '\\');
-            if (!last_sep || (last_sep2 && last_sep2 > last_sep))
-                last_sep = last_sep2;
-#endif
-            if (last_sep)
-                *last_sep = '\0';
-            else
-                strncpy(ws_path, ".", sizeof(ws_path) - 1);
-            path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
-
-            if (lsp_server_available(lang)) {
-                /* El servidor ya esta instalado: arrancarlo directamente */
-                if (lsp_start(&t->lsp, cmd, ws_uri)) {
-                    size_t txt_len = buf_length(&t->buf);
-                    char *txt = (char *)malloc(txt_len + 1);
-                    if (txt) {
-                        buf_get_text(&t->buf, 0, txt_len, txt);
-                        txt[txt_len] = '\0';
-                        lsp_open(&t->lsp, path, lang, txt);
-                        free(txt);
-                        lsp_tokens_full(&t->lsp);
-                        t->lsp_active = 1;
-                    }
-                }
-            } else {
-                /* No esta instalado: lanzar instalacion automatica en
-                 * background. El bucle principal sondeara lsp_install_poll()
-                 * cada frame y, cuando termine, reintentara lsp_start()
-                 * automaticamente. */
-                lsp_install_async(&t->lsp_install, lang);
-            }
-        }
-    }
-
     e->needs_redraw = 1;
 }
 
@@ -346,12 +301,6 @@ void editor_tab_open(Editor *e, const char *path) {
  * @param t Pestaña cuyos recursos se liberan.
  */
 void tab_free_resources(EditorTab *t) {
-    /* Detener el cliente LSP si estaba activo */
-    if (t->lsp_active) {
-        lsp_close(&t->lsp);
-        lsp_stop(&t->lsp);
-        t->lsp_active = 0;
-    }
     buf_free(&t->buf);
     lexer_cache_free(&t->lex);
     /* la pila de undo posee los `text` de cada entrada: liberarlos antes del
