@@ -20,6 +20,7 @@
 #define PREF_SIDE_PAD 40 /* margen lateral mínimo                    */
 #define PREF_CTRL_W 150  /* ancho de la zona de control (derecha)    */
 #define PREF_STEP_BTN 28 /* lado de los botones −/+ del stepper      */
+#define PREF_RESET_BTN_W 200 /* ancho del botón "Restablecer valores"    */
 /* Los colores se leen del tema (e->theme.*): fondo=col_bg,
    cabecera=col_navbar_bg, sección=col_ftree_root, etiqueta=tokens[TOK_DEFAULT],
    valor=col_ftree_file. */
@@ -158,7 +159,7 @@ void render_settings_view(Editor *e) {
     set_color_c(r, e->theme.col_bg);
     fill_rect(r, 0, 0, e->win_w, e->win_h);
 
-    /* -- Cabecera: botón Volver + título -- */
+    /* -- Cabecera: botón Volver + título + botón Restablecer -- */
     set_color_c(r, e->theme.col_navbar_bg);
     fill_rect(r, 0, 0, e->win_w, PREF_HEADER_H);
     Rect back = {12, 8, 110, PREF_HEADER_H - 16};
@@ -166,6 +167,12 @@ void render_settings_view(Editor *e) {
               UI_NORMAL);
     draw_text_c(e, "Preferencias", 140, row_text_y(e, 0, PREF_HEADER_H),
                 e->theme.tokens[TOK_DEFAULT]);
+
+    /* botón de reseteo, anclado a la derecha de la cabecera */
+    Rect reset = {e->win_w - 12 - PREF_RESET_BTN_W, 8, PREF_RESET_BTN_W,
+                  PREF_HEADER_H - 16};
+    ui_button(e, UI_PREF_RESET, reset, "Restablecer valores",
+              &e->theme.style_button, UI_NORMAL);
 
     /* -- Columna de contenido centrada (ancho acotado) -- */
     int col_w = e->win_w - 2 * PREF_SIDE_PAD;

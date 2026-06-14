@@ -45,6 +45,7 @@ typedef enum {
     UI_SCROLLBAR, /**< Pulgar de la barra de scroll vertical.      */
     /* Pantalla de preferencias */
     UI_PREF_BACK,       /**< Botón "← Volver" de preferencias.        */
+    UI_PREF_RESET,      /**< Botón "Restablecer valores por defecto". */
     UI_PREF_AUTOSAVE,   /**< Toggle de autoguardado.                  */
     UI_PREF_LINENUM,    /**< Toggle de números de línea.              */
     UI_PREF_HLLINE,     /**< Toggle de resaltar la línea activa.      */

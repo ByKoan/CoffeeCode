@@ -545,6 +545,20 @@ static void handle_settings_click(Editor *e, int mx, int my) {
     Settings *s = &e->settings;
     if (ui_hit(&e->ui, UI_PREF_BACK, mx, my)) {
         e->settings_open = 0; /* volver al editor */
+    } else if (ui_hit(&e->ui, UI_PREF_RESET, mx, my)) {
+        /* Restablecer todas las preferencias a sus valores por defecto */
+        settings_defaults(s);
+
+        /* Reaplicar los ajustes que afectan al estado "en vivo" del editor */
+        e->autosave = s->autosave;
+        e->theme = theme_preset(s->theme); /* paleta de colores por defecto */
+        editor_reload_font(e); /* font_path/font_size vuelven a sus defaults */
+
+        /* Sin fondo personalizado por defecto: limpiar la textura si había */
+        editor_load_background(e, "");
+
+        e->font_list_scroll = 0; /* "Predeterminada" vuelve a ser la fila 0 */
+        settings_save(s);
     } else if (ui_hit(&e->ui, UI_PREF_THEME, mx, my)) {
         s->theme = (s->theme + 1) % THEME_COUNT; /* siguiente preset */
         e->theme = theme_preset(s->theme);       /* aplicar al instante */
