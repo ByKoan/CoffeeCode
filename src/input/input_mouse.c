@@ -43,10 +43,62 @@ static int bottom_offset_at(Editor *e, int mx, int my);
  * @return X en píxeles donde empieza la zona a la derecha del panel.
  */
 int get_left_offset(Editor *e) {
+    /* Con el editor dividido, el origen del área de texto es el del panel que se
+     * está procesando (lo fija el llamante en e->pane_left con pane_active=1).
+     * Sin división (pane_active==0) se usa el origen global de siempre. */
+    if (e->pane_active) return e->pane_left;
     /* panel abierto: su ancho actual */
     if (e->ftree.open) return e->ftree.width;
     return FTREE_TOGGLE_BTN_W; /* panel cerrado: solo el botón   */
 }
+
+/* ── División del editor (split panes): geometría e hit-test ────────────────
+ */
+
+/**
+ * @brief Banda horizontal [left, right) del área del editor (entre el explorador
+ *        y el panel de extensiones).  Igual que la del panel inferior.
+ */
+static void editor_area_h(Editor *e, int *left, int *right) {
+    *left = get_left_offset(e);
+    *right = e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
+}
+
+/**
+ * @brief Grupo del editor dividido bajo la X del cursor (0 = izquierda, 1 =
+ *        derecha), o -1 si el editor no está dividido.
+ *
+ * Usa split_x como frontera.  No comprueba la Y (el llamante ya sabe que el clic
+ * cae en el área del editor).
+ */
+static int editor_group_at_x(Editor *e, int mx) {
+    if (e->group_count != 2) return -1;
+    return (mx < e->split_x) ? 0 : 1;
+}
+
+/**
+ * @brief Fija el override de área (e->pane_*) al sub-rect del grupo @p g.
+ *
+ * Lo usa el input para que get_left_offset/point_to_line_col operen sobre el
+ * panel correcto al mapear un clic.  El llamante debe limpiar pane_active tras
+ * usarlo (clear_pane_override).
+ */
+static void set_pane_override(Editor *e, int g) {
+    int left, right;
+    /* pane_active=0 aquí para que editor_area_h use el origen global */
+    e->pane_active = 0;
+    editor_area_h(e, &left, &right);
+    int px = (g == 0) ? left : e->split_x;
+    int pr = (g == 0) ? e->split_x : right;
+    e->pane_active = 1;
+    e->pane_left = px;
+    e->pane_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
+    e->pane_width = pr - px;
+    e->pane_height = 0; /* el input no necesita el alto */
+}
+
+/** Limpia el override de área tras un mapeo de clic. */
+static void clear_pane_override(Editor *e) { e->pane_active = 0; }
 
 /* ── Divisores arrastrables (redimension de paneles) ────────────────────────
  */
@@ -281,13 +333,22 @@ void handle_scroll(Editor *e, float wheel_dy) {
  * @param my Coordenada Y del clic en píxeles.
  */
 void handle_text_click(Editor *e, int mx, int my) {
+    if (e->group_count == 2) {
+        int g = editor_group_at_x(e, mx);
+        if (g >= 0) editor_focus_group(e, g);
+        set_pane_override(e, e->active_group);
+    }
     int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* fuera del texto */
-    if (mx < text_x || e->tab_count == 0 || !e->buf) return;
+    if (mx < text_x || e->tab_count == 0 || !e->buf) {
+        clear_pane_override(e);
+        return;
+    }
     int line, col;
     point_to_line_col(e, mx, my, &line, &col);
     editor_sel_clear(e);
     move_cursor(e, line, col);
+    clear_pane_override(e);
 }
 
 /* ── Manejadores de eventos de ratón (invocados por input_handle_event) ── */
@@ -465,6 +526,8 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
 
     /* arrastre para seleccionar texto (el ancla se fijó en BUTTON_DOWN) */
     if (e->mouse_selecting && e->tab_count > 0) {
+        /* la selección sigue en el panel del grupo enfocado */
+        if (e->group_count == 2) set_pane_override(e, e->active_group);
         int line, col;
         /* punto bajo el ratón */
         point_to_line_col(e, mouse_x, mouse_y, &line, &col);
@@ -474,6 +537,7 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         editor_sync_cursor(e); /* reflejar el cursor en (línea, columna) */
         /* auto-scroll si se arrastra fuera de la vista */
         editor_ensure_visible(e);
+        clear_pane_override(e);
         e->needs_redraw = 1;
     }
 }
@@ -493,6 +557,15 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param my Coordenada Y del clic en píxeles.
  */
 static void click_tabbar(Editor *e, int mx, int my) {
+    /* Botón "+" del editor dividido (por grupo): crea una pestaña en ese grupo. */
+    if (e->group_count == 2) {
+        int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
+        if (gnew >= 0) {
+            editor_focus_group(e, gnew); /* enfocar ese grupo */
+            editor_tab_new(e);           /* nueva pestaña en él */
+            return;
+        }
+    }
     if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
         editor_tab_new(e); /* botón "+": pestaña nueva */
         return;
@@ -506,9 +579,14 @@ static void click_tabbar(Editor *e, int mx, int my) {
 
     if (close_i >= 0) {           /* "x": cerrar esa pestaña */
         editor_tab_save_state(e); /* guardar estado de la pestaña actual */
+        /* enfocar el grupo de la pestaña que se cierra (split-aware) */
+        if (e->group_count == 2) e->active_group = e->tabs[close_i].group;
         e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
         editor_tab_close(e);
     } else {
+        /* enfocar primero el grupo de la pestaña pulsada para no robarla al
+         * otro panel (editor_tab_switch la asigna al grupo enfocado) */
+        if (e->group_count == 2) editor_focus_group(e, e->tabs[tab_i].group);
         editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
     }
     /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
@@ -593,6 +671,13 @@ static int click_find_bar(Editor *e, int mx, int my) {
  */
 static void start_text_selection(Editor *e, int mx, int my) {
     if (e->tab_count == 0) return;
+    /* Con el editor dividido, enfocar el grupo del panel pulsado y mapear el
+     * clic con la geometría de ese panel. */
+    if (e->group_count == 2) {
+        int g = editor_group_at_x(e, mx);
+        if (g >= 0) editor_focus_group(e, g);
+        set_pane_override(e, e->active_group);
+    }
     int line, col;
     point_to_line_col(e, mx, my, &line, &col);
     editor_sel_clear(e);
@@ -604,6 +689,7 @@ static void start_text_selection(Editor *e, int mx, int my) {
     buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
     editor_sync_cursor(e);
     editor_ensure_visible(e);
+    clear_pane_override(e);
     e->needs_redraw = 1;
 }
 

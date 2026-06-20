@@ -154,6 +154,42 @@ static void test_bottom_clamp_dentro(void) {
     EXPECT_EQ_INT(layout_clamp_bottom_h(200, 800), 200);
 }
 
+/* -- Clampeo del divisor del editor dividido (split panes) ------------------ */
+
+/** Un valor dentro del rango se respeta tal cual. */
+static void test_split_clamp_dentro(void) {
+    /* area [100, 900): rango valido del divisor [100+MIN, 900-MIN] */
+    EXPECT_EQ_INT(layout_clamp_split_x(500, 100, 900), 500);
+}
+
+/** Pedir el divisor pegado a la izquierda lo recorta para dejar el minimo. */
+static void test_split_clamp_min(void) {
+    int x = layout_clamp_split_x(0, 100, 900); /* 0 < 100+MIN */
+    EXPECT_EQ_INT(x, 100 + LAYOUT_SPLIT_MIN_W);
+}
+
+/** Pedir el divisor pegado a la derecha lo recorta para dejar el minimo. */
+static void test_split_clamp_max(void) {
+    int x = layout_clamp_split_x(99999, 100, 900); /* > 900-MIN */
+    EXPECT_EQ_INT(x, 900 - LAYOUT_SPLIT_MIN_W);
+}
+
+/** Ambos paneles conservan al menos el minimo en los extremos del rango. */
+static void test_split_min_por_panel(void) {
+    int left = 100, right = 900;
+    int xmin = layout_clamp_split_x(-1, left, right);    /* tope izquierdo */
+    int xmax = layout_clamp_split_x(99999, left, right); /* tope derecho   */
+    EXPECT_TRUE(xmin - left >= LAYOUT_SPLIT_MIN_W);       /* panel izq. ok  */
+    EXPECT_TRUE(right - xmax >= LAYOUT_SPLIT_MIN_W);      /* panel der. ok  */
+}
+
+/** Area demasiado estrecha para dos minimos: cae al punto medio. */
+static void test_split_area_estrecha(void) {
+    /* ancho 100 < 2*MIN: no caben dos minimos -> punto medio (150) */
+    int x = layout_clamp_split_x(120, 100, 200);
+    EXPECT_EQ_INT(x, 150);
+}
+
 int main(void) {
     tt_suite("layout");
     tt_run("borde: punto sobre el centro", test_edge_centro);
@@ -173,5 +209,10 @@ int main(void) {
     tt_run("bottom: clamp al minimo", test_bottom_clamp_min);
     tt_run("bottom: clamp al maximo (casi libre)", test_bottom_clamp_max);
     tt_run("bottom: valor dentro del rango", test_bottom_clamp_dentro);
+    tt_run("split: valor dentro del rango", test_split_clamp_dentro);
+    tt_run("split: clamp al minimo izquierdo", test_split_clamp_min);
+    tt_run("split: clamp al maximo derecho", test_split_clamp_max);
+    tt_run("split: minimo por panel en los extremos", test_split_min_por_panel);
+    tt_run("split: area estrecha cae al punto medio", test_split_area_estrecha);
     return tt_summary();
 }

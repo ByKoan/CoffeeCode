@@ -82,7 +82,16 @@ typedef struct {
     /* La geometría de la pestaña (su rectángulo y el botón de cerrar) la
      * registra el render en e->ui por índice (UI_LIST_TAB / UI_LIST_TAB_CLOSE).
      */
+    int group; /* grupo al que pertenece la pestaña: 0 (por defecto) o 1.
+                  Con un solo grupo todas valen 0 y el comportamiento es el de
+                  siempre; al dividir el editor, las pestañas se reparten entre
+                  el grupo 0 (izquierda) y el grupo 1 (derecha). */
 } EditorTab;
+
+/* -- División del editor (split panes) -----------------------------------
+ * Máximo de grupos lado a lado.  Hoy 2 (izquierda/derecha); la
+ * infraestructura usa el contador group_count para no asumir el número. */
+#define MAX_GROUPS 2
 
 /* -- Barra de búsqueda ---------------------------------------------------- */
 #define FIND_BAR_MAX 256
@@ -126,6 +135,22 @@ typedef struct Editor {
     EditorTab tabs[MAX_TABS]; /* archivos abiertos (array fijo)         */
     int tab_count;            /* nº de pestañas abiertas                */
     int active_tab;           /* índice de la pestaña activa            */
+
+    /* -- división del editor (split panes) ----------------------------------
+     * Con group_count==1 (estado por defecto) el editor se comporta EXACTAMENTE
+     * como antes: un único grupo a pantalla completa.  Con group_count==2 el
+     * área del editor se parte en dos paneles lado a lado; cada uno muestra solo
+     * SUS pestañas (las que tienen tab.group == g) y su pestaña activa.  El
+     * grupo enfocado (active_group) recibe el teclado y la edición: e->buf y los
+     * escalares de vista reflejan SIEMPRE la pestaña activa del grupo con foco,
+     * así todo el código existente sigue operando sobre el grupo enfocado. */
+    int group_count;                /* 1 (sin dividir) o 2 (dividido)        */
+    int active_group;               /* grupo con el foco (0 o 1)             */
+    int group_active_tab[MAX_GROUPS]; /* índice GLOBAL en tabs[] de la pestaña
+                                         activa de cada grupo                */
+    int split_x;                    /* X (px) del divisor entre los dos paneles
+                                       del editor; 0 = aún sin colocar (se
+                                       inicializa a 50/50 al dividir)        */
 
     /* Punteros al tab activo — NUNCA copias por valor.
      * Apuntan directamente a tabs[active_tab].buf/lex/undo;
@@ -250,6 +275,19 @@ typedef struct Editor {
      * Estado del arrastre del borde de un panel para redimensionarlo. */
     int dragging_divider; /* LayoutDivider en curso, o DIVIDER_NONE (-1) */
     int hovered_divider;  /* LayoutDivider bajo el cursor, o DIVIDER_NONE  */
+
+    /* -- Override transitorio del área de contenido del editor --------------
+     * Cuando el editor está dividido, el render dibuja CADA panel haciendo su
+     * pestaña activa la activa temporalmente y fijando aquí el sub-rectángulo
+     * del panel; el dibujante de contenido (y el mapeo píxel->columna del
+     * input) leen este override en vez del área global de la ventana.  Con
+     * pane_active==0 (caso de 1 grupo) NADIE consulta estos campos y la
+     * geometría es la de siempre: cero regresión.  El left/top/width/height
+     * acotan el área ÚTIL del editor de ese panel (entre su barra de pestañas y
+     * el panel inferior/status). */
+    int pane_active;                       /* 1 = usar el override de abajo   */
+    int pane_left, pane_top;               /* origen del área del panel (px)  */
+    int pane_width, pane_height;           /* tamaño del área del panel (px)  */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -303,3 +341,22 @@ void editor_tab_open(Editor *e, const char *path);
 void editor_tab_close(Editor *e);
 void editor_tab_switch(Editor *e, int i);
 void editor_tab_save_state(Editor *e);
+
+/* -- División del editor (split panes) ------------------------------------- */
+/* Enfoca el grupo @p g: guarda la vista actual en su pestaña, fija
+ * active_group=g y carga el estado de la pestaña activa de ese grupo (de modo
+ * que e->buf y los escalares de vista pasen a reflejar el grupo enfocado). No
+ * hace nada si @p g está fuera de rango o ya es el grupo activo. */
+void editor_focus_group(Editor *e, int g);
+/* Divide el editor en dos grupos lado a lado (si aún no lo estaba): mueve la
+ * pestaña activa al grupo 1 y enfoca ese grupo. Si solo hay una pestaña, crea
+ * una nueva vacía para no dejar el grupo 0 sin contenido. No hace nada si ya
+ * está dividido. */
+void editor_split(Editor *e);
+
+/* Enlaza SOLO los punteros y escalares "en vivo" del editor a la pestaña de
+ * índice global @p idx, SIN recargar del disco ni tocar la cache del lexer. Es
+ * un cambio de vista barato para que el RENDER dibuje el contenido de un grupo
+ * no enfocado: tras dibujarlo, el render vuelve a enlazar la pestaña del grupo
+ * con foco. No usar para cambiar el foco real (eso es editor_focus_group). */
+void editor_render_bind_tab(Editor *e, int idx);

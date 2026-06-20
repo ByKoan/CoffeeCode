@@ -82,6 +82,8 @@ typedef enum {
     UI_LIST_EXT_RELOAD, /**< Botón "recargar" de cada extension. */
     UI_LIST_EXT_UNLOAD, /**< Botón "descargar" de cada extension. */
     UI_LIST_BOTTOM_TAB, /**< Pestañas del panel inferior (por índice de canal). */
+    UI_LIST_SPLIT_NEW,  /**< Botón "+" de nueva pestaña de cada grupo (split),
+                           indexado por número de grupo (0 o 1).            */
     UI_LIST_COUNT
 } UiList;
 

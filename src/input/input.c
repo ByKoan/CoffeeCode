@@ -318,6 +318,9 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
         if (e->tab_count > 0)
             editor_tab_switch(e, (e->active_tab + 1) % e->tab_count);
         break;
+    case SDLK_BACKSLASH: /* Ctrl+\: dividir el editor en dos paneles */
+        editor_split(e);
+        break;
     case SDLK_C:
         /* Ctrl+C con el panel inferior enfocado: copiar su canal (funciona
          * aunque no haya ningun archivo abierto). */

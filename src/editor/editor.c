@@ -495,6 +495,12 @@ int editor_init(Editor *e, const char *filepath) {
      * buf/lex/undo a NULL: apuntarán al almacenamiento de la pestaña activa. */
     e->tab_count = 0;
     e->active_tab = 0;
+    /* Editor sin dividir por defecto: un único grupo a pantalla completa. */
+    e->group_count = 1;
+    e->active_group = 0;
+    e->group_active_tab[0] = e->group_active_tab[1] = 0;
+    e->split_x = 0;
+    e->pane_active = 0;
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;

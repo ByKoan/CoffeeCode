@@ -22,6 +22,7 @@
  * abajo.
  */
 #include "render_internal.h"
+#include "layout/layout.h"
 #include "utf8/utf8.h"
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,33 @@
 #define GUTTER_NUM_PAD 4 /* sangría del número de línea en el gutter     */
 #define LINE_BUF_SZ 4096 /* buffer temporal por línea visible           */
 #define TOKEN_CHUNK 255  /* máx. caracteres por fragmento de texto       */
+
+/* ── Geometría del área de contenido (respeta el split de paneles) ──────────
+ */
+
+/**
+ * @brief Borde derecho (X exclusiva, px) del área de contenido del editor.
+ *
+ * Sin división (pane_active==0) es el ancho de la ventana: el comportamiento de
+ * siempre.  Con el editor dividido, devuelve el borde derecho del sub-rect del
+ * panel que se está dibujando, para que texto, cursor y selección no invadan el
+ * otro panel.
+ *
+ * @param e Editor. @return X exclusiva del borde derecho del contenido.
+ */
+int render_content_right(Editor *e) {
+    return e->pane_active ? (e->pane_left + e->pane_width) : e->win_w;
+}
+
+/**
+ * @brief Borde izquierdo (X, px) del área de contenido del editor.
+ *
+ * Sin división, 0 (para bandas a todo lo ancho como la línea activa).  Con
+ * división, el origen del sub-rect del panel actual.
+ */
+int render_content_left(Editor *e) {
+    return e->pane_active ? e->pane_left : 0;
+}
 
 /* ── Utilidades de dibujo compartidas ───────────────────────────────────────
  */
@@ -283,6 +311,10 @@ void render_selection(Editor *e, int left_offset, int text_top,
         if (x_start < text_x) x_start = text_x; /* no invadir el gutter */
         if (x_end < x_start)
             x_end = x_start + e->char_w; /* asegurar ancho mínimo */
+        /* con el editor dividido, no invadir el panel contiguo */
+        int right = render_content_right(e);
+        if (x_start >= right) continue; /* línea fuera del panel por completo */
+        if (x_end > right) x_end = right;
 
         fill_rect(r, x_start, y, x_end - x_start, e->line_height);
     }
@@ -482,6 +514,23 @@ static void draw_seg(Editor *e, const char *line, int b0, int b1, int col0,
     }
     if (b < b1) {
         int x = text_x + (col - sc) * e->char_w;
+        /* Con el editor dividido, recortar el fragmento al borde derecho del
+         * panel para que el texto no invada el panel contiguo.  Sin división el
+         * borde es e->win_w y este recorte no quita nada. */
+        int right = render_content_right(e);
+        if (e->char_w > 0 && right > x) {
+            int max_cols = (right - x) / e->char_w;
+            if (max_cols <= 0) return; /* no cabe ni un carácter */
+            /* recortar b1 a max_cols caracteres de display desde b */
+            int bb = b, cc = 0;
+            while (bb < b1 && cc < max_cols) {
+                uint32_t cp;
+                int n = utf8_decode(line + bb, b1 - bb, &cp);
+                cc += utf8_cp_width(cp);
+                bb += n;
+            }
+            b1 = bb;
+        }
         draw_substr(e, line, b, b1 - b, x, y, c);
     }
 }
@@ -633,9 +682,126 @@ static void render_cursor(Editor *e, int left_offset, int text_top,
     int cx =
         left_offset + editor_gutter_w(e) + PADDING_LEFT + vis_col * e->char_w;
     int cy = text_top + vis_line * e->line_height;
+    /* con el editor dividido, no pintar el cursor si cae fuera del panel */
+    if (cx >= render_content_right(e)) return;
     set_color_c(e->renderer, e->theme.col_cursor);
     /* barra vertical del cursor */
     fill_rect(e->renderer, cx, cy, CURSOR_W, e->line_height);
+}
+
+/**
+ * @brief Dibuja las capas del contenido del editor (línea activa, selección,
+ *        texto, gutter, cursor) para la pestaña que el editor tiene "en vivo".
+ *
+ * Aísla el dibujado del CONTENIDO para reutilizarlo tanto en el editor sin
+ * dividir como en cada panel del editor dividido.  La banda activa horizontal
+ * va de @p left_offset (incluido el gutter) a @p content_right; el resto de la
+ * geometría se pasa explícita.
+ *
+ * @param e             Editor (lee buf/cursor/scroll/selección "en vivo").
+ * @param left_offset   X donde empieza el área de este panel (px).
+ * @param content_right X exclusiva del borde derecho del panel (px).
+ * @param text_top      Y de la primera fila de texto (px).
+ * @param text_height   Alto del área de texto (px).
+ * @param visible_lines Filas que caben.
+ * @param total_lines   Total de líneas del buffer.
+ */
+static void render_content_layers(Editor *e, int left_offset, int content_right,
+                                  int text_top, int text_height,
+                                  int visible_lines, int total_lines) {
+    SDL_Renderer *r = e->renderer;
+    /* resaltado de la línea activa (banda completa del panel) */
+    if (e->settings.highlight_current_line && !e->sel_active) {
+        int vi_cursor = e->cursor_line - e->scroll_line;
+        if (vi_cursor >= 0 && vi_cursor < visible_lines) {
+            int band_left = render_content_left(e);
+            set_color_c(r, e->theme.col_cursor_line);
+            fill_rect(r, band_left, text_top + vi_cursor * e->line_height,
+                      content_right - band_left, e->line_height);
+        }
+    }
+    render_selection(e, left_offset, text_top, visible_lines);
+    render_text_area(e, left_offset, text_top, visible_lines, total_lines);
+    render_gutter(e, left_offset, text_top, text_height, visible_lines,
+                  total_lines);
+    render_cursor(e, left_offset, text_top, visible_lines);
+}
+
+/**
+ * @brief Dibuja los dos paneles del editor dividido (split panes).
+ *
+ * Parte el área del editor en dos sub-rects por el divisor (split_x) y, para
+ * cada grupo, enlaza su pestaña activa "en vivo" (sin recargar del disco),
+ * activa el override de área (e->pane_*), dibuja su barra de pestañas (solo las
+ * suyas) y su contenido recortado a su sub-rect, y resalta con un acento el
+ * panel enfocado.  Al final vuelve a enlazar la pestaña del grupo con foco para
+ * que e-> termine reflejando el grupo activo.  Asume que el llamante ya guardó
+ * el estado del grupo enfocado con editor_tab_save_state.
+ *
+ * @param e             Editor (group_count==2).
+ * @param area_left     Borde izquierdo del área del editor (px).
+ * @param area_right    Borde derecho del área del editor (exclusivo, px).
+ * @param text_top      Y de la primera fila de texto (px).
+ * @param text_height   Alto del área de texto (px).
+ * @param visible_lines Filas que caben.
+ */
+static void render_split_panes(Editor *e, int area_left, int area_right,
+                               int text_top, int text_height,
+                               int visible_lines) {
+    SDL_Renderer *r = e->renderer;
+
+    /* Inicializar el divisor a 50/50 la primera vez (split_x==0). */
+    if (e->split_x <= 0)
+        e->split_x = layout_clamp_split_x((area_left + area_right) / 2,
+                                          area_left, area_right);
+    else
+        e->split_x = layout_clamp_split_x(e->split_x, area_left, area_right);
+
+    /* sub-rects horizontales de cada panel (top/height son comunes) */
+    int pane_x[MAX_GROUPS] = {area_left, e->split_x};
+    int pane_r[MAX_GROUPS] = {e->split_x, area_right};
+
+    for (int g = 0; g < e->group_count; g++) {
+        int idx = e->group_active_tab[g];
+        if (idx < 0 || idx >= e->tab_count) continue;
+        editor_render_bind_tab(e, idx); /* e->buf/escalares -> pestaña del grupo */
+
+        /* override del área de contenido de este panel */
+        e->pane_active = 1;
+        e->pane_left = pane_x[g];
+        e->pane_top = text_top;
+        e->pane_width = pane_r[g] - pane_x[g];
+        e->pane_height = text_height;
+
+        /* re-tokenizar las líneas sucias de ESTE grupo antes de dibujarlo (cada
+         * pestaña tiene su propia cache; el update previo solo cubrió la del
+         * grupo enfocado) */
+        update_lexer_cache(e);
+
+        int total_lines = buf_line_count(e->buf);
+        render_content_layers(e, pane_x[g], pane_r[g], text_top, text_height,
+                              visible_lines, total_lines);
+
+        /* barra de pestañas propia del panel (solo las pestañas de este grupo) */
+        render_tabbar_group(e, g, pane_x[g], pane_r[g]);
+    }
+
+    e->pane_active = 0; /* fin del override */
+
+    /* divisor central */
+    set_color_c(r, e->theme.col_tabbar_sep);
+    fill_rect(r, e->split_x - 1, text_top, 2, text_height);
+
+    /* acento en el panel enfocado: una línea fina arriba de su contenido */
+    {
+        int fx = pane_x[e->active_group];
+        int fw = pane_r[e->active_group] - fx;
+        set_color_c(r, e->theme.col_tab_accent);
+        fill_rect(r, fx, text_top, fw, 2);
+    }
+
+    /* dejar e-> reflejando el grupo con foco (su estado ya estaba guardado) */
+    editor_render_bind_tab(e, e->group_active_tab[e->active_group]);
 }
 
 /**
@@ -690,26 +856,38 @@ void render_frame(Editor *e) {
     /* re-tokenizar líneas sucias antes de dibujar texto */
     update_lexer_cache(e);
 
-    /* resaltado de la línea activa (banda completa; solo si está activado en
-     * preferencias y no hay selección) */
-    if (e->settings.highlight_current_line && !e->sel_active) {
-        int vi_cursor = e->cursor_line - e->scroll_line;
-        if (vi_cursor >= 0 && vi_cursor < visible_lines) {
-            set_color_c(r, e->theme.col_cursor_line);
-            fill_rect(r, 0, text_top + vi_cursor * e->line_height, e->win_w,
-                      e->line_height);
+    if (e->group_count == 2) {
+        /* Editor dividido: cada panel dibuja sus pestañas y su contenido en su
+         * sub-rect.  Se guarda el estado del grupo enfocado antes de barajar las
+         * vistas y render_split_panes lo restaura al final. */
+        int area_left = left_offset;
+        int area_right = e->win_w - render_ext_panel_width(e);
+        editor_tab_save_state(e);
+        render_split_panes(e, area_left, area_right, text_top, text_height,
+                           visible_lines);
+    } else {
+        /* Editor sin dividir: comportamiento de siempre (pane_active==0). */
+        /* resaltado de la línea activa (banda completa; solo si está activado en
+         * preferencias y no hay selección) */
+        if (e->settings.highlight_current_line && !e->sel_active) {
+            int vi_cursor = e->cursor_line - e->scroll_line;
+            if (vi_cursor >= 0 && vi_cursor < visible_lines) {
+                set_color_c(r, e->theme.col_cursor_line);
+                fill_rect(r, 0, text_top + vi_cursor * e->line_height, e->win_w,
+                          e->line_height);
+            }
         }
-    }
 
-    /* capas del área de edición, de atrás hacia delante */
-    render_selection(e, left_offset, text_top,
-                     visible_lines); /* fondo selección */
-    render_text_area(e, left_offset, text_top, visible_lines,
-                     total_lines); /* texto resaltado */
-    render_gutter(e, left_offset, text_top, text_height, visible_lines,
-                  total_lines); /* números */
-    render_cursor(e, left_offset, text_top,
-                  visible_lines); /* barra del cursor */
+        /* capas del área de edición, de atrás hacia delante */
+        render_selection(e, left_offset, text_top,
+                         visible_lines); /* fondo selección */
+        render_text_area(e, left_offset, text_top, visible_lines,
+                         total_lines); /* texto resaltado */
+        render_gutter(e, left_offset, text_top, text_height, visible_lines,
+                      total_lines); /* números */
+        render_cursor(e, left_offset, text_top,
+                      visible_lines); /* barra del cursor */
+    }
 
     /* barra de estado: nombre + posición del cursor (1-based) + '*' si
      * modificado */
@@ -724,8 +902,11 @@ void render_frame(Editor *e) {
                  e->cursor_line + 1, e->cursor_col + 1, e->modified ? "  *" : "");
     draw_status_bar(e, status);
 
-    /* cromo de la UI por encima del texto */
-    render_scrollbar(e, left_offset);
+    /* cromo de la UI por encima del texto.  Con el editor dividido, la barra de
+     * pestañas y la scrollbar globales se omiten: cada panel ya dibujó su propia
+     * tira de pestañas en render_split_panes, y una scrollbar global a todo lo
+     * alto no representaría a un único panel. */
+    if (e->group_count != 2) render_scrollbar(e, left_offset);
     if (e->ftree.open)
         render_filetree(e); /* panel lateral abierto */
     else
@@ -733,7 +914,7 @@ void render_frame(Editor *e) {
     render_bottom_panel(e); /* panel inferior (Salida/Logs/Terminal) */
     render_ext_panel(e); /* panel de extensiones, bajo la navbar */
     render_navbar(e);
-    render_tabbar(e);
+    if (e->group_count != 2) render_tabbar(e);
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */

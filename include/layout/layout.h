@@ -35,6 +35,8 @@ typedef enum {
     DIVIDER_FILETREE_RIGHT,  /**< borde derecho del explorador (vertical)   */
     DIVIDER_EXT_PANEL_LEFT,  /**< borde izquierdo del panel de extensiones  */
     DIVIDER_BOTTOM_TOP,      /**< borde superior del panel inferior (horiz.) */
+    DIVIDER_EDITOR_SPLIT,    /**< divisor vertical entre los dos paneles del
+                                editor dividido (split panes)              */
 } LayoutDivider;
 
 /* -- Geometria de los divisores ------------------------------------------- */
@@ -61,6 +63,10 @@ typedef enum {
 /* Panel inferior (Salida/Logs/Terminal): alto minimo y alto inicial (px). */
 #define LAYOUT_BOTTOM_MIN_H 80    /**< alto minimo del panel inferior */
 #define LAYOUT_BOTTOM_DEFAULT_H 180 /**< alto inicial del panel inferior */
+
+/* Ancho minimo (px) que conserva cada panel del editor dividido, para que
+ * ninguno de los dos colapse al arrastrar el divisor central. */
+#define LAYOUT_SPLIT_MIN_W 120
 
 /* ===========================================================================
  *  Funciones puras (enteros crudos; testeables sin SDL ni Editor)
@@ -129,6 +135,21 @@ int layout_clamp_ext_panel_w(int desired_w, int win_w);
  * @return Alto recortado a [::LAYOUT_BOTTOM_MIN_H, win_h - ::LAYOUT_MIN_OPPOSITE].
  */
 int layout_clamp_bottom_h(int desired_h, int win_h);
+
+/**
+ * @brief Recorta la X del divisor del editor dividido a su rango valido.
+ *
+ * El divisor parte el area horizontal [@p area_left, @p area_right) en dos
+ * paneles; se recorta de modo que cada panel conserve al menos
+ * ::LAYOUT_SPLIT_MIN_W px.  Si el area es demasiado estrecha para dos minimos,
+ * el resultado es su punto medio (rango degenerado tolerado).
+ *
+ * @param desired_x  X propuesta para el divisor (px).
+ * @param area_left  Borde izquierdo del area del editor (px).
+ * @param area_right Borde derecho del area del editor (exclusivo, px).
+ * @return X recortada a [area_left + MIN_W, area_right - MIN_W].
+ */
+int layout_clamp_split_x(int desired_x, int area_left, int area_right);
 
 /* ===========================================================================
  *  Envoltorios sobre Editor (resuelven la geometria desde su estado)

@@ -56,3 +56,14 @@ int layout_clamp_bottom_h(int desired_h, int win_h) {
     return clamp_int(desired_h, LAYOUT_BOTTOM_MIN_H,
                      max_with_opposite(win_h, LAYOUT_BOTTOM_MIN_H));
 }
+
+int layout_clamp_split_x(int desired_x, int area_left, int area_right) {
+    int lo = area_left + LAYOUT_SPLIT_MIN_W;  /* X minima del divisor */
+    int hi = area_right - LAYOUT_SPLIT_MIN_W; /* X maxima del divisor */
+    /* Area demasiado estrecha para dos minimos: caer al punto medio. */
+    if (hi < lo) {
+        int mid = (area_left + area_right) / 2;
+        return mid;
+    }
+    return clamp_int(desired_x, lo, hi);
+}

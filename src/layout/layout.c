@@ -35,6 +35,23 @@ static void bottom_panel_band(Editor *e, int *left, int *right) {
     *right = e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
 }
 
+/** Banda horizontal (left, right) del area del editor (igual que la del panel
+ *  inferior: entre explorador y panel de extensiones).  Es donde vive el
+ *  divisor del editor dividido. */
+static void editor_area_band(Editor *e, int *left, int *right) {
+    bottom_panel_band(e, left, right);
+}
+
+/** Banda vertical (top, bottom) del area de contenido del editor: bajo la barra
+ *  de pestanas y sobre el panel inferior / barra de estado. */
+static void editor_area_vband(Editor *e, int *top, int *bottom) {
+    *top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
+    int bh = e->bottom_panel_open
+                 ? (STATUS_HEIGHT + e->bottom_panel_h)
+                 : STATUS_HEIGHT;
+    *bottom = e->win_h - bh;
+}
+
 int layout_hit_divider(Editor *e, int mx, int my) {
     /* Panel de extensiones primero: vive a la derecha y su borde izquierdo no
      * solapa con el del explorador, asi que el orden no es critico, pero lo
@@ -53,6 +70,16 @@ int layout_hit_divider(Editor *e, int mx, int my) {
         filetree_band(e, &top, &bottom);
         if (layout_point_on_vertical_edge(mx, my, edge_x, top, bottom))
             return DIVIDER_FILETREE_RIGHT;
+    }
+
+    /* Divisor del editor dividido (split panes): franja vertical centrada en
+     * split_x, dentro de la banda vertical del area del editor.  Solo existe
+     * cuando hay dos grupos. */
+    if (e->group_count == 2) {
+        int top, bottom;
+        editor_area_vband(e, &top, &bottom);
+        if (layout_point_on_vertical_edge(mx, my, e->split_x, top, bottom))
+            return DIVIDER_EDITOR_SPLIT;
     }
 
     /* Borde SUPERIOR del panel inferior (divisor horizontal).  Cuando el panel
@@ -83,6 +110,14 @@ void layout_apply_divider_drag(Editor *e, int which, int mx, int my) {
         /* el panel se ancla a la derecha: su ancho = ventana - X del cursor */
         e->ext_panel_w = layout_clamp_ext_panel_w(e->win_w - mx, e->win_w);
         break;
+    case DIVIDER_EDITOR_SPLIT: {
+        /* el divisor sigue la X del cursor, recortada para que ninguno de los
+         * dos paneles del editor colapse por debajo de su minimo */
+        int left, right;
+        editor_area_band(e, &left, &right);
+        e->split_x = layout_clamp_split_x(mx, left, right);
+        break;
+    }
     case DIVIDER_BOTTOM_TOP: {
         /* el panel se ancla abajo: su alto deseado = (ventana - status) - Y del
          * cursor.  Si se arrastra hacia abajo por debajo del minimo, se colapsa

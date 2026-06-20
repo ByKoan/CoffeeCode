@@ -277,10 +277,10 @@ void render_menu(Editor *e) {
  * @param bar_y Y de la barra. @param bar_h Alto de la barra.
  * @return Ancho dibujado de la pestaña (para avanzar a la siguiente).
  */
-static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
+static int draw_tab_active(Editor *e, int index, int tx, int bar_y, int bar_h,
+                           int active) {
     SDL_Renderer *r = e->renderer;
     EditorTab *t = &e->tabs[index];
-    int active = (index == e->active_tab);
 
     /* nombre = último componente de la ruta, o "Sin título" si aún no se guardó
      */
@@ -348,6 +348,12 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     return tab_w;
 }
 
+/** Envoltura: pestaña con el resaltado de activa basado en e->active_tab (caso
+ *  sin división del editor). */
+static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
+    return draw_tab_active(e, index, tx, bar_y, bar_h, index == e->active_tab);
+}
+
 /**
  * @brief Dibuja la barra de pestañas completa y el botón "+" de nueva pestaña.
  *
@@ -380,6 +386,43 @@ void render_tabbar(Editor *e) {
                 e->theme.txt_tab_new);
     /* registrar el botón "+" para el hit-test */
     ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
+}
+
+void render_tabbar_group(Editor *e, int group, int pane_left, int pane_right) {
+    SDL_Renderer *r = e->renderer;
+    int bar_y = NAVBAR_HEIGHT;
+    int bar_h = TAB_BAR_HEIGHT;
+
+    /* fondo + separador inferior de la franja de este panel */
+    set_color_c(r, e->theme.col_tabbar_bg);
+    fill_rect(r, pane_left, bar_y, pane_right - pane_left, bar_h);
+    set_color_c(r, e->theme.col_tabbar_sep);
+    fill_rect(r, pane_left, bar_y + bar_h - 1, pane_right - pane_left, 1);
+
+    /* recortar el dibujo de las pestañas a la franja del panel para que no
+     * invadan el panel contiguo */
+    SDL_Rect clip = {pane_left, bar_y, pane_right - pane_left, bar_h};
+    SDL_SetRenderClipRect(r, &clip);
+
+    int active_idx = e->group_active_tab[group];
+    int tx = pane_left;
+    for (int i = 0; i < e->tab_count; i++) {
+        if (e->tabs[i].group != group) continue; /* solo las de este grupo */
+        if (tx >= pane_right) break;              /* sin sitio para más */
+        tx += draw_tab_active(e, i, tx, bar_y, bar_h, i == active_idx);
+    }
+
+    /* Botón "+" de nueva pestaña del grupo, si cabe. */
+    if (tx + TAB_NEW_BTN_W <= pane_right) {
+        set_color_c(r, e->theme.col_tabbar_bg);
+        fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
+        draw_text_c(e, "+", tx + 7, bar_y + (bar_h - e->font_size) / 2,
+                    e->theme.txt_tab_new);
+        ui_put_idx(&e->ui, UI_LIST_SPLIT_NEW, group,
+                   (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
+    }
+
+    SDL_SetRenderClipRect(r, NULL); /* desactivar recorte */
 }
 
 /**
