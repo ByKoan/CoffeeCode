@@ -184,6 +184,151 @@ static void test_selection_substring(void) {
     EXPECT_EQ_STR(buf, "linea uno\nlinea dos\nlinea tres");
 }
 
+/* -- Color ANSI (secuencias SGR) ------------------------------------------ */
+
+/** Helper: indice del canal "build" recien registrado con texto. */
+static const PanelChannel *build_chan(PanelStore *s) {
+    int idx = panel_find(s, "build");
+    return panel_at(s, (size_t)idx);
+}
+
+/** "\x1b[31mhola\x1b[0m" -> visible "hola" + 1 span fg=rojo sobre [0,4). */
+static void test_ansi_basic(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "\x1b[31mhola\x1b[0m");
+    const PanelChannel *c = build_chan(&s);
+    /* el texto visible NO contiene bytes de escape */
+    EXPECT_EQ_STR(c->text, "hola");
+    EXPECT_EQ_INT((int)c->len, 4);
+    EXPECT_TRUE(strchr(c->text, 0x1B) == NULL);
+    /* un span rojo (indice 1) sobre [0,4) */
+    EXPECT_EQ_INT((int)c->span_count, 1);
+    EXPECT_EQ_INT((int)c->spans[0].start, 0);
+    EXPECT_EQ_INT((int)c->spans[0].end, 4);
+    EXPECT_EQ_INT((int)c->spans[0].fg, 1); /* 31 -> indice 1 (rojo) */
+}
+
+/** El estado SGR es continuo entre dos appends. */
+static void test_ansi_continuo(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "\x1b[32m"); /* verde, sin texto */
+    panel_append(&s, "build", "abc");      /* hereda el verde */
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "abc");
+    EXPECT_EQ_INT((int)c->span_count, 1);
+    EXPECT_EQ_INT((int)c->spans[0].start, 0);
+    EXPECT_EQ_INT((int)c->spans[0].end, 3);
+    EXPECT_EQ_INT((int)c->spans[0].fg, 2); /* 32 -> indice 2 (verde) */
+}
+
+/** "a\x1b[1;34mb\x1b[0mc" -> visible "abc" + span bold+azul sobre [1,2). */
+static void test_ansi_bold_mid(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "a\x1b[1;34mb\x1b[0mc");
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "abc");
+    EXPECT_EQ_INT((int)c->span_count, 1); /* solo la "b" lleva color */
+    EXPECT_EQ_INT((int)c->spans[0].start, 1);
+    EXPECT_EQ_INT((int)c->spans[0].end, 2);
+    EXPECT_EQ_INT((int)c->spans[0].fg, 4); /* 34 -> indice 4 (azul) */
+    EXPECT_TRUE((c->spans[0].flags & PANEL_SGR_BOLD) != 0);
+}
+
+/** Una secuencia CSI que no es 'm' (p.ej. "\x1b[2K") se consume y no aparece. */
+static void test_ansi_csi_no_m(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "x\x1b[2Ky");
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "xy");          /* el "\x1b[2K" desaparece */
+    EXPECT_TRUE(strchr(c->text, 0x1B) == NULL);
+    EXPECT_EQ_INT((int)c->span_count, 0);  /* no fija color */
+}
+
+/** El texto visible tras parsear ANSI sigue siendo compatible con wrap. */
+static void test_ansi_wrap_compat(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    /* color alrededor de "xxxxxxxxxx" (10 'x'); con cols=4 -> 3 filas */
+    panel_append(&s, "build", "\x1b[31mxxxxxxxxxx\x1b[0m");
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "xxxxxxxxxx");
+    EXPECT_EQ_INT(panel_wrap_count(c->text, 4), 3);
+}
+
+/** Una secuencia incompleta al final del buffer no deja bytes de escape. */
+static void test_ansi_incompleta(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "hola\x1b[3"); /* CSI sin byte final */
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "hola");          /* solo el texto visible */
+    EXPECT_TRUE(strchr(c->text, 0x1B) == NULL);
+}
+
+/** La COPIA de una seleccion sobre texto con color NO contiene escapes. */
+static void test_ansi_copy_limpia(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "\x1b[31mrojo\x1b[0m y \x1b[32mverde\x1b[0m");
+    const PanelChannel *c = build_chan(&s);
+    /* el "substring" de la copia opera sobre c->text (texto visible): nunca
+     * incluye bytes de escape (la copia real usa exactamente este buffer). */
+    EXPECT_EQ_STR(c->text, "rojo y verde");
+    EXPECT_TRUE(strchr(c->text, 0x1B) == NULL);
+    /* seleccionar [0,4) -> "rojo", sin escapes */
+    char buf[32];
+    memcpy(buf, c->text + 0, 4);
+    buf[4] = '\0';
+    EXPECT_EQ_STR(buf, "rojo");
+    EXPECT_TRUE(strchr(buf, 0x1B) == NULL);
+}
+
+/** clear vacia tambien los spans y restablece el estado SGR a por defecto. */
+static void test_ansi_clear_resetea(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "\x1b[31mrojo");
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_INT((int)c->span_count, 1);
+    panel_clear(&s, "build");
+    EXPECT_EQ_INT((int)c->span_count, 0);
+    EXPECT_EQ_INT((int)c->sgr.fg, PANEL_COL_DEFAULT);
+    /* tras el clear, texto nuevo sin color no crea spans */
+    panel_append(&s, "build", "plano");
+    EXPECT_EQ_STR(c->text, "plano");
+    EXPECT_EQ_INT((int)c->span_count, 0);
+}
+
+/** panel_span_at localiza el span que cubre un offset; NULL en los huecos. */
+static void test_ansi_span_at(void) {
+    PanelStore s;
+    panel_store_init(&s);
+    panel_register(&s, "build", "Build");
+    panel_append(&s, "build", "ab\x1b[31mCD\x1b[0mef"); /* color solo en "CD" */
+    const PanelChannel *c = build_chan(&s);
+    EXPECT_EQ_STR(c->text, "abCDef");
+    size_t hint = 0;
+    EXPECT_TRUE(panel_span_at(c, 0, &hint) == NULL); /* "a": sin color */
+    hint = 0;
+    const PanelColorSpan *sp = panel_span_at(c, 2, &hint); /* "C": rojo */
+    EXPECT_NOT_NULL(sp);
+    EXPECT_EQ_INT((int)sp->fg, 1);
+    hint = 0;
+    EXPECT_TRUE(panel_span_at(c, 4, &hint) == NULL); /* "e": sin color */
+}
+
 int main(void) {
     tt_suite("panel");
     tt_run("init: canales integrados", test_init_builtins);
@@ -197,5 +342,14 @@ int main(void) {
     tt_run("wrap: lineas logicas por '\\n'", test_wrap_newlines);
     tt_run("wrap: ida y vuelta offset<->fila,col", test_rowcol_roundtrip);
     tt_run("seleccion: substring multilinea", test_selection_substring);
+    tt_run("ansi: basico (strip + span rojo)", test_ansi_basic);
+    tt_run("ansi: estado continuo entre appends", test_ansi_continuo);
+    tt_run("ansi: bold + color a mitad de linea", test_ansi_bold_mid);
+    tt_run("ansi: CSI no-'m' se consume", test_ansi_csi_no_m);
+    tt_run("ansi: visible compatible con wrap", test_ansi_wrap_compat);
+    tt_run("ansi: secuencia incompleta sin escapes", test_ansi_incompleta);
+    tt_run("ansi: copia de seleccion sin escapes", test_ansi_copy_limpia);
+    tt_run("ansi: clear resetea spans y SGR", test_ansi_clear_resetea);
+    tt_run("ansi: panel_span_at localiza spans", test_ansi_span_at);
     return tt_summary();
 }

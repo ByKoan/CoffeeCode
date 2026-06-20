@@ -156,8 +156,42 @@ void render_bottom_panel(Editor *e) {
         int vi = ri - scroll; /* fila visible en pantalla */
         if (vi >= 0 && vi < visible_rows) {
             int ly = body_y + vi * line_h;
-            /* resaltado de la seleccion: solo el tramo de columnas de esta fila
-             * que cae dentro de [sel_lo, sel_hi). */
+            Color def_fg = line_is_err ? err_col : e->theme.ftree_txt_file;
+            size_t rend = row.offset + row.len;
+
+            /* 1) Fondos de color de los spans (ANSI bg).  Se pintan PRIMERO
+             * para que la seleccion (paso 2) quede por encima y siga visible. */
+            if (row.len > 0) {
+                size_t hint = 0;
+                for (size_t seg = row.offset; seg < rend;) {
+                    const PanelColorSpan *sp = panel_span_at(ch, seg, &hint);
+                    size_t sub_end = rend;
+                    if (sp && sp->end < sub_end) sub_end = sp->end;
+                    if (!sp) { /* hueco: hasta el siguiente span o fin de fila */
+                        for (size_t k = 0; k < ch->span_count; ++k) {
+                            size_t st = ch->spans[k].start;
+                            if (st > seg && st < sub_end) sub_end = st;
+                        }
+                    }
+                    if (sp) {
+                        int bg_def = 1;
+                        unsigned char rr, gg, bb;
+                        panel_span_bg(ch, sp, &rr, &gg, &bb, &bg_def);
+                        if (!bg_def) {
+                            int sx = left + BOTTOM_PAD +
+                                     (int)(seg - row.offset) * char_w;
+                            Color bg = {rr, gg, bb, 255};
+                            set_color_c(r, bg);
+                            fill_rect(r, sx, ly,
+                                      (int)(sub_end - seg) * char_w, line_h);
+                        }
+                    }
+                    seg = sub_end;
+                }
+            }
+
+            /* 2) Resaltado de la seleccion: el tramo de columnas de esta fila
+             * dentro de [sel_lo, sel_hi).  Sobre los fondos de color. */
             if (sel_lo >= 0) {
                 long rs = (long)row.offset;
                 long re = (long)(row.offset + row.len);
@@ -170,13 +204,39 @@ void render_bottom_panel(Editor *e) {
                     fill_rect(r, hx, ly, hw, line_h);
                 }
             }
+
+            /* 3) Texto, partido por los spans: cada sub-tramo con su color de
+             * primer plano (o el color por defecto del panel / rojo de error).*/
             if (row.len > 0) {
-                size_t cp =
-                    row.len < sizeof(line) ? row.len : sizeof(line) - 1;
-                memcpy(line, text + row.offset, cp);
-                line[cp] = '\0';
-                draw_text_c(e, line, left + BOTTOM_PAD, ly,
-                            line_is_err ? err_col : e->theme.ftree_txt_file);
+                size_t hint = 0;
+                for (size_t seg = row.offset; seg < rend;) {
+                    const PanelColorSpan *sp = panel_span_at(ch, seg, &hint);
+                    size_t sub_end = rend;
+                    Color fg = def_fg;
+                    if (sp) {
+                        if (sp->end < sub_end) sub_end = sp->end;
+                        int is_def = 1;
+                        unsigned char rr, gg, bb;
+                        panel_span_fg(ch, sp, &rr, &gg, &bb, &is_def);
+                        if (!is_def) {
+                            fg.r = rr; fg.g = gg; fg.b = bb; fg.a = 255;
+                        }
+                    } else { /* hueco: hasta el siguiente span o fin de fila */
+                        for (size_t k = 0; k < ch->span_count; ++k) {
+                            size_t st = ch->spans[k].start;
+                            if (st > seg && st < sub_end) sub_end = st;
+                        }
+                    }
+                    size_t sub_len = sub_end - seg;
+                    int sx = left + BOTTOM_PAD +
+                             (int)(seg - row.offset) * char_w;
+                    size_t cp =
+                        sub_len < sizeof(line) ? sub_len : sizeof(line) - 1;
+                    memcpy(line, text + seg, cp);
+                    line[cp] = '\0';
+                    draw_text_c(e, line, sx, ly, fg);
+                    seg = sub_end;
+                }
             }
         }
         if (next == (size_t)-1 || text[next] == '\0') break;
