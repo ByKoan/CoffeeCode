@@ -1,0 +1,13 @@
+[extension]
+id           = "hello-c"
+name         = "Hola (C)"
+version      = "0.1.0"
+author       = "desmonHak"
+entry        = "coffee_hello@COFFEE_EXT_DLL_SUFFIX@"
+abi          = 1
+description  = "Extension de ejemplo en C: comando hello.insert + evento + servicio"
+dependencies = []
+provides     = ["hello.service"]
+
+[commands]
+"hello.insert" = "Insertar hola"

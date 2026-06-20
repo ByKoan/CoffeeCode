@@ -14,6 +14,7 @@
  * @c false / @c NULL en error y dejan el motivo en @c SDL_GetError().
  */
 #include "editor_internal.h"
+#include "ext/ext_host.h"
 #include "input/input.h"
 #include "render/render.h"
 #include "utf8/utf8.h"
@@ -404,6 +405,33 @@ int editor_init(Editor *e, const char *filepath) {
     e->lex = NULL;
     e->undo = NULL;
 
+    /* -- Extension host (E1) ----------------------------------------------
+     * Crear el host (sin buffer aun: se fija al abrir/cambiar de pestana) y
+     * cargar el directorio de extensiones junto al ejecutable, si existe.  El
+     * host es opcional: si no hay extensiones, ext_host_load_dir devuelve 0 y
+     * todo sigue funcionando como el editor SDL de siempre. */
+    {
+        CoffeeHostBackend backend;
+        memset(&backend, 0, sizeof backend);
+        backend.buffer = NULL; /* aun no hay pestana activa */
+        backend.ud = e;
+        /* (Los hooks de UI -- set_status/output/etc. -- se cablearan en E1.b;
+         * por ahora el host usa sus stubs por defecto, que loguean.) */
+        CoffeeHost *host = ext_host_create(&backend);
+        e->ext_host = host;
+        if (host) {
+            const char *base = SDL_GetBasePath();
+            char extdir[1024];
+            if (base)
+                snprintf(extdir, sizeof(extdir), "%sextensions", base);
+            else
+                snprintf(extdir, sizeof(extdir), "extensions");
+            int n = ext_host_load_dir(host, extdir);
+            if (n > 0)
+                fprintf(stderr, "[ext-host] %d extension(es) cargada(s)\n", n);
+        }
+    }
+
     if (filepath && filepath[0]) {
 #ifdef _DEBUG
         fprintf(stderr, "STEP: opening initial file\n");
@@ -428,6 +456,12 @@ int editor_init(Editor *e, const char *filepath) {
  * TTF_Quit y @c SDL_Quit cierran las librerías al final.
  */
 void editor_free(Editor *e) {
+    /* Destruir el host de extensiones ANTES de liberar las pestanas: emite
+     * COFFEE_EVENT_SHUTDOWN y descarga las DLLs mientras los buffers aun viven. */
+    if (e->ext_host) {
+        ext_host_destroy((CoffeeHost *)e->ext_host);
+        e->ext_host = NULL;
+    }
     for (int i = 0; i < e->tab_count; i++)
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);

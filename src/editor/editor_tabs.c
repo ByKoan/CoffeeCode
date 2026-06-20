@@ -13,6 +13,16 @@
  * pisa el trabajo del usuario.
  */
 #include "editor_internal.h"
+#include "ext/ext_host.h"
+
+/* Notifica al extension host (si existe) que la pestana activa cambio: fija el
+ * buffer activo y emite COFFEE_EVENT_FILE_OPEN con la ruta del archivo. */
+static void editor_ext_notify_open(Editor *e, const char *path) {
+    if (!e->ext_host) return;
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    ext_host_set_buffer(host, e->buf);
+    ext_host_emit(host, COFFEE_EVENT_FILE_OPEN, path);
+}
 
 /**
  * @brief Devuelve el tiempo de última modificación (mtime) de un fichero.
@@ -264,6 +274,7 @@ void editor_tab_open(Editor *e, const char *path) {
             e->active_tab = i;
             editor_tab_load_state(e); /* recarga si cambió el mtime */
             editor_update_lexer(e, 0);
+            editor_ext_notify_open(e, e->tabs[i].filepath); /* host: FILE_OPEN */
             e->needs_redraw = 1;
             return;
         }
@@ -286,6 +297,7 @@ void editor_tab_open(Editor *e, const char *path) {
     editor_tab_load_state(e);
     editor_update_lexer(e, 0); /* marcar todas las líneas para re-tokenizar */
     editor_sync_cursor(e); /* fijar cursor_line/col desde la pos del buffer */
+    editor_ext_notify_open(e, t->filepath); /* host: buffer activo + FILE_OPEN */
 
     /* Arrancar cliente LSP si hay servidor disponible para este lenguaje */
     {

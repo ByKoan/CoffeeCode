@@ -47,3 +47,23 @@ add_coffee_test(test_lexer   lexer/test_lexer.c
 # --- encoding (puro, sin dependencias) -------------------------------------
 add_coffee_test(test_encoding encoding/test_encoding.c
     "${CMAKE_SOURCE_DIR}/src/encoding/encoding.c")
+
+# --- extension host (puro: ext_host + buffer + utf8 + vec; carga DLLs) ------
+# Smoke test HEADLESS del cargador de extensiones: carga la DLL hello-c,
+# dispara su comando, manipula el buffer y verifica la descarga limpia.
+if(COFFEE_BUILD_EXTENSIONS)
+    add_coffee_test(test_ext_host ext/test_ext_host.c
+        "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
+        "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
+        "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
+        "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+    # Ruta del directorio de la extension (manifiesto + DLL) inyectada en compile.
+    target_compile_definitions(test_ext_host PRIVATE
+        "COFFEE_HELLO_EXT_DIR=\"${CMAKE_SOURCE_DIR}/extensions/hello-c\"")
+    # Carga dinamica: en POSIX el host usa dlopen/dlclose (libdl).
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(test_ext_host PRIVATE dl)
+    endif()
+    # El test necesita que la DLL de la extension exista antes de ejecutarse.
+    add_dependencies(test_ext_host coffee_hello)
+endif()

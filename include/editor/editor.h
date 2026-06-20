@@ -201,6 +201,14 @@ typedef struct {
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */
     Theme theme;
+
+    /* -- Extension host (sistema de extensiones, incremento E1) -----------
+     * Puntero opaco a CoffeeHost (include/ext/ext_host.h).  Se declara como
+     * void* para no acoplar este header al de extensiones.  NULL si el host no
+     * se inicializo (p.ej. sin directorio de extensiones).  El editor crea el
+     * host en editor_init, le fija el buffer activo, emite eventos del IDE y lo
+     * destruye en editor_free. */
+    void *ext_host;
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */

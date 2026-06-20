@@ -44,3 +44,5 @@ cmake-*
 tem*
 temp*
 tmp*
+# Manifiesto generado por CMake desde coffee-extension.toml.in
+extensions/*/coffee-extension.toml
