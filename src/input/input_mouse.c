@@ -44,6 +44,70 @@ int get_left_offset(Editor *e) {
     return FTREE_TOGGLE_BTN_W; /* panel cerrado: solo el botón   */
 }
 
+/* ── Divisores arrastrables (redimension de paneles) ────────────────────────
+ */
+
+/**
+ * @brief Aplica el cursor del sistema de redimension (o lo restaura).
+ *
+ * Cachea el cursor de redimension horizontal (EW) y el normal en estaticos para
+ * no recrearlos en cada movimiento.  Si SDL no puede crear el cursor del sistema
+ * (entorno sin tema de cursores, etc.), degrada sin tocar el cursor: nunca
+ * crashea.
+ *
+ * @param want_resize 1 para mostrar el cursor de redimension, 0 para el normal.
+ */
+static void set_divider_cursor(int want_resize) {
+    static SDL_Cursor *cur_ew = NULL;    /* cursor de redimension horizontal */
+    static SDL_Cursor *cur_arrow = NULL; /* cursor normal (flecha)           */
+    static int tried = 0;                /* ya se intento crear (evita reintentos) */
+
+    if (!tried) { /* crear una sola vez, perezosamente */
+        tried = 1;
+        cur_ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        cur_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    }
+
+    SDL_Cursor *target = want_resize ? cur_ew : cur_arrow;
+    if (target) SDL_SetCursor(target); /* solo si SDL pudo crearlo */
+}
+
+/**
+ * @brief Actualiza el divisor bajo el cursor y conmuta su cursor del sistema.
+ *
+ * Pura consulta de hover: no inicia arrastre.  Pide redibujar solo si cambio el
+ * resaltado.  No hace nada mientras hay un arrastre en curso (ese caso lo lleva
+ * on_mouse_motion).
+ *
+ * @param e  Editor.
+ * @param mx X del raton en pixeles.
+ * @param my Y del raton en pixeles.
+ */
+static void update_divider_hover(Editor *e, int mx, int my) {
+    int hit = layout_hit_divider(e, mx, my);
+    if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
+        e->hovered_divider = hit;
+        set_divider_cursor(hit != DIVIDER_NONE);
+        e->needs_redraw = 1;
+    }
+}
+
+/**
+ * @brief Si (mx,my) cae sobre un divisor, inicia su arrastre y consume el clic.
+ *
+ * @param e  Editor.
+ * @param mx X del clic en pixeles.
+ * @param my Y del clic en pixeles.
+ * @return 1 si empezo a arrastrar un divisor (clic consumido), 0 si no.
+ */
+static int try_start_divider_drag(Editor *e, int mx, int my) {
+    int hit = layout_hit_divider(e, mx, my);
+    if (hit == DIVIDER_NONE) return 0;
+    e->dragging_divider = hit; /* entrar en modo arrastre */
+    set_divider_cursor(1);     /* mantener el cursor de redimension */
+    return 1;
+}
+
 /**
  * @brief Convierte coordenadas de ratón en una posición (línea, columna) del
  *        texto, recortada al rango válido del archivo.
@@ -325,6 +389,17 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
 void on_mouse_motion(Editor *e, SDL_Event *ev) {
     int mouse_x = (int)ev->motion.x;
     int mouse_y = (int)ev->motion.y;
+
+    /* Arrastrando un divisor: redimensiona el panel y nada mas (prioridad
+     * sobre todo el resto del hit-testing). */
+    if (e->dragging_divider != DIVIDER_NONE) {
+        layout_apply_divider_drag(e, e->dragging_divider, mouse_x, mouse_y);
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Hover sobre divisores: cambia el cursor a redimension cuando procede. */
+    update_divider_hover(e, mouse_x, mouse_y);
 
     if (e->menu_open) { /* menú desplegado: actualizar el item resaltado */
         int prev = e->menu_hovered;
@@ -696,6 +771,11 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         handle_enc_popup_click(e, mx, my);
         return;
     }
+
+    /* Divisor de panel bajo el cursor: empezar a arrastrarlo.  Tiene prioridad
+     * sobre los clics de los paneles (handle_ext_panel_click / explorador) y
+     * del editor, para no robar el clic del borde redimensionable. */
+    if (try_start_divider_drag(e, mx, my)) return;
 
     /* Clic en la codificación de la barra de estado: abrir el selector. */
     if (ui_hit(&e->ui, UI_STATUS_ENC, mx, my)) {

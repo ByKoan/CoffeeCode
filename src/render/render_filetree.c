@@ -19,6 +19,7 @@
  * resaltado al pasar el ratón (hover) y desplazamiento vertical (scroll).
  */
 #include "render_internal.h"
+#include "layout/layout.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -174,6 +175,16 @@ void render_filetree(Editor *e) {
     set_color_c(r,
                 e->theme.col_ftree_sep); /* línea separadora derecha (1 px) */
     fill_rect(r, panel_x + panel_w - 1, panel_y, 1, panel_h);
+
+    /* Divisor agarrable (borde derecho): resaltado cuando el cursor lo
+     * sobrevuela o se esta arrastrando, para que se vea que es redimensionable.
+     */
+    if (e->dragging_divider == DIVIDER_FILETREE_RIGHT ||
+        e->hovered_divider == DIVIDER_FILETREE_RIGHT) {
+        Color hl = {120, 170, 230, 255}; /* azul de realce, agarre visible */
+        set_color_c(r, hl);
+        fill_rect(r, panel_x + panel_w - 2, panel_y, 2, panel_h);
+    }
 
     /* Botón toggle, centrado verticalmente en el área visible bajo las
      * pestañas. */

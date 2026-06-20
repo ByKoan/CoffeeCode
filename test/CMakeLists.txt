@@ -48,6 +48,12 @@ add_coffee_test(test_lexer   lexer/test_lexer.c
 add_coffee_test(test_encoding encoding/test_encoding.c
     "${CMAKE_SOURCE_DIR}/src/encoding/encoding.c")
 
+# --- layout (puro: logica de divisores arrastrables, sin SDL) --------------
+# Solo enlaza layout_core.c (hit-test + clampeo sobre enteros crudos); los
+# envoltorios sobre Editor viven en layout.c y necesitan SDL, asi que no entran.
+add_coffee_test(test_layout layout/test_layout.c
+    "${CMAKE_SOURCE_DIR}/src/layout/layout_core.c")
+
 # --- extension host (puro: ext_host + buffer + utf8 + vec; carga DLLs) ------
 # Smoke test HEADLESS del cargador de extensiones: carga la DLL hello-c,
 # dispara su comando, manipula el buffer y verifica la descarga limpia.

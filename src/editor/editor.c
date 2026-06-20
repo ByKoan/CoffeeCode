@@ -16,6 +16,7 @@
 #include "editor_internal.h"
 #include "ext/ext_host.h"
 #include "input/input.h"
+#include "layout/layout.h"
 #include "render/render.h"
 #include "utf8/utf8.h"
 
@@ -363,6 +364,9 @@ int editor_init(Editor *e, const char *filepath) {
     e->find.result_line = -1;
     e->cursor_visible = 1;               /* cursor visible al arrancar */
     e->cursor_blink_ms = SDL_GetTicks(); /* iniciar timer del parpadeo */
+    e->ext_panel_w = LAYOUT_EXT_DEFAULT_W; /* ancho inicial del panel de exts */
+    e->dragging_divider = DIVIDER_NONE;    /* sin arrastre de divisor activo */
+    e->hovered_divider = DIVIDER_NONE;     /* sin divisor bajo el cursor     */
 
     /* preferencias persistentes: cargarlas y aplicar las que afectan al estado
      * inicial (las demás las leen render/input directamente de e->settings). */

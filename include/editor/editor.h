@@ -109,7 +109,9 @@ typedef struct {
 } FindBar;
 
 /* -- Estado global del editor --------------------------------------------- */
-typedef struct {
+/* Lleva tag (struct Editor) para que otras cabeceras puedan declararla hacia
+ * delante sin arrastrar esta (que incluye SDL). */
+typedef struct Editor {
     /* SDL */
     SDL_Window *window;     /* ventana del sistema operativo            */
     SDL_Renderer *renderer; /* contexto de dibujo 2D acelerado          */
@@ -223,6 +225,13 @@ typedef struct {
     int ext_install_mode;     /* 1 = el proximo dialogo de carpeta instala una
                                  extension (ext_host_load) en lugar de abrir el
                                  explorador (ftree_load) */
+    int ext_panel_w;          /* ancho actual del panel de extensiones (px),
+                                 redimensionable arrastrando su borde izquierdo */
+
+    /* -- Divisores arrastrables entre regiones (ver layout/layout.h) ------
+     * Estado del arrastre del borde de un panel para redimensionarlo. */
+    int dragging_divider; /* LayoutDivider en curso, o DIVIDER_NONE (-1) */
+    int hovered_divider;  /* LayoutDivider bajo el cursor, o DIVIDER_NONE  */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */

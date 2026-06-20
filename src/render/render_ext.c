@@ -20,12 +20,14 @@
  */
 #include "render_internal.h"
 #include "ext/ext_host.h"
+#include "layout/layout.h"
 #include "ui.h"
 #include <stdio.h>
 #include <string.h>
 
 /* -- Geometria (px) -------------------------------------------------------- */
-#define EXT_PANEL_W 280     /* ancho del panel de extensiones        */
+/* El ancho del panel ya no es fijo: vive en e->ext_panel_w (redimensionable
+ * arrastrando el borde).  El valor inicial es LAYOUT_EXT_DEFAULT_W. */
 #define EXT_HEADER_H 28     /* alto de la cabecera                   */
 #define EXT_ROW_H 46        /* alto de la fila de una extension      */
 #define EXT_BTN_W 64        /* ancho de los botones recargar/descargar */
@@ -149,7 +151,7 @@ void render_ext_views(Editor *e) {
  * =========================================================================== */
 
 int render_ext_panel_width(Editor *e) {
-    return e->ext_panel_open ? EXT_PANEL_W : 0;
+    return e->ext_panel_open ? e->ext_panel_w : 0;
 }
 
 /** Trunca @p name con ".." si supera @p max_chars caracteres (in situ). */
@@ -173,7 +175,7 @@ void render_ext_panel(Editor *e) {
     CoffeeHost *host = (CoffeeHost *)e->ext_host;
     SDL_Renderer *r = e->renderer;
 
-    int panel_w = EXT_PANEL_W;
+    int panel_w = e->ext_panel_w;
     int panel_x = e->win_w - panel_w;
     int panel_y = NAVBAR_HEIGHT;
     int panel_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
@@ -297,5 +299,16 @@ void render_ext_panel(Editor *e) {
             line_y += e->line_height;
             p = nl ? nl + 1 : p + len;
         }
+    }
+
+    /* -- Divisor agarrable: borde izquierdo del panel --
+     * Cuando el cursor lo sobrevuela o se esta arrastrando, se resalta (mas
+     * brillante y un poco mas ancho) para que el usuario VEA que es agarrable. */
+    int active = (e->dragging_divider == DIVIDER_EXT_PANEL_LEFT) ||
+                 (e->hovered_divider == DIVIDER_EXT_PANEL_LEFT);
+    if (active) {
+        Color hl = {120, 170, 230, 255}; /* azul de realce, agarre visible */
+        set_color_c(r, hl);
+        fill_rect(r, panel_x - 1, panel_y, 2, panel_h);
     }
 }

@@ -485,6 +485,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
         if (ev->button.button == SDL_BUTTON_LEFT) {
             /* soltar el botón izquierdo termina cualquier arrastre en curso */
             e->ftree.dragging_border = 0;
+            e->dragging_divider = DIVIDER_NONE; /* fin del arrastre de divisor */
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
         }

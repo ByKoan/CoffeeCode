@@ -15,6 +15,7 @@
 #include "ext/ext_host.h"
 #include "filetree/filetree.h"
 #include "input/input.h"
+#include "layout/layout.h"
 #include "render/render.h"
 #include <ctype.h>    /* isalnum (clasificación de caracteres de palabra) */
 #include <stdbool.h>  /* bool/true/false */
