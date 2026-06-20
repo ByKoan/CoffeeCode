@@ -201,12 +201,34 @@ void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist,
     if (e->ext_install_mode) {
         e->ext_install_mode = 0;
         if (e->ext_host) {
-            int rc = ext_host_load((CoffeeHost *)e->ext_host, filelist[0]);
-            if (rc != 0)
-                fprintf(stderr,
-                        "[ext-host] instalar '%s' fallo (rc=%d): falta "
-                        "coffee-extension.toml o DLL?\n",
-                        filelist[0], rc);
+            CoffeeHost *host = (CoffeeHost *)e->ext_host;
+            int rc = ext_host_load(host, filelist[0]);
+            const CoffeeApi *api = ext_host_api(host);
+            if (rc != 0) {
+                /* Fallo VISIBLE: el motivo concreto (DLL que no carga con el
+                 * texto del SO, manifiesto ausente, simbolo de entrada, etc.)
+                 * va al panel de salida y a la barra de estado, no solo a la
+                 * consola. */
+                const char *why = ext_host_last_error(host);
+                char msg[512];
+                snprintf(msg, sizeof(msg), "instalar '%s' fallo: %s",
+                         filelist[0], why && why[0] ? why : "causa desconocida");
+                if (api) {
+                    char line[520];
+                    snprintf(line, sizeof(line), "%s\n", msg);
+                    api->output_append(host, line); /* panel de salida */
+                    api->set_status(host, msg);     /* barra de estado */
+                }
+                fprintf(stderr, "[ext-host] %s\n", msg);
+            } else if (api) {
+                char msg[512];
+                snprintf(msg, sizeof(msg), "extension instalada desde '%s'",
+                         filelist[0]);
+                char line[520];
+                snprintf(line, sizeof(line), "%s\n", msg);
+                api->output_append(host, line);
+                api->set_status(host, msg);
+            }
         }
         e->needs_redraw = 1;
         return;

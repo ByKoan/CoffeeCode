@@ -602,6 +602,29 @@ static void handle_enc_popup_click(Editor *e, int mx, int my) {
 }
 
 /**
+ * @brief Vuelca un fallo de accion del panel (recargar/descargar) a la UI.
+ *
+ * Toma el motivo concreto de @c ext_host_last_error y lo muestra en el panel
+ * de salida y en la barra de estado, para que el usuario VEA por que la accion
+ * no surtio efecto en lugar de quedarse en silencio.
+ */
+static void ext_panel_report_error(Editor *e, const char *action,
+                                   const char *id) {
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    if (!host) return;
+    const CoffeeApi *api = ext_host_api(host);
+    if (!api) return;
+    const char *why = ext_host_last_error(host);
+    char msg[512];
+    snprintf(msg, sizeof(msg), "%s '%s' fallo: %s", action ? action : "accion",
+             id ? id : "?", why && why[0] ? why : "causa desconocida");
+    char line[520];
+    snprintf(line, sizeof(line), "%s\n", msg);
+    api->output_append(host, line); /* panel de salida */
+    api->set_status(host, msg);     /* barra de estado */
+}
+
+/**
  * @brief Procesa un clic dentro del panel de extensiones.
  *
  * Resuelve, en orden: el boton "Instalar extension" (abre el dialogo de
@@ -625,8 +648,14 @@ int handle_ext_panel_click(Editor *e, int mx, int my) {
     int rel = ui_hit_idx(&e->ui, UI_LIST_EXT_RELOAD, mx, my);
     if (rel >= 0 && host) {
         const char *id = NULL;
-        if (ext_host_info(host, (size_t)rel, &id, NULL, NULL, NULL) && id)
-            ext_host_reload(host, id);
+        if (ext_host_info(host, (size_t)rel, &id, NULL, NULL, NULL) && id) {
+            /* copiar el id: si el reload falla en el unload, la cadena del
+             * host puede quedar liberada antes de poder reportar el fallo. */
+            char idbuf[128];
+            snprintf(idbuf, sizeof(idbuf), "%s", id);
+            int rc = ext_host_reload(host, idbuf);
+            if (rc != 0) ext_panel_report_error(e, "recargar", idbuf);
+        }
         e->needs_redraw = 1;
         return 1;
     }
@@ -639,7 +668,8 @@ int handle_ext_panel_click(Editor *e, int mx, int my) {
         if (ext_host_info(host, (size_t)unl, &id, NULL, NULL, NULL) && id) {
             char idbuf[128];
             snprintf(idbuf, sizeof(idbuf), "%s", id);
-            ext_host_unload(host, idbuf);
+            int rc = ext_host_unload(host, idbuf);
+            if (rc != 0) ext_panel_report_error(e, "descargar", idbuf);
         }
         e->needs_redraw = 1;
         return 1;

@@ -274,8 +274,12 @@ void render_ext_panel(Editor *e) {
     fill_rect(r, panel_x, out_y, panel_w, 1);
     draw_text_c(e, " Salida", panel_x + EXT_PAD, out_y + 2,
                 e->theme.ftree_txt_root);
-    /* mostrar las ultimas lineas que quepan del buffer de salida */
+    /* mostrar las ultimas lineas que quepan del buffer de salida.  Las lineas
+     * de fallo (contienen " fallo:") se pintan en rojo para que el usuario VEA
+     * que algo no cargo, en lugar de confundirlas con salida normal. */
     if (e->ext_output_len > 0) {
+        /* color de error: rojo fijo (el tema no define un rol de error). */
+        Color err_col = {220, 80, 80, 255};
         int line_y = out_y + 2 + e->line_height;
         const char *p = e->ext_output;
         char line[256];
@@ -285,9 +289,11 @@ void render_ext_panel(Editor *e) {
             if (len >= sizeof(line)) len = sizeof(line) - 1;
             memcpy(line, p, len);
             line[len] = '\0';
-            if (line[0])
+            if (line[0]) {
+                int is_err = (strstr(line, " fallo:") != NULL);
                 draw_text_c(e, line, panel_x + EXT_PAD, line_y,
-                            e->theme.ftree_txt_file);
+                            is_err ? err_col : e->theme.ftree_txt_file);
+            }
             line_y += e->line_height;
             p = nl ? nl + 1 : p + len;
         }

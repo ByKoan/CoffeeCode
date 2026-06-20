@@ -17,6 +17,7 @@
  */
 #include "ext/ext_host.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +49,39 @@ static void *coffee_dll_sym(coffee_dll_t h, const char *name) {
 static void coffee_dll_close(coffee_dll_t h) { dlclose(h); }
 #define COFFEE_PATH_SEP '/'
 #endif
+
+/**
+ * @brief Copia en @p out el texto legible del ultimo error de carga de DLL del
+ *        sistema operativo.
+ *
+ * En Windows usa @c GetLastError + @c FormatMessageA (asi se obtiene, por
+ * ejemplo, "No se encontro el modulo especificado" cuando faltan dependencias
+ * de la propia DLL).  En POSIX usa @c dlerror.  Si no hay texto disponible,
+ * deja una cadena generica.  @p out queda siempre null-terminada.
+ */
+static void coffee_dll_last_error(char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+#if defined(_WIN32)
+    DWORD err = GetLastError();
+    char buf[256];
+    DWORD n = FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buf, (DWORD)sizeof(buf),
+        NULL);
+    /* recortar el salto de linea final que FormatMessage suele anyadir */
+    while (n > 0 && (buf[n - 1] == '\r' || buf[n - 1] == '\n' ||
+                     buf[n - 1] == ' ' || buf[n - 1] == '.'))
+        buf[--n] = '\0';
+    if (n > 0)
+        snprintf(out, cap, "%s (codigo %lu)", buf, (unsigned long)err);
+    else
+        snprintf(out, cap, "error del sistema %lu", (unsigned long)err);
+#else
+    const char *de = dlerror();
+    snprintf(out, cap, "%s", de ? de : "error desconocido del cargador");
+#endif
+}
 
 /* ===========================================================================
  *  Estructuras internas del host
@@ -131,6 +165,9 @@ struct CoffeeHost {
     int registering;
 
     char *ext_dir_cache; /**< directorio de datos privado (ultimo consultado) */
+
+    char last_error[256]; /**< ultimo mensaje de error legible (causa de un
+                               fallo de carga).  Cadena vacia = sin error. */
 };
 
 /* -- util: strdup portable (algunos toolchains no exponen strdup en C11) ---- */
@@ -151,6 +188,21 @@ static int host_grow(void **arr, size_t *cap, size_t count, size_t elem) {
     *arr = np;
     *cap = ncap;
     return 1;
+}
+
+/* -- util: fija el ultimo mensaje de error del host (estilo printf) ---------- */
+static void host_set_error(CoffeeHost *h, const char *fmt, ...) {
+    if (!h) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(h->last_error, sizeof(h->last_error), fmt, ap);
+    va_end(ap);
+    /* loguear siempre a stderr para diagnostico headless */
+    fprintf(stderr, "[ext-host] %s\n", h->last_error);
+}
+
+const char *ext_host_last_error(CoffeeHost *host) {
+    return host ? host->last_error : "";
 }
 
 /* ===========================================================================
@@ -779,14 +831,19 @@ static void manifest_parse_deps(HostManifest *m, char *list) {
     }
 }
 
-/* Lee el manifiesto en @p dir/coffee-extension.toml.  0 = ok. */
-static int manifest_read(const char *dir, HostManifest *out) {
+/* Lee el manifiesto en @p dir/coffee-extension.toml.  0 = ok.
+ * @p h (opcional, puede ser NULL) recibe el mensaje de error legible. */
+static int manifest_read(CoffeeHost *h, const char *dir, HostManifest *out) {
     char path[1024];
     snprintf(path, sizeof(path), "%s%c%s", dir, COFFEE_PATH_SEP,
              "coffee-extension.toml");
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "[ext-host] no se encontro manifiesto: %s\n", path);
+        if (h)
+            host_set_error(h, "manifiesto coffee-extension.toml no encontrado "
+                              "en %s", dir);
+        else
+            fprintf(stderr, "[ext-host] no se encontro manifiesto: %s\n", path);
         return -1;
     }
     memset(out, 0, sizeof(*out));
@@ -823,9 +880,13 @@ static int manifest_read(const char *dir, HostManifest *out) {
     }
     fclose(f);
     if (!out->id || !out->entry) {
-        fprintf(stderr,
-                "[ext-host] manifiesto incompleto (falta id o entry): %s\n",
-                path);
+        if (h)
+            host_set_error(h, "manifiesto incompleto en %s (falta 'id' o "
+                              "'entry')", path);
+        else
+            fprintf(stderr,
+                    "[ext-host] manifiesto incompleto (falta id o entry): %s\n",
+                    path);
         manifest_free(out);
         return -2;
     }
@@ -848,21 +909,23 @@ static int host_find_ext(CoffeeHost *h, const char *id) {
 int ext_host_load(CoffeeHost *host, const char *dir) {
     if (!host || !dir) return -1;
 
+    host->last_error[0] = '\0'; /* limpiar el error previo */
+
     HostManifest m;
-    if (manifest_read(dir, &m) != 0) return -2;
+    if (manifest_read(host, dir, &m) != 0) return -2;
 
     /* ya cargada? */
     if (host_find_ext(host, m.id) >= 0) {
-        fprintf(stderr, "[ext-host] '%s' ya esta cargada\n", m.id);
+        host_set_error(host, "la extension '%s' ya esta cargada", m.id);
         manifest_free(&m);
         return -3;
     }
 
     /* abi compatible? */
     if (m.abi > COFFEE_ABI_VERSION) {
-        fprintf(stderr,
-                "[ext-host] '%s' requiere ABI %u > %u (soportado); se ignora\n",
-                m.id, m.abi, COFFEE_ABI_VERSION);
+        host_set_error(host,
+                       "ABI de la extension '%s' (%u) mayor al soportado (%u)",
+                       m.id, m.abi, COFFEE_ABI_VERSION);
         manifest_free(&m);
         return -4;
     }
@@ -872,7 +935,10 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
     snprintf(dllpath, sizeof(dllpath), "%s%c%s", dir, COFFEE_PATH_SEP, m.entry);
     coffee_dll_t dll = coffee_dll_open(dllpath);
     if (!dll) {
-        fprintf(stderr, "[ext-host] no se pudo cargar la DLL: %s\n", dllpath);
+        char oserr[256];
+        coffee_dll_last_error(oserr, sizeof(oserr));
+        host_set_error(host, "no se pudo cargar la DLL '%s': %s", m.entry,
+                       oserr);
         manifest_free(&m);
         return -5;
     }
@@ -880,8 +946,8 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
     CoffeeExtensionRegisterFn reg =
         (CoffeeExtensionRegisterFn)coffee_dll_sym(dll, COFFEE_EXTENSION_ENTRY);
     if (!reg) {
-        fprintf(stderr, "[ext-host] '%s' no exporta %s\n", m.id,
-                COFFEE_EXTENSION_ENTRY);
+        host_set_error(host, "la DLL de '%s' no exporta %s", m.id,
+                       COFFEE_EXTENSION_ENTRY);
         coffee_dll_close(dll);
         manifest_free(&m);
         return -6;
@@ -891,6 +957,8 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
      * "registering" sea valido y los registros se atribuyan a esta extension. */
     if (!host_grow((void **)&host->exts, &host->ext_cap, host->ext_count,
                    sizeof(HostExtension))) {
+        host_set_error(host, "sin memoria para registrar la extension '%s'",
+                       m.id);
         coffee_dll_close(dll);
         manifest_free(&m);
         return -7;
@@ -908,8 +976,9 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
     host->registering = -1;
 
     if (rc != 0) {
-        fprintf(stderr, "[ext-host] '%s' fallo su registro (rc=%d); descargo\n",
-                m.id, rc);
+        host_set_error(host,
+                       "coffee_extension_register de '%s' devolvio error (%d)",
+                       m.id, rc);
         /* revertir lo que hubiera registrado + liberar el slot */
         host_revoke_owner(host, idx);
         coffee_dll_close(dll);
@@ -932,7 +1001,10 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
 int ext_host_unload(CoffeeHost *host, const char *id) {
     if (!host || !id) return -1;
     int idx = host_find_ext(host, id);
-    if (idx < 0) return -2;
+    if (idx < 0) {
+        host_set_error(host, "la extension '%s' no esta cargada", id);
+        return -2;
+    }
     HostExtension *he = &host->exts[idx];
 
     /* invocar deactivate opcional ANTES de revocar/cerrar */
@@ -963,7 +1035,10 @@ int ext_host_unload(CoffeeHost *host, const char *id) {
 int ext_host_reload(CoffeeHost *host, const char *id) {
     if (!host || !id) return -1;
     int idx = host_find_ext(host, id);
-    if (idx < 0) return -2;
+    if (idx < 0) {
+        host_set_error(host, "la extension '%s' no esta cargada", id);
+        return -2;
+    }
     /* copiar el dir antes de descargar (unload libera la cadena) */
     char *dir = host_strdup(host->exts[idx].dir);
     int rc = ext_host_unload(host, id);
@@ -983,6 +1058,27 @@ typedef struct {
     int loaded; /**< 1 si ya se cargo (marca del orden topologico) */
 } DirCandidate;
 
+/* Emite un fallo de carga a la UI: panel de salida + barra de estado, ademas
+ * de guardarlo como ultimo error.  Asi el usuario VE en el IDE que una
+ * extension no cargo y por que, sin abrir una consola. */
+static void host_report_failure(CoffeeHost *h, const char *id,
+                                const char *reason) {
+    char line[320];
+    snprintf(line, sizeof(line), "extension '%s' fallo: %s\n",
+             id ? id : "?", reason ? reason : "causa desconocida");
+    if (h->backend.output_append)
+        h->backend.output_append(h->backend.ud, line);
+    if (h->backend.set_status) {
+        char st[320];
+        snprintf(st, sizeof(st), "extension '%s' fallo: %s", id ? id : "?",
+                 reason ? reason : "causa desconocida");
+        h->backend.set_status(h->backend.ud, st);
+    }
+    /* dejar tambien el mensaje accesible via ext_host_last_error */
+    snprintf(h->last_error, sizeof(h->last_error), "extension '%s' fallo: %s",
+             id ? id : "?", reason ? reason : "causa desconocida");
+}
+
 /* Busca el indice de un candidato por id (-1 si no existe). */
 static int cand_find(DirCandidate *c, size_t n, const char *id) {
     for (size_t i = 0; i < n; ++i)
@@ -991,16 +1087,21 @@ static int cand_find(DirCandidate *c, size_t n, const char *id) {
 }
 
 /* Carga recursiva en orden topologico: primero las deps de @p i, luego @p i.
- * @p stack/@p depth detectan ciclos.  Devuelve 0 ok, <0 ciclo/error. */
+ * @p stack/@p depth detectan ciclos.  @p fail_count cuenta las extensiones que
+ * no se pudieron cargar (para el resumen visible).  Cada fallo se reporta a la
+ * UI via host_report_failure.  Devuelve 0 ok, <0 ciclo/dep ausente. */
 static int cand_load_rec(CoffeeHost *host, DirCandidate *c, size_t n, int i,
-                         int *stack, int depth, int *loaded_count) {
+                         int *stack, int depth, int *loaded_count,
+                         int *fail_count) {
     if (c[i].loaded) return 0;
     /* deteccion de ciclo: i ya esta en la pila de recursion actual */
     for (int d = 0; d < depth; ++d) {
         if (stack[d] == i) {
-            fprintf(stderr,
-                    "[ext-host] ciclo de dependencias detectado en '%s'\n",
-                    c[i].m.id ? c[i].m.id : "?");
+            char reason[256];
+            snprintf(reason, sizeof(reason),
+                     "ciclo de dependencias detectado");
+            host_report_failure(host, c[i].m.id, reason);
+            (*fail_count)++;
             return -1;
         }
     }
@@ -1009,17 +1110,24 @@ static int cand_load_rec(CoffeeHost *host, DirCandidate *c, size_t n, int i,
     for (size_t k = 0; k < c[i].m.dep_count; ++k) {
         int di = cand_find(c, n, c[i].m.deps[k]);
         if (di < 0) {
-            fprintf(stderr,
-                    "[ext-host] '%s' depende de '%s' que no esta presente\n",
-                    c[i].m.id, c[i].m.deps[k]);
+            char reason[256];
+            snprintf(reason, sizeof(reason),
+                     "falta la dependencia '%s'", c[i].m.deps[k]);
+            host_report_failure(host, c[i].m.id, reason);
+            (*fail_count)++;
             return -2;
         }
-        int rc =
-            cand_load_rec(host, c, n, di, stack, depth + 1, loaded_count);
+        int rc = cand_load_rec(host, c, n, di, stack, depth + 1, loaded_count,
+                               fail_count);
         if (rc != 0) return rc;
     }
-    /* cargar esta extension */
-    if (ext_host_load(host, c[i].dir) == 0) (*loaded_count)++;
+    /* cargar esta extension; si falla, mostrar la causa concreta en la UI */
+    if (ext_host_load(host, c[i].dir) == 0) {
+        (*loaded_count)++;
+    } else {
+        host_report_failure(host, c[i].m.id, ext_host_last_error(host));
+        (*fail_count)++;
+    }
     c[i].loaded = 1;
     return 0;
 }
@@ -1091,7 +1199,9 @@ int ext_host_load_dir(CoffeeHost *host, const char *extensions_root) {
     size_t ncand = 0;
     for (int i = 0; i < ndirs; ++i) {
         HostManifest m;
-        if (manifest_read(dirs[i], &m) == 0) {
+        /* pasar NULL como host: un subdirectorio sin manifiesto no es un error
+         * (puede no ser una extension); el fallo real se reporta al cargar. */
+        if (manifest_read(NULL, dirs[i], &m) == 0) {
             cands[ncand].dir = host_strdup(dirs[i]);
             cands[ncand].m = m; /* toma posesion de las cadenas del manifiesto */
             cands[ncand].loaded = 0;
@@ -1102,12 +1212,13 @@ int ext_host_load_dir(CoffeeHost *host, const char *extensions_root) {
     free(dirs);
 
     int loaded = 0;
+    int failed = 0;
     int result = 0;
     if (ncand > 0) {
         int *stack = (int *)malloc(ncand * sizeof(int));
         for (size_t i = 0; i < ncand; ++i) {
             int rc = cand_load_rec(host, cands, ncand, (int)i, stack, 0,
-                                   &loaded);
+                                   &loaded, &failed);
             if (rc != 0) {
                 result = rc; /* ciclo o dep ausente: reportar pero seguir */
             }
@@ -1120,6 +1231,16 @@ int ext_host_load_dir(CoffeeHost *host, const char *extensions_root) {
         manifest_free(&cands[i].m);
     }
     free(cands);
+
+    /* Resumen VISIBLE: si alguna extension fallo, avisar en la barra de estado
+     * para que el usuario sepa que mirar el panel de salida (donde ya estan los
+     * detalles de cada fallo emitidos por host_report_failure). */
+    if (failed > 0 && host->backend.set_status) {
+        char st[160];
+        snprintf(st, sizeof(st),
+                 "%d extension(es) no se cargaron - ver salida", failed);
+        host->backend.set_status(host->backend.ud, st);
+    }
 
     return result < 0 ? result : loaded;
 }

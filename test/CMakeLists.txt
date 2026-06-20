@@ -57,15 +57,35 @@ if(COFFEE_BUILD_EXTENSIONS)
         "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
         "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
         "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
-    # Ruta del directorio de la extension (manifiesto + DLL) inyectada en compile.
+    # Ruta del directorio de la extension (manifiesto generado + DLL) inyectada
+    # en compile.  Apunta al BUILD dir: ahi viven el coffee-extension.toml
+    # generado por configure_file y la DLL coffee_hello, no en el arbol fuente
+    # (donde solo esta el .toml.in).
     target_compile_definitions(test_ext_host PRIVATE
-        "COFFEE_HELLO_EXT_DIR=\"${CMAKE_SOURCE_DIR}/extensions/hello-c\"")
+        "COFFEE_HELLO_EXT_DIR=\"${CMAKE_BINARY_DIR}/extensions/hello-c\"")
     # Carga dinamica: en POSIX el host usa dlopen/dlclose (libdl).
     if(UNIX AND NOT APPLE)
         target_link_libraries(test_ext_host PRIVATE dl)
     endif()
     # El test necesita que la DLL de la extension exista antes de ejecutarse.
     add_dependencies(test_ext_host coffee_hello)
+
+    # --- extension host: feedback de errores de carga ----------------------
+    # Verifica que ext_host_last_error captura un motivo legible en cada ruta
+    # de fallo (dir inexistente, DLL ausente, simbolo de entrada ausente).  Los
+    # fixtures se generan en runtime bajo COFFEE_ERR_TMP_DIR (el build dir).
+    add_coffee_test(test_ext_errors ext/test_ext_errors.c
+        "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
+        "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
+        "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
+        "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+    target_compile_definitions(test_ext_errors PRIVATE
+        "COFFEE_ERR_TMP_DIR=\"${CMAKE_BINARY_DIR}/test_ext_errors_tmp\"")
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(test_ext_errors PRIVATE dl)
+    endif()
+    # Asegurar que el dir temporal de fixtures existe antes de ejecutar.
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test_ext_errors_tmp")
 
     # --- extension vesta (IDE -> libvesta -> VM de Vex) --------------------
     # Solo si la extension vesta se construyo (libvesta presente).  El test

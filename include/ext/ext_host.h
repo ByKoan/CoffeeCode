@@ -78,6 +78,22 @@ void ext_host_destroy(CoffeeHost *host);
 const CoffeeApi *ext_host_api(CoffeeHost *host);
 
 /**
+ * @brief Devuelve el ultimo mensaje de error legible del host.
+ *
+ * Cada camino de fallo de @c ext_host_load / @c ext_host_load_dir /
+ * @c ext_host_reload rellena un mensaje con la causa concreta (DLL que no
+ * carga con el texto del SO, manifiesto ausente, simbolo de entrada ausente,
+ * ABI incompatible, dependencia faltante o ciclo, fallo del registro).  El
+ * IDE lo muestra en el panel de salida / barra de estado para que el usuario
+ * VEA por que una extension no cargo.
+ *
+ * La cadena es propiedad del host y valida hasta la siguiente operacion de
+ * carga (copiar si se necesita conservar).  Nunca devuelve NULL: si no hubo
+ * error, devuelve una cadena vacia.
+ */
+const char *ext_host_last_error(CoffeeHost *host);
+
+/**
  * @brief Actualiza el buffer activo respaldado por el host.
  *
  * El editor SDL la llama al cambiar de pestana para que las operaciones de
