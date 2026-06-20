@@ -448,7 +448,73 @@ void select_all(Editor *e) {
  *
  * @param e Editor.
  */
+/**
+ * @brief Copia el contenido del canal activo del panel inferior al
+ *        portapapeles.
+ *
+ * Si hay una seleccion de lineas viva, copia solo esas lineas (rango ordenado
+ * [anchor, caret]); si no, copia TODO el scrollback del canal activo.  Esto es
+ * el "copy-todo / copy-seleccion" del panel inferior.
+ *
+ * @param e Editor.
+ * @return 1 si copio algo (o el canal estaba vacio pero era el destino), 0 si no
+ *         habia panel/canal del que copiar.
+ */
+static int bottom_panel_copy(Editor *e) {
+    if (!e->bottom_panel_open || !e->bottom_focused) return 0;
+    if (e->bottom_active_chan < 0 ||
+        (size_t)e->bottom_active_chan >= e->panels.count)
+        return 0;
+    const PanelChannel *c =
+        panel_at(&e->panels, (size_t)e->bottom_active_chan);
+    if (!c) return 0;
+
+    /* sin seleccion: copiar todo el canal */
+    if (!e->bottom_sel_active || e->bottom_sel_anchor < 0) {
+        SDL_SetClipboardText(c->text);
+        return 1;
+    }
+
+    /* con seleccion: recortar al rango de lineas [lo, hi] */
+    int lo = e->bottom_sel_anchor, hi = e->bottom_sel_caret;
+    if (hi < lo) {
+        int t = lo;
+        lo = hi;
+        hi = t;
+    }
+    if (lo < 0) lo = 0;
+
+    /* localizar el inicio de la linea `lo` y el fin de la linea `hi` */
+    const char *p = c->text;
+    int line = 0;
+    const char *start = c->text;
+    const char *end = c->text + c->len;
+    while (*p) {
+        if (line == lo) start = p;
+        if (*p == '\n') {
+            ++line;
+            if (line > hi) {
+                end = p; /* fin = el '\n' que cierra la linea hi */
+                break;
+            }
+        }
+        ++p;
+    }
+    if (lo > line) start = c->text + c->len; /* lo fuera de rango: vacio */
+    if (end < start) end = start;
+    size_t len = (size_t)(end - start);
+    char *tmp = malloc(len + 1);
+    if (!tmp) return 1;
+    memcpy(tmp, start, len);
+    tmp[len] = '\0';
+    SDL_SetClipboardText(tmp);
+    free(tmp);
+    return 1;
+}
+
 void do_copy(Editor *e) {
+    /* Si el panel inferior tiene el foco, Ctrl+C copia su canal activo. */
+    if (bottom_panel_copy(e)) return;
     size_t from, to;
     if (!editor_sel_range(e, &from, &to)) return;
     size_t len = to - from;

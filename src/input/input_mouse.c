@@ -27,6 +27,10 @@
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
 
+/* Adelanto: lo usa on_mouse_motion (arrastre de seleccion) antes de su
+ * definicion, que vive junto al resto de helpers del panel inferior. */
+static int bottom_line_at(Editor *e, int my);
+
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
  *
@@ -57,18 +61,26 @@ int get_left_offset(Editor *e) {
  *
  * @param want_resize 1 para mostrar el cursor de redimension, 0 para el normal.
  */
-static void set_divider_cursor(int want_resize) {
+static void set_divider_cursor(int which) {
     static SDL_Cursor *cur_ew = NULL;    /* cursor de redimension horizontal */
+    static SDL_Cursor *cur_ns = NULL;    /* cursor de redimension vertical   */
     static SDL_Cursor *cur_arrow = NULL; /* cursor normal (flecha)           */
     static int tried = 0;                /* ya se intento crear (evita reintentos) */
 
     if (!tried) { /* crear una sola vez, perezosamente */
         tried = 1;
         cur_ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        cur_ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
         cur_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     }
 
-    SDL_Cursor *target = want_resize ? cur_ew : cur_arrow;
+    /* El divisor inferior es horizontal -> cursor NS; los demas son verticales
+     * -> cursor EW; DIVIDER_NONE -> flecha normal. */
+    SDL_Cursor *target = cur_arrow;
+    if (which == DIVIDER_BOTTOM_TOP)
+        target = cur_ns;
+    else if (which != DIVIDER_NONE)
+        target = cur_ew;
     if (target) SDL_SetCursor(target); /* solo si SDL pudo crearlo */
 }
 
@@ -87,7 +99,7 @@ static void update_divider_hover(Editor *e, int mx, int my) {
     int hit = layout_hit_divider(e, mx, my);
     if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
         e->hovered_divider = hit;
-        set_divider_cursor(hit != DIVIDER_NONE);
+        set_divider_cursor(hit);
         e->needs_redraw = 1;
     }
 }
@@ -104,7 +116,7 @@ static int try_start_divider_drag(Editor *e, int mx, int my) {
     int hit = layout_hit_divider(e, mx, my);
     if (hit == DIVIDER_NONE) return 0;
     e->dragging_divider = hit; /* entrar en modo arrastre */
-    set_divider_cursor(1);     /* mantener el cursor de redimension */
+    set_divider_cursor(hit);   /* mantener el cursor de redimension adecuado */
     return 1;
 }
 
@@ -316,6 +328,19 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* Rueda sobre el panel inferior: desplazar el scrollback del canal activo. */
+    if (e->bottom_panel_open && ui_hit(&e->ui, UI_BOTTOM_PANEL, cursor_x, cursor_y)) {
+        if (e->bottom_active_chan >= 0 &&
+            (size_t)e->bottom_active_chan < e->panels.count) {
+            PanelChannel *c = &e->panels.chans[e->bottom_active_chan];
+            c->scroll -= (int)(ev->wheel.y * SCROLL_LINES_PER_NOTCH);
+            if (c->scroll < 0) c->scroll = 0;
+            /* el tope inferior lo recorta el render segun las lineas visibles */
+        }
+        e->needs_redraw = 1;
+        return;
+    }
+
     if (e->ftree.open && cursor_x < get_left_offset(e)) {
         /* la rueda sobre el panel desplaza el árbol */
         e->ftree.scroll -= (int)(ev->wheel.y * SCROLL_LINES_PER_NOTCH);
@@ -426,6 +451,14 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
 
     if (e->scrollbar_dragging) { /* arrastrando el thumb: desplazar y salir */
         drag_scrollbar(e, mouse_y);
+        return;
+    }
+
+    /* arrastre para seleccionar lineas en el panel inferior */
+    if (e->bottom_selecting) {
+        e->bottom_sel_caret = bottom_line_at(e, mouse_y);
+        e->bottom_sel_active = 1;
+        e->needs_redraw = 1;
         return;
     }
 
@@ -755,6 +788,76 @@ int handle_ext_panel_click(Editor *e, int mx, int my) {
     return 0;
 }
 
+/**
+ * @brief Linea del canal activo (relativa al inicio del scrollback) bajo el
+ *        cursor dentro del cuerpo del panel inferior.
+ *
+ * Usa la geometria registrada por el render (UI_BOTTOM_BODY) + el scroll del
+ * canal activo.  Devuelve un indice de linea >= 0 (recortado al rango del
+ * canal), o -1 si el panel no esta abierto o no hay cuerpo registrado.
+ */
+static int bottom_line_at(Editor *e, int my) {
+    if (!e->bottom_panel_open) return -1;
+    Rect body = e->ui.single[UI_BOTTOM_BODY];
+    if (body.w <= 0) return -1;
+    int rel = my - body.y;
+    if (rel < 0) rel = 0;
+    int line_h = e->line_height > 0 ? e->line_height : 16;
+    int vi = rel / line_h;
+    const PanelChannel *c = panel_at(&e->panels, (size_t)e->bottom_active_chan);
+    int scroll = c ? c->scroll : 0;
+    if (scroll < 0) scroll = 0;
+    return scroll + vi;
+}
+
+/**
+ * @brief Procesa un clic dentro del panel inferior (pestanas + cuerpo).
+ *
+ * Da el foco al panel (para que Ctrl+C copie su canal), cambia de pestana si se
+ * pulso una, o inicia una seleccion de lineas si el clic cayo en el cuerpo.
+ *
+ * @return 1 si el clic fue consumido por el panel, 0 si no.
+ */
+static int handle_bottom_panel_click(Editor *e, int mx, int my) {
+    if (!e->bottom_panel_open) return 0;
+    if (!ui_hit(&e->ui, UI_BOTTOM_PANEL, mx, my)) {
+        /* clic fuera del panel: pierde el foco (sin consumir el clic) */
+        if (e->bottom_focused) {
+            e->bottom_focused = 0;
+            e->needs_redraw = 1;
+        }
+        return 0;
+    }
+
+    /* el clic esta dentro del panel: tomar el foco */
+    e->bottom_focused = 1;
+
+    /* pestana pulsada (por indice de canal) */
+    int tab = ui_hit_idx(&e->ui, UI_LIST_BOTTOM_TAB, mx, my);
+    if (tab >= 0) {
+        e->bottom_active_chan = tab;
+        e->bottom_sel_active = 0; /* limpiar seleccion al cambiar de canal */
+        e->bottom_sel_anchor = -1;
+        e->bottom_sel_caret = -1;
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* clic en el cuerpo: empezar una seleccion de lineas */
+    if (ui_hit(&e->ui, UI_BOTTOM_BODY, mx, my)) {
+        int ln = bottom_line_at(e, my);
+        e->bottom_sel_anchor = ln;
+        e->bottom_sel_caret = ln;
+        e->bottom_sel_active = 1;
+        e->bottom_selecting = 1;
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* clic en otra parte del marco (tira de pestanas vacia): consumir */
+    return 1;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
@@ -791,6 +894,16 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         e->needs_redraw = 1;
         return;
     }
+
+    /* Boton "Panel" de la navbar: abrir/cerrar el panel inferior. */
+    if (ui_hit(&e->ui, UI_BOTTOM_TOGGLE, mx, my)) {
+        e->bottom_panel_open = !e->bottom_panel_open;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Clic dentro del panel inferior: foco + pestanas + seleccion. */
+    if (e->bottom_panel_open && handle_bottom_panel_click(e, mx, my)) return;
 
     /* Clic dentro del panel de extensiones: acciones + consumir el clic. */
     if (e->ext_panel_open && handle_ext_panel_click(e, mx, my)) return;

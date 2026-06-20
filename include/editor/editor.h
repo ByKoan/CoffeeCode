@@ -13,6 +13,7 @@
 #include "lexer/lexer.h"
 #include "lsp/lsp.h"
 #include "lsp/lsp_install.h"
+#include "panel/panel.h"
 #include "render/theme.h"
 #include "render/ui_hit.h"
 #include "settings/settings.h"
@@ -218,15 +219,29 @@ typedef struct Editor {
     char ext_status[256];     /* mensaje de barra de estado puesto por una
                                  extension (CoffeeApi::set_status); vacio si
                                  ninguna lo fijo */
-    char ext_output[4096];    /* buffer del panel de salida (output_append);
-                                 acumula texto que las extensiones emiten */
-    size_t ext_output_len;    /* bytes usados de ext_output */
     int ext_panel_scroll;     /* scroll vertical del panel de extensiones */
     int ext_install_mode;     /* 1 = el proximo dialogo de carpeta instala una
                                  extension (ext_host_load) en lugar de abrir el
                                  explorador (ftree_load) */
     int ext_panel_w;          /* ancho actual del panel de extensiones (px),
                                  redimensionable arrastrando su borde izquierdo */
+
+    /* -- Panel inferior con pestanas (Salida/Logs/Terminal + canales de las
+     * extensiones).  El texto de cada canal vive en `panels` (almacen puro);
+     * aqui van los escalares de la UI del panel. */
+    PanelStore panels;        /* almacen de canales de texto (scrollback) */
+    int bottom_panel_open;    /* 1 = panel inferior visible */
+    int bottom_panel_h;       /* alto actual del panel inferior (px),
+                                 redimensionable arrastrando su borde superior */
+    int bottom_active_chan;   /* indice del canal/pestana activo */
+    int bottom_focused;       /* 1 = el panel inferior tiene el foco (Ctrl+C
+                                 copia su canal activo) */
+    /* seleccion de texto con el raton dentro del panel inferior (en lineas;
+     * -1 = sin seleccion) */
+    int bottom_sel_anchor;    /* linea ancla (extremo fijo) de la seleccion */
+    int bottom_sel_caret;     /* linea caret (extremo movil) de la seleccion */
+    int bottom_sel_active;    /* 1 = hay seleccion viva en el panel inferior */
+    int bottom_selecting;     /* 1 = arrastrando para seleccionar */
 
     /* -- Divisores arrastrables entre regiones (ver layout/layout.h) ------
      * Estado del arrastre del borde de un panel para redimensionarlo. */

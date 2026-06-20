@@ -171,8 +171,9 @@ void editor_sync_cursor(Editor *e) {
  */
 void editor_ensure_visible(Editor *e) {
     int left_off = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    int bottom_h = e->bottom_panel_open ? e->bottom_panel_h : 0;
     int vis_lines = (e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT - STATUS_HEIGHT -
-                     editor_shortcut_h(e)) /
+                     editor_shortcut_h(e) - bottom_h) /
                     e->line_height;
     int vis_cols =
         (e->win_w - left_off - editor_gutter_w(e) - PADDING_LEFT) / e->char_w;
@@ -292,35 +293,61 @@ static void ext_hook_set_status(void *ud, const char *msg) {
     e->needs_redraw = 1;
 }
 
-/** output_append: acumula texto en el buffer del panel de salida. */
+/** output_append: anyade texto al canal por defecto "salida" del panel
+ *  inferior.  Abre el panel inferior para que el usuario VEA la salida. */
 static void ext_hook_output_append(void *ud, const char *text) {
     Editor *e = (Editor *)ud;
     if (!e || !text) return;
-    size_t add = strlen(text);
-    size_t cap = sizeof(e->ext_output) - 1; /* reservar el NUL */
-    if (add > cap) {
-        /* texto mas grande que el buffer: quedarse con la cola */
-        text += add - cap;
-        add = cap;
-    }
-    if (e->ext_output_len + add > cap) {
-        /* no cabe: descartar la cabecera mas antigua (scroll del buffer) */
-        size_t drop = e->ext_output_len + add - cap;
-        memmove(e->ext_output, e->ext_output + drop, e->ext_output_len - drop);
-        e->ext_output_len -= drop;
-    }
-    memcpy(e->ext_output + e->ext_output_len, text, add);
-    e->ext_output_len += add;
-    e->ext_output[e->ext_output_len] = '\0';
+    panel_append(&e->panels, PANEL_DEFAULT_CHANNEL, text);
+    e->bottom_panel_open = 1; /* mostrar la salida cuando llega texto */
     e->needs_redraw = 1;
 }
 
-/** output_clear: vacia el buffer del panel de salida. */
+/** output_clear: vacia el canal por defecto "salida". */
 static void ext_hook_output_clear(void *ud) {
     Editor *e = (Editor *)ud;
     if (!e) return;
-    e->ext_output[0] = '\0';
-    e->ext_output_len = 0;
+    panel_clear(&e->panels, PANEL_DEFAULT_CHANNEL);
+    e->needs_redraw = 1;
+}
+
+/** register_channel: registra una pestana (canal) en el panel inferior. */
+static int ext_hook_register_channel(void *ud, const char *id,
+                                     const char *title) {
+    Editor *e = (Editor *)ud;
+    if (!e) return -1;
+    int idx = panel_register(&e->panels, id, title);
+    e->needs_redraw = 1;
+    return idx >= 0 ? 0 : -1;
+}
+
+/** channel_append: anyade texto a un canal del panel inferior por id. */
+static void ext_hook_channel_append(void *ud, const char *id,
+                                    const char *text) {
+    Editor *e = (Editor *)ud;
+    if (!e || !id || !text) return;
+    panel_append(&e->panels, id, text);
+    e->bottom_panel_open = 1; /* mostrar el panel cuando llega texto */
+    e->needs_redraw = 1;
+}
+
+/** channel_clear: vacia un canal del panel inferior por id. */
+static void ext_hook_channel_clear(void *ud, const char *id) {
+    Editor *e = (Editor *)ud;
+    if (!e || !id) return;
+    panel_clear(&e->panels, id);
+    e->needs_redraw = 1;
+}
+
+/** log_line: vuelca un mensaje de log al canal "logs" del panel inferior. */
+static void ext_hook_log_line(void *ud, int level, const char *msg) {
+    Editor *e = (Editor *)ud;
+    if (!e || !msg) return;
+    static const char *lv[] = {"DEBUG", "INFO", "WARN", "ERROR"};
+    int i = (level >= 0 && level <= 3) ? level : 1;
+    char line[320];
+    snprintf(line, sizeof(line), "[%s] %s\n", lv[i], msg);
+    panel_append(&e->panels, "logs", line);
     e->needs_redraw = 1;
 }
 
@@ -367,6 +394,18 @@ int editor_init(Editor *e, const char *filepath) {
     e->ext_panel_w = LAYOUT_EXT_DEFAULT_W; /* ancho inicial del panel de exts */
     e->dragging_divider = DIVIDER_NONE;    /* sin arrastre de divisor activo */
     e->hovered_divider = DIVIDER_NONE;     /* sin divisor bajo el cursor     */
+
+    /* Panel inferior: cerrado al arrancar, alto inicial sensato, canales
+     * integrados (Salida/Logs/Terminal) registrados en el almacen. */
+    panel_store_init(&e->panels);
+    e->bottom_panel_open = 0;
+    e->bottom_panel_h = LAYOUT_BOTTOM_DEFAULT_H;
+    e->bottom_active_chan = 0; /* "Salida" es el primer canal */
+    e->bottom_focused = 0;
+    e->bottom_sel_anchor = -1;
+    e->bottom_sel_caret = -1;
+    e->bottom_sel_active = 0;
+    e->bottom_selecting = 0;
 
     /* preferencias persistentes: cargarlas y aplicar las que afectan al estado
      * inicial (las demás las leen render/input directamente de e->settings). */
@@ -474,6 +513,10 @@ int editor_init(Editor *e, const char *filepath) {
         backend.set_status = ext_hook_set_status;
         backend.output_append = ext_hook_output_append;
         backend.output_clear = ext_hook_output_clear;
+        backend.register_channel = ext_hook_register_channel;
+        backend.channel_append = ext_hook_channel_append;
+        backend.channel_clear = ext_hook_channel_clear;
+        backend.log_line = ext_hook_log_line;
         backend.request_repaint = ext_hook_request_repaint;
         CoffeeHost *host = ext_host_create(&backend);
         e->ext_host = host;

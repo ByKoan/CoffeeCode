@@ -367,10 +367,11 @@ static void api_show_message(CoffeeHost *h, const char *title, const char *body)
                 body ? body : "");
 }
 static void api_log(CoffeeHost *h, CoffeeLogLevel level, const char *msg) {
-    (void)h;
     static const char *lv[] = {"DEBUG", "INFO", "WARN", "ERROR"};
     int i = (level >= COFFEE_LOG_DEBUG && level <= COFFEE_LOG_ERROR) ? level : 1;
     fprintf(stderr, "[ext-host][%s] %s\n", lv[i], msg ? msg : "");
+    /* tambien alimentar la pestana "Logs" del panel inferior, si hay backend */
+    if (h && h->backend.log_line) h->backend.log_line(h->backend.ud, (int)i, msg);
 }
 static void api_output_append(CoffeeHost *h, const char *text) {
     if (h && h->backend.output_append)
@@ -380,6 +381,30 @@ static void api_output_append(CoffeeHost *h, const char *text) {
 }
 static void api_output_clear(CoffeeHost *h) {
     if (h && h->backend.output_clear) h->backend.output_clear(h->backend.ud);
+}
+
+/* ---- Canales del panel inferior (ABI v2) ---- */
+
+static int api_register_output_channel(CoffeeHost *h, const char *id,
+                                       const char *title) {
+    if (!h || !id || !id[0]) return -1;
+    if (h->backend.register_channel)
+        return h->backend.register_channel(h->backend.ud, id, title);
+    /* sin backend (headless): loguear y aceptar para no romper la activacion */
+    fprintf(stderr, "[ext-host] register_output_channel('%s','%s'): sin backend\n",
+            id, title ? title : "");
+    return 0;
+}
+static void api_channel_append(CoffeeHost *h, const char *id, const char *text) {
+    if (!h || !id) return;
+    if (h->backend.channel_append)
+        h->backend.channel_append(h->backend.ud, id, text);
+    else
+        fputs(text ? text : "", stdout);
+}
+static void api_channel_clear(CoffeeHost *h, const char *id) {
+    if (!h || !id) return;
+    if (h->backend.channel_clear) h->backend.channel_clear(h->backend.ud, id);
 }
 
 /* ---- Dibujo: vistas y decoraciones (STUB) ---- */
@@ -585,6 +610,10 @@ static void host_fill_api(CoffeeHost *h) {
     a->ext_dir = api_ext_dir;
 
     a->register_native_fn = api_register_native_fn;
+
+    a->register_output_channel = api_register_output_channel;
+    a->channel_append = api_channel_append;
+    a->channel_clear = api_channel_clear;
 }
 
 /* ===========================================================================

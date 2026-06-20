@@ -52,6 +52,13 @@ typedef struct CoffeeHostBackend {
     void (*output_append)(void *ud, const char *text);
     void (*output_clear)(void *ud);
 
+    /* -- Canales del panel inferior (opcionales) -- */
+    int (*register_channel)(void *ud, const char *id, const char *title);
+    void (*channel_append)(void *ud, const char *id, const char *text);
+    void (*channel_clear)(void *ud, const char *id);
+    /** Mensaje de log de una extension (alimenta la pestana "Logs"). */
+    void (*log_line)(void *ud, int level, const char *msg);
+
     /* -- Editor / archivo (opcionales) -- */
     const char *(*current_path)(void *ud);
     void (*open_file)(void *ud, const char *path);

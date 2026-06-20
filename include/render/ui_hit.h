@@ -64,6 +64,10 @@ typedef enum {
     UI_EXT_TOGGLE,      /**< Botón abrir/cerrar el panel de extensiones. */
     UI_EXT_INSTALL,     /**< Botón "Instalar extension" (desde carpeta). */
     UI_EXT_PANEL,       /**< Marco del panel (consume clics dentro).     */
+    /* Panel inferior (Salida/Logs/Terminal) */
+    UI_BOTTOM_TOGGLE,   /**< Botón abrir/cerrar el panel inferior.       */
+    UI_BOTTOM_PANEL,    /**< Marco del panel inferior (consume clics + foco). */
+    UI_BOTTOM_BODY,     /**< Area de texto del canal activo (rueda + sel). */
     UI_ID_COUNT
 } UiId;
 
@@ -77,6 +81,7 @@ typedef enum {
     UI_LIST_ENC,       /**< Filas del selector de codificación. */
     UI_LIST_EXT_RELOAD, /**< Botón "recargar" de cada extension. */
     UI_LIST_EXT_UNLOAD, /**< Botón "descargar" de cada extension. */
+    UI_LIST_BOTTOM_TAB, /**< Pestañas del panel inferior (por índice de canal). */
     UI_LIST_COUNT
 } UiList;
 

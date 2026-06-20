@@ -63,3 +63,11 @@ void render_ext_panel(Editor *e);
 /* Geometria de la X (px) donde el panel de extensiones empieza, para que el
  * resto del cromo no lo pise. 0 si el panel esta cerrado. */
 int render_ext_panel_width(Editor *e);
+
+/* -- Panel inferior (Salida/Logs/Terminal) -------------------------------- */
+/* Dibuja el panel inferior con su tira de pestanas y el canal activo. */
+void render_bottom_panel(Editor *e);
+/* Alto (px) que ocupa el panel inferior, 0 si esta cerrado. */
+int render_bottom_panel_height(Editor *e);
+/* Alto (px) de la tira de pestanas del panel inferior. */
+#define BOTTOM_TAB_H 26

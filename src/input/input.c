@@ -318,6 +318,14 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
         if (e->tab_count > 0)
             editor_tab_switch(e, (e->active_tab + 1) % e->tab_count);
         break;
+    case SDLK_C:
+        /* Ctrl+C con el panel inferior enfocado: copiar su canal (funciona
+         * aunque no haya ningun archivo abierto). */
+        if (e->bottom_panel_open && e->bottom_focused) {
+            do_copy(e);
+            return;
+        }
+        break;
     default: break;
     }
     if (!e->buf) return; /* el resto requiere un buffer activo */
@@ -488,6 +496,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->dragging_divider = DIVIDER_NONE; /* fin del arrastre de divisor */
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
+            e->bottom_selecting = 0; /* fin de la seleccion del panel inferior */
         }
         break;
     case SDL_EVENT_MOUSE_MOTION: on_mouse_motion(e, ev); break;

@@ -34,6 +34,7 @@ typedef enum {
     DIVIDER_NONE = -1,       /**< ningun divisor bajo el cursor             */
     DIVIDER_FILETREE_RIGHT,  /**< borde derecho del explorador (vertical)   */
     DIVIDER_EXT_PANEL_LEFT,  /**< borde izquierdo del panel de extensiones  */
+    DIVIDER_BOTTOM_TOP,      /**< borde superior del panel inferior (horiz.) */
 } LayoutDivider;
 
 /* -- Geometria de los divisores ------------------------------------------- */
@@ -49,6 +50,17 @@ typedef enum {
  * Se define aqui (y no se incluye filetree.h) para que la logica pura quede
  * libre de SDL y testeable en headless. */
 #define LAYOUT_FTREE_MIN_W 80
+
+/* Espacio minimo (px) que SIEMPRE queda para la region OPUESTA al panel que se
+ * redimensiona, de modo que el editor (o la otra region) nunca desaparezca por
+ * completo.  Antes el tope era win/2 (un panel solo llegaba a media pantalla);
+ * ahora el redimension es casi libre: un panel puede crecer hasta ocupar todo
+ * menos este minimo. */
+#define LAYOUT_MIN_OPPOSITE 140
+
+/* Panel inferior (Salida/Logs/Terminal): alto minimo y alto inicial (px). */
+#define LAYOUT_BOTTOM_MIN_H 80    /**< alto minimo del panel inferior */
+#define LAYOUT_BOTTOM_DEFAULT_H 180 /**< alto inicial del panel inferior */
 
 /* ===========================================================================
  *  Funciones puras (enteros crudos; testeables sin SDL ni Editor)
@@ -72,11 +84,28 @@ int layout_point_on_vertical_edge(int mx, int my, int edge_x, int region_top,
                                   int region_bottom);
 
 /**
+ * @brief Decide si una coordenada Y cae sobre una franja HORIZONTAL agarrable.
+ *
+ * La franja esta centrada en @p edge_y y tiene un alto total de
+ * 2*::LAYOUT_DIVIDER_GRAB; ademas el cursor debe estar dentro de la banda
+ * horizontal [@p region_left, @p region_right) del panel.
+ *
+ * @param mx           X del raton en pixeles.
+ * @param my           Y del raton en pixeles.
+ * @param edge_y       Y del borde (centro de la franja agarrable).
+ * @param region_left  X donde empieza la region redimensionable.
+ * @param region_right X donde termina la region redimensionable (exclusivo).
+ * @return 1 si (mx,my) cae sobre la franja, 0 si no.
+ */
+int layout_point_on_horizontal_edge(int mx, int my, int edge_y, int region_left,
+                                    int region_right);
+
+/**
  * @brief Recorta el ancho del explorador a su rango valido.
  *
  * @param desired_w Ancho propuesto en pixeles.
  * @param win_w     Ancho de la ventana en pixeles.
- * @return Ancho recortado a [FTREE_MIN_WIDTH, win_w/2].
+ * @return Ancho recortado a [::LAYOUT_FTREE_MIN_W, win_w - ::LAYOUT_MIN_OPPOSITE].
  */
 int layout_clamp_filetree_w(int desired_w, int win_w);
 
@@ -85,9 +114,21 @@ int layout_clamp_filetree_w(int desired_w, int win_w);
  *
  * @param desired_w Ancho propuesto en pixeles.
  * @param win_w     Ancho de la ventana en pixeles.
- * @return Ancho recortado a [::LAYOUT_EXT_MIN_W, win_w/2].
+ * @return Ancho recortado a [::LAYOUT_EXT_MIN_W, win_w - ::LAYOUT_MIN_OPPOSITE].
  */
 int layout_clamp_ext_panel_w(int desired_w, int win_w);
+
+/**
+ * @brief Recorta el alto del panel inferior a su rango valido.
+ *
+ * El maximo deja siempre ::LAYOUT_MIN_OPPOSITE px para el editor y las barras
+ * superiores (navbar + pestanas), de modo que el editor nunca desaparezca.
+ *
+ * @param desired_h Alto propuesto en pixeles.
+ * @param win_h     Alto de la ventana en pixeles.
+ * @return Alto recortado a [::LAYOUT_BOTTOM_MIN_H, win_h - ::LAYOUT_MIN_OPPOSITE].
+ */
+int layout_clamp_bottom_h(int desired_h, int win_h);
 
 /* ===========================================================================
  *  Envoltorios sobre Editor (resuelven la geometria desde su estado)

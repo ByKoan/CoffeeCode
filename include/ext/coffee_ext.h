@@ -18,8 +18,13 @@ extern "C" {
 #endif
 
 /** Version del ABI de extensiones.  El IDE rechaza extensiones con un
- *  abi_version mayor al que entiende.  Se sube al romper compatibilidad. */
-#define COFFEE_ABI_VERSION 1u
+ *  abi_version mayor al que entiende.  Se sube al romper compatibilidad.
+ *
+ *  v2: anyadidos register_output_channel / channel_append / channel_clear al
+ *      final del CoffeeApi (canales del panel inferior).  Como solo se anyaden
+ *      punteros AL FINAL del struct, las extensiones v1 siguen cargando: el IDE
+ *      acepta cualquier extension con abi <= COFFEE_ABI_VERSION. */
+#define COFFEE_ABI_VERSION 2u
 
 /** Handle opaco del IDE.  Las extensiones lo reciben y lo pasan de vuelta a
  *  cada funcion del CoffeeApi.  Su layout es privado al IDE (ABI estable). */
@@ -146,7 +151,9 @@ typedef struct CoffeeApi {
     void (*set_status)(CoffeeHost *h, const char *msg); /**< barra de estado */
     void (*show_message)(CoffeeHost *h, const char *title, const char *body);
     void (*log)(CoffeeHost *h, CoffeeLogLevel level, const char *msg);
-    /** Panel de salida (p.ej. la salida de un compilador o un linter). */
+    /** Panel de salida: anyade/limpia texto en el canal por defecto "salida"
+     *  del panel inferior.  Equivalen a channel_append/channel_clear con
+     *  id="salida"; se conservan por compatibilidad ABI v1. */
     void (*output_append)(CoffeeHost *h, const char *text);
     void (*output_clear)(CoffeeHost *h);
 
@@ -211,6 +218,23 @@ typedef struct CoffeeApi {
      */
     int (*register_native_fn)(CoffeeHost *h, const char *lib, const char *name,
                               void *fnptr);
+
+    /* ---- Canales del panel inferior (ABI v2) ----
+     * NOTA ABI: estos punteros se anyaden AL FINAL del struct (no se reordena
+     * nada de arriba), de modo que las extensiones v1 -compiladas contra el
+     * layout anterior- siguen siendo compatibles.  ESCRIBIR en el panel se hace
+     * con channel_append; la ENTRADA interactiva (terminal) queda como trabajo
+     * FUTURO (la pestana Terminal es hoy un placeholder). */
+
+    /** Registra una pestana (canal) en el panel inferior por @p id, con titulo
+     *  @p title.  Idempotente: si el canal ya existe, refresca su titulo.
+     *  Devuelve 0 si el canal quedo registrado, !=0 en error. */
+    int (*register_output_channel)(CoffeeHost *h, const char *id,
+                                   const char *title);
+    /** Anyade @p text al canal @p id del panel inferior (lo crea si no existe). */
+    void (*channel_append)(CoffeeHost *h, const char *id, const char *text);
+    /** Vacia el scrollback del canal @p id. */
+    void (*channel_clear)(CoffeeHost *h, const char *id);
 } CoffeeApi;
 
 /**

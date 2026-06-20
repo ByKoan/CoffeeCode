@@ -667,9 +667,11 @@ void render_frame(Editor *e) {
     int left_offset = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     /* Y donde empieza el texto */
     int text_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
-    /* alto del área de texto = ventana menos las bandas de UI */
+    /* alto del área de texto = ventana menos las bandas de UI (incluido el
+     * panel inferior si esta abierto, para que el texto no quede tapado). */
     int text_height = e->win_h - NAVBAR_HEIGHT - TAB_BAR_HEIGHT -
-                      STATUS_HEIGHT - editor_shortcut_h(e);
+                      STATUS_HEIGHT - editor_shortcut_h(e) -
+                      render_bottom_panel_height(e);
     int visible_lines = text_height / e->line_height; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
@@ -724,6 +726,7 @@ void render_frame(Editor *e) {
         render_filetree(e); /* panel lateral abierto */
     else
         render_filetree_toggle_closed(e); /* solo el botón para abrirlo */
+    render_bottom_panel(e); /* panel inferior (Salida/Logs/Terminal) */
     render_ext_panel(e); /* panel de extensiones, bajo la navbar */
     render_navbar(e);
     render_tabbar(e);

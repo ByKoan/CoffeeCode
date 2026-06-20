@@ -157,7 +157,8 @@ void render_navbar(Editor *e) {
                   6);
     }
 
-    /* Boton "Extensiones" a la derecha de la navbar (abre/cierra el panel). */
+    /* Botones a la derecha de la navbar: "Extensiones" y "Panel" (abren/cierran
+     * sus paneles).  Se colocan de derecha a izquierda. */
     {
         int ext_w = 0, ext_h = 0;
         TTF_GetStringSize(e->font, "  Extensiones  ", 0, &ext_w, &ext_h);
@@ -166,6 +167,15 @@ void render_navbar(Editor *e) {
         ui_button(e, UI_EXT_TOGGLE, ext_box, "  Extensiones  ",
                   &e->theme.style_nav,
                   e->ext_panel_open ? UI_ACTIVE : UI_NORMAL);
+
+        /* Boton "Panel" (panel inferior Salida/Logs/Terminal). */
+        int pw = 0, ph = 0;
+        TTF_GetStringSize(e->font, "  Panel  ", 0, &pw, &ph);
+        if (pw < 30) pw = 70;
+        Rect panel_box = {ext_box.x - pw - 6, NAV_BTN_Y, pw, btn_h};
+        ui_button(e, UI_BOTTOM_TOGGLE, panel_box, "  Panel  ",
+                  &e->theme.style_nav,
+                  e->bottom_panel_open ? UI_ACTIVE : UI_NORMAL);
     }
 }
 

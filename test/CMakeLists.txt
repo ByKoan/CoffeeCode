@@ -54,6 +54,12 @@ add_coffee_test(test_encoding encoding/test_encoding.c
 add_coffee_test(test_layout layout/test_layout.c
     "${CMAKE_SOURCE_DIR}/src/layout/layout_core.c")
 
+# --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
+# Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
+# render y el input del panel viven sobre el Editor y necesitan SDL.
+add_coffee_test(test_panel panel/test_panel.c
+    "${CMAKE_SOURCE_DIR}/src/panel/panel_core.c")
+
 # --- extension host (puro: ext_host + buffer + utf8 + vec; carga DLLs) ------
 # Smoke test HEADLESS del cargador de extensiones: carga la DLL hello-c,
 # dispara su comando, manipula el buffer y verifica la descarga limpia.

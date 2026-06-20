@@ -34,7 +34,6 @@
 #define EXT_BTN_H 18        /* alto de esos botones                  */
 #define EXT_PAD 8           /* margen interior                       */
 #define EXT_INSTALL_H 26    /* alto del boton "Instalar"             */
-#define EXT_OUTPUT_H 110    /* alto de la zona de salida (output)    */
 
 /* ===========================================================================
  *  CoffeePainter + vtable CoffeePaint (las primitivas que ven las extensiones)
@@ -242,7 +241,7 @@ void render_ext_panel(Editor *e) {
         ui_put_idx(&e->ui, UI_LIST_EXT_UNLOAD, (int)i, unl);
 
         cy += EXT_ROW_H;
-        if (cy > panel_y + panel_h - EXT_OUTPUT_H - EXT_ROW_H) break; /* lleno */
+        if (cy > panel_y + panel_h - EXT_ROW_H) break; /* lleno */
     }
     if (!any) {
         draw_text_c(e, " (ninguna cargada)", panel_x + EXT_PAD, cy,
@@ -250,14 +249,16 @@ void render_ext_panel(Editor *e) {
         cy += e->line_height;
     }
 
-    /* -- Vistas registradas por extensiones (register_view) -- */
+    /* -- Vistas registradas por extensiones (register_view) --
+     * La salida de las extensiones ya NO se dibuja aqui: vive en la pestana
+     * "Salida" del panel inferior (ver render_bottom.c). */
     size_t nv = host ? ext_host_view_count(host) : 0;
     for (size_t i = 0; i < nv; ++i) {
         CoffeeHostView v;
         if (!ext_host_view_at(host, i, &v)) continue;
         if (v.kind != COFFEE_VIEW_PANEL && v.kind != COFFEE_VIEW_SIDEBAR)
             continue;
-        int avail = panel_y + panel_h - EXT_OUTPUT_H - cy - 4;
+        int avail = panel_y + panel_h - cy - 4;
         if (avail < 24) break; /* no queda hueco */
         int vh = avail > 80 ? 80 : avail;
         if (v.title && v.title[0]) {
@@ -268,37 +269,6 @@ void render_ext_panel(Editor *e) {
         CoffeeRect area = {panel_x + EXT_PAD, cy, panel_w - 2 * EXT_PAD, vh};
         paint_one_view(e, &v, area);
         cy += vh + 4;
-    }
-
-    /* -- Panel de salida (output_append) al pie -- */
-    int out_y = panel_y + panel_h - EXT_OUTPUT_H;
-    set_color_c(r, e->theme.col_status_sep);
-    fill_rect(r, panel_x, out_y, panel_w, 1);
-    draw_text_c(e, " Salida", panel_x + EXT_PAD, out_y + 2,
-                e->theme.ftree_txt_root);
-    /* mostrar las ultimas lineas que quepan del buffer de salida.  Las lineas
-     * de fallo (contienen " fallo:") se pintan en rojo para que el usuario VEA
-     * que algo no cargo, en lugar de confundirlas con salida normal. */
-    if (e->ext_output_len > 0) {
-        /* color de error: rojo fijo (el tema no define un rol de error). */
-        Color err_col = {220, 80, 80, 255};
-        int line_y = out_y + 2 + e->line_height;
-        const char *p = e->ext_output;
-        char line[256];
-        while (*p && line_y < panel_y + panel_h - e->line_height) {
-            const char *nl = strchr(p, '\n');
-            size_t len = nl ? (size_t)(nl - p) : strlen(p);
-            if (len >= sizeof(line)) len = sizeof(line) - 1;
-            memcpy(line, p, len);
-            line[len] = '\0';
-            if (line[0]) {
-                int is_err = (strstr(line, " fallo:") != NULL);
-                draw_text_c(e, line, panel_x + EXT_PAD, line_y,
-                            is_err ? err_col : e->theme.ftree_txt_file);
-            }
-            line_y += e->line_height;
-            p = nl ? nl + 1 : p + len;
-        }
     }
 
     /* -- Divisor agarrable: borde izquierdo del panel --

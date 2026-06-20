@@ -28,6 +28,13 @@ static void ext_panel_band(Editor *e, int *top, int *bottom) {
     *bottom = e->win_h - STATUS_HEIGHT;
 }
 
+/** Banda horizontal (left, right) que ocupa el panel inferior: el area del
+ *  editor, entre el explorador (izquierda) y el panel de extensiones (derecha). */
+static void bottom_panel_band(Editor *e, int *left, int *right) {
+    *left = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    *right = e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
+}
+
 int layout_hit_divider(Editor *e, int mx, int my) {
     /* Panel de extensiones primero: vive a la derecha y su borde izquierdo no
      * solapa con el del explorador, asi que el orden no es critico, pero lo
@@ -48,11 +55,19 @@ int layout_hit_divider(Editor *e, int mx, int my) {
             return DIVIDER_FILETREE_RIGHT;
     }
 
+    /* Borde SUPERIOR del panel inferior (divisor horizontal). */
+    if (e->bottom_panel_open) {
+        int edge_y = e->win_h - STATUS_HEIGHT - e->bottom_panel_h;
+        int left, right;
+        bottom_panel_band(e, &left, &right);
+        if (layout_point_on_horizontal_edge(mx, my, edge_y, left, right))
+            return DIVIDER_BOTTOM_TOP;
+    }
+
     return DIVIDER_NONE;
 }
 
 void layout_apply_divider_drag(Editor *e, int which, int mx, int my) {
-    (void)my; /* los divisores actuales son verticales: la Y no influye */
     switch (which) {
     case DIVIDER_FILETREE_RIGHT:
         /* el ancho del explorador es justo la X del cursor (su borde derecho) */
@@ -61,6 +76,11 @@ void layout_apply_divider_drag(Editor *e, int which, int mx, int my) {
     case DIVIDER_EXT_PANEL_LEFT:
         /* el panel se ancla a la derecha: su ancho = ventana - X del cursor */
         e->ext_panel_w = layout_clamp_ext_panel_w(e->win_w - mx, e->win_w);
+        break;
+    case DIVIDER_BOTTOM_TOP:
+        /* el panel se ancla abajo: su alto = (ventana - status) - Y del cursor */
+        e->bottom_panel_h =
+            layout_clamp_bottom_h(e->win_h - STATUS_HEIGHT - my, e->win_h);
         break;
     default: break; /* DIVIDER_NONE u otro: nada que hacer */
     }
