@@ -122,5 +122,14 @@ int main(int argc, char *argv[]) {
     editor_free(e);
     free(e);
     log_close();
-    return 0;
+
+    /* Salida dura: omite la limpieza atexit / DLL_PROCESS_DETACH del CRT al
+     * salir.  Una extension puede enlazar un runtime de terceros cuya
+     * destruccion global aborta en el cierre; el IDE ya libero sus recursos
+     * (editor_free) y cerro su log, asi que terminar aqui evita arrastrar ese
+     * fallo de terceros al cerrar la ventana. */
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(0);
+    return 0; /* inalcanzable: _Exit no retorna */
 }

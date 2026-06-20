@@ -187,6 +187,12 @@ struct CoffeeHost {
 
     char last_error[256]; /**< ultimo mensaje de error legible (causa de un
                                fallo de carga).  Cadena vacia = sin error. */
+
+    /** 1 mientras se cierra el IDE: las descargas NO hacen FreeLibrary (el
+     *  proceso termina y el SO reclama los modulos).  Descargar una DLL que
+     *  arrastra un runtime con hilos/atexit puede abortar en su limpieza de
+     *  DLL_PROCESS_DETACH; mantenerla cargada al salir evita ese riesgo. */
+    int shutting_down;
 };
 
 /* -- util: strdup portable (algunos toolchains no exponen strdup en C11) ---- */
@@ -698,6 +704,7 @@ static void host_revoke_owner(CoffeeHost *h, int owner) {
 
 void ext_host_destroy(CoffeeHost *host) {
     if (!host) return;
+    host->shutting_down = 1; /* las descargas de abajo no haran FreeLibrary */
     /* Emitir SHUTDOWN antes de descargar, para que las extensiones liberen. */
     ext_host_emit(host, COFFEE_EVENT_SHUTDOWN, NULL);
     /* Descargar todas las extensiones activas (en orden inverso de carga). */
@@ -1068,8 +1075,12 @@ int ext_host_unload(CoffeeHost *host, const char *id) {
      * lo que dereferenciarlo tras el free seria un use-after-free. */
     fprintf(stderr, "[ext-host] '%s' descargada\n", he->id ? he->id : id);
 
-    /* cerrar la DLL y marcar el slot como libre */
-    coffee_dll_close(he->dll);
+    /* cerrar la DLL y marcar el slot como libre.  Al cerrar el IDE NO se
+     * descarga (FreeLibrary): el proceso va a terminar y el SO reclama los
+     * modulos; ademas descargar una DLL que enlaza un runtime con estado global
+     * pesado (hilos, atexit) puede abortar en su DLL_PROCESS_DETACH. */
+    if (!host->shutting_down)
+        coffee_dll_close(he->dll);
     free(he->id);
     free(he->dir);
     he->id = NULL;
