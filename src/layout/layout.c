@@ -55,9 +55,15 @@ int layout_hit_divider(Editor *e, int mx, int my) {
             return DIVIDER_FILETREE_RIGHT;
     }
 
-    /* Borde SUPERIOR del panel inferior (divisor horizontal). */
-    if (e->bottom_panel_open) {
-        int edge_y = e->win_h - STATUS_HEIGHT - e->bottom_panel_h;
+    /* Borde SUPERIOR del panel inferior (divisor horizontal).  Cuando el panel
+     * esta ABIERTO la zona agarrable esta en su borde superior; cuando esta
+     * CERRADO, en el borde inferior del area del editor (justo encima de la
+     * barra de estado), para poder "sacarlo" arrastrando hacia arriba como en
+     * VS Code. */
+    {
+        int edge_y = e->bottom_panel_open
+                         ? (e->win_h - STATUS_HEIGHT - e->bottom_panel_h)
+                         : (e->win_h - STATUS_HEIGHT);
         int left, right;
         bottom_panel_band(e, &left, &right);
         if (layout_point_on_horizontal_edge(mx, my, edge_y, left, right))
@@ -77,11 +83,20 @@ void layout_apply_divider_drag(Editor *e, int which, int mx, int my) {
         /* el panel se ancla a la derecha: su ancho = ventana - X del cursor */
         e->ext_panel_w = layout_clamp_ext_panel_w(e->win_w - mx, e->win_w);
         break;
-    case DIVIDER_BOTTOM_TOP:
-        /* el panel se ancla abajo: su alto = (ventana - status) - Y del cursor */
-        e->bottom_panel_h =
-            layout_clamp_bottom_h(e->win_h - STATUS_HEIGHT - my, e->win_h);
+    case DIVIDER_BOTTOM_TOP: {
+        /* el panel se ancla abajo: su alto deseado = (ventana - status) - Y del
+         * cursor.  Si se arrastra hacia abajo por debajo del minimo, se colapsa
+         * (ocultar); en cualquier otro caso se asegura abierto (sacarlo si
+         * estaba cerrado) y se ajusta el alto. */
+        int desired = e->win_h - STATUS_HEIGHT - my;
+        if (desired < LAYOUT_BOTTOM_MIN_H) {
+            e->bottom_panel_open = 0;
+        } else {
+            e->bottom_panel_open = 1;
+            e->bottom_panel_h = layout_clamp_bottom_h(desired, e->win_h);
+        }
         break;
+    }
     default: break; /* DIVIDER_NONE u otro: nada que hacer */
     }
 }

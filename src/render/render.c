@@ -354,7 +354,10 @@ static void render_empty_screen(Editor *e) {
     int area_left = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
     int area_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
     int center_x = area_left + (e->win_w - area_left) / 2;
-    int mid_y = area_top + (e->win_h - area_top - STATUS_HEIGHT) / 2;
+    /* el area visible del editor descuenta tambien el panel inferior si esta
+     * abierto, para que el texto de bienvenida quede centrado encima de el */
+    int area_bottom = e->win_h - STATUS_HEIGHT - render_bottom_panel_height(e);
+    int mid_y = area_top + (area_bottom - area_top) / 2;
 
     /* título dos líneas por encima del centro; cada pista una línea más abajo
      */
@@ -364,6 +367,7 @@ static void render_empty_screen(Editor *e) {
         draw_text_c(e, hints[i], center_x - hint_w / 2,
                     mid_y + e->line_height * i, e->theme.txt_welcome_hint);
 
+    render_bottom_panel(e); /* panel inferior tambien sin archivo abierto */
     render_ext_panel(e); /* panel de extensiones tambien sin archivo */
     draw_status_bar(e, "  CoffeeCode");
     /* mostrar el frame (render_frame ya retornó) */
