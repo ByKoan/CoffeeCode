@@ -236,10 +236,13 @@ typedef struct Editor {
     int bottom_active_chan;   /* indice del canal/pestana activo */
     int bottom_focused;       /* 1 = el panel inferior tiene el foco (Ctrl+C
                                  copia su canal activo) */
-    /* seleccion de texto con el raton dentro del panel inferior (en lineas;
-     * -1 = sin seleccion) */
-    int bottom_sel_anchor;    /* linea ancla (extremo fijo) de la seleccion */
-    int bottom_sel_caret;     /* linea caret (extremo movil) de la seleccion */
+    /* seleccion de texto con el raton dentro del panel inferior.  Se modela
+     * como un rango [anchor, caret] de BYTE-OFFSETS dentro del `text` del canal
+     * activo (NO indices de linea), para poder seleccionar caracteres arbitrarios
+     * a traves de varias filas como en una terminal.  -1 = sin seleccion; ademas
+     * anchor==caret => seleccion vacia (no se resalta nada). */
+    int bottom_sel_anchor;    /* byte-offset ancla (extremo fijo) */
+    int bottom_sel_caret;     /* byte-offset caret (extremo movil) */
     int bottom_sel_active;    /* 1 = hay seleccion viva en el panel inferior */
     int bottom_selecting;     /* 1 = arrastrando para seleccionar */
 

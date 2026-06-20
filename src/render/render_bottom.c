@@ -38,12 +38,12 @@ static int bottom_right(Editor *e) {
     return e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
 }
 
-/** Cuenta las lineas (separadas por '\n') de @p text. */
-static int count_lines(const char *text) {
-    int n = 1;
-    for (const char *p = text; *p; ++p)
-        if (*p == '\n') ++n;
-    return n;
+/** Columnas (en bytes) que caben en el cuerpo de @p width px (>=1). */
+static int body_cols(Editor *e, int width) {
+    int char_w = (e->char_w > 0 ? e->char_w : 8);
+    int cols = (width - 2 * BOTTOM_PAD) / char_w;
+    if (cols < 1) cols = 1;
+    return cols;
 }
 
 void render_bottom_panel(Editor *e) {
@@ -113,66 +113,82 @@ void render_bottom_panel(Editor *e) {
     SDL_SetRenderClipRect(r, &clip);
 
     int line_h = e->line_height;
-    int visible_lines = body_h / line_h;
-    int total = count_lines(ch->text);
+    int visible_rows = body_h / line_h;
+    int cols = body_cols(e, width);
+    int total_rows = panel_wrap_count(ch->text, cols);
 
-    /* recortar el scroll del canal a un rango valido */
-    int max_scroll = total - visible_lines;
+    /* recortar el scroll del canal a un rango valido (en FILAS VISUALES) */
+    int max_scroll = total_rows - visible_rows;
     if (max_scroll < 0) max_scroll = 0;
     int scroll = ch->scroll;
     if (scroll < 0) scroll = 0;
     if (scroll > max_scroll) scroll = max_scroll;
 
-    /* rango de seleccion (en lineas, ordenado) */
-    int sel_lo = -1, sel_hi = -1;
-    if (e->bottom_sel_active && e->bottom_sel_anchor >= 0) {
-        /* el extremo movil es la ultima linea visible bajo el cursor; lo
-         * guardamos en el propio scroll-relativo via bottom_sel_active.  Para
-         * el resaltado usamos [anchor, caret]; el caret lo deja el input en
-         * bottom_sel_anchor cuando no arrastra.  Simplificamos: resaltar solo
-         * la linea ancla cuando no hay arrastre activo se hace en input. */
-        sel_lo = e->bottom_sel_anchor;
-        sel_hi = e->bottom_sel_anchor;
-        if (e->bottom_sel_caret >= 0) {
-            sel_lo = e->bottom_sel_anchor < e->bottom_sel_caret
-                         ? e->bottom_sel_anchor
-                         : e->bottom_sel_caret;
-            sel_hi = e->bottom_sel_anchor < e->bottom_sel_caret
-                         ? e->bottom_sel_caret
-                         : e->bottom_sel_anchor;
-        }
+    /* rango de seleccion en byte-offsets, ordenado.  anchor==caret => vacia (no
+     * se resalta nada): esto evita el "resaltado fantasma" tras un clic simple. */
+    long sel_lo = -1, sel_hi = -1;
+    if (e->bottom_sel_active && e->bottom_sel_anchor >= 0 &&
+        e->bottom_sel_caret >= 0 && e->bottom_sel_anchor != e->bottom_sel_caret) {
+        sel_lo = e->bottom_sel_anchor < e->bottom_sel_caret
+                     ? e->bottom_sel_anchor
+                     : e->bottom_sel_caret;
+        sel_hi = e->bottom_sel_anchor < e->bottom_sel_caret
+                     ? e->bottom_sel_caret
+                     : e->bottom_sel_anchor;
     }
 
-    /* dibujar linea a linea, las que caen dentro de la ventana visible.  Las
-     * lineas de fallo (contienen " fallo:") se pintan en rojo. */
+    /* dibujar fila visual a fila visual, las que caen dentro de la ventana.  El
+     * coloreado en rojo de las lineas de fallo (contienen " fallo:") se aplica a
+     * la LINEA LOGICA completa aunque se envuelva en varias filas. */
     Color err_col = {220, 80, 80, 255};
-    const char *p = ch->text;
-    int li = 0;          /* indice de linea actual del canal */
-    char line[512];
-    while (*p || li == 0) {
-        const char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        int vi = li - scroll; /* fila visible */
-        if (vi >= 0 && vi < visible_lines) {
+    const char *text = ch->text;
+    size_t pos = 0;
+    PanelRow row;
+    int ri = 0;        /* indice de fila visual */
+    int line_is_err = 0;
+    char line[1024];
+    /* `pos` arranca en una linea logica; se marca si esa linea es de fallo. */
+    line_is_err = (strstr(text, " fallo:") != NULL) &&
+                  (strchr(text, '\n') == NULL ||
+                   strstr(text, " fallo:") < strchr(text, '\n'));
+    for (;;) {
+        size_t next = panel_wrap_next(text, pos, cols, &row);
+        int vi = ri - scroll; /* fila visible en pantalla */
+        if (vi >= 0 && vi < visible_rows) {
             int ly = body_y + vi * line_h;
-            /* resaltado de la seleccion */
-            if (sel_lo >= 0 && li >= sel_lo && li <= sel_hi) {
-                set_color_c(r, e->theme.col_sel_bg);
-                fill_rect(r, left, ly, width, line_h);
+            /* resaltado de la seleccion: solo el tramo de columnas de esta fila
+             * que cae dentro de [sel_lo, sel_hi). */
+            if (sel_lo >= 0) {
+                long rs = (long)row.offset;
+                long re = (long)(row.offset + row.len);
+                long a = sel_lo > rs ? sel_lo : rs; /* inicio del tramo */
+                long b = sel_hi < re ? sel_hi : re; /* fin del tramo */
+                if (b > a) {
+                    int hx = left + BOTTOM_PAD + (int)(a - rs) * char_w;
+                    int hw = (int)(b - a) * char_w;
+                    set_color_c(r, e->theme.col_sel_bg);
+                    fill_rect(r, hx, ly, hw, line_h);
+                }
             }
-            if (len > 0) {
-                size_t cp = len < sizeof(line) ? len : sizeof(line) - 1;
-                memcpy(line, p, cp);
+            if (row.len > 0) {
+                size_t cp =
+                    row.len < sizeof(line) ? row.len : sizeof(line) - 1;
+                memcpy(line, text + row.offset, cp);
                 line[cp] = '\0';
-                int is_err = (strstr(line, " fallo:") != NULL);
                 draw_text_c(e, line, left + BOTTOM_PAD, ly,
-                            is_err ? err_col : e->theme.ftree_txt_file);
+                            line_is_err ? err_col : e->theme.ftree_txt_file);
             }
         }
-        if (!nl) break;
-        p = nl + 1;
-        ++li;
-        if (li - scroll >= visible_lines && li > sel_hi) break; /* nada mas que pintar */
+        if (next == (size_t)-1 || text[next] == '\0') break;
+        /* la nueva fila inicia una nueva linea logica si next salto un '\n' */
+        if (next > 0 && text[next - 1] == '\n') {
+            const char *ln_end = strchr(text + next, '\n');
+            const char *f = strstr(text + next, " fallo:");
+            line_is_err = (f != NULL) && (ln_end == NULL || f < ln_end);
+        }
+        pos = next;
+        ++ri;
+        if (ri - scroll >= visible_rows) break; /* nada mas visible que pintar */
     }
 
     SDL_SetRenderClipRect(r, NULL); /* quitar el recorte */

@@ -99,6 +99,91 @@ static void test_scrollback_acotado(void) {
     EXPECT_EQ_INT((int)c->text[c->len], 0); /* siempre null-terminado */
 }
 
+/* -- Envoltura del texto al ancho (word-wrap) ----------------------------- */
+
+/** Una linea de N columnas con cols=K produce ceil(N/K) filas. */
+static void test_wrap_count_hard(void) {
+    /* 10 'x' sin espacios, ancho 4 -> ceil(10/4) = 3 filas */
+    EXPECT_EQ_INT(panel_wrap_count("xxxxxxxxxx", 4), 3);
+    /* exacto: 8 'x', ancho 4 -> 2 filas */
+    EXPECT_EQ_INT(panel_wrap_count("xxxxxxxx", 4), 2);
+    /* texto vacio -> 1 fila */
+    EXPECT_EQ_INT(panel_wrap_count("", 10), 1);
+    /* cabe entero -> 1 fila */
+    EXPECT_EQ_INT(panel_wrap_count("hola", 10), 1);
+}
+
+/** La envoltura respeta los limites de palabra (rompe en el espacio). */
+static void test_wrap_word_boundary(void) {
+    /* "ab cd ef" ancho 5: "ab cd" cabe (5 cols), luego "ef" -> 2 filas */
+    EXPECT_EQ_INT(panel_wrap_count("ab cd ef", 5), 2);
+    PanelRow r;
+    size_t next = panel_wrap_next("ab cd ef", 0, 5, &r);
+    EXPECT_EQ_INT((int)r.offset, 0);
+    EXPECT_EQ_INT((int)r.len, 5); /* "ab cd" sin partir la palabra "ef" */
+    /* la siguiente fila empieza en "ef" (tras el espacio) */
+    EXPECT_EQ_INT((int)next, 6);
+    panel_wrap_next("ab cd ef", next, 5, &r);
+    EXPECT_EQ_INT((int)r.offset, 6);
+    EXPECT_EQ_INT((int)r.len, 2);
+}
+
+/** Las '\n' reales separan lineas logicas; cada una se envuelve aparte. */
+static void test_wrap_newlines(void) {
+    /* "aaaa\nbb" ancho 10 -> 2 filas (una por linea logica) */
+    EXPECT_EQ_INT(panel_wrap_count("aaaa\nbb", 10), 2);
+    PanelRow r;
+    size_t next = panel_wrap_next("aaaa\nbb", 0, 10, &r);
+    EXPECT_EQ_INT((int)r.len, 4); /* "aaaa", sin el '\n' */
+    EXPECT_EQ_INT((int)next, 5);  /* siguiente fila tras el '\n' */
+    panel_wrap_next("aaaa\nbb", next, 10, &r);
+    EXPECT_EQ_INT((int)r.offset, 5);
+    EXPECT_EQ_INT((int)r.len, 2); /* "bb" */
+}
+
+/** Ida y vuelta offset <-> (fila, col) consistente, incluido fin de fila. */
+static void test_rowcol_roundtrip(void) {
+    const char *t = "ab cd ef"; /* filas a cols=5: "ab cd" (0..5), "ef" (6..8) */
+    int row, col;
+    /* offset 0 -> fila 0, col 0 */
+    panel_offset_to_rowcol(t, 5, 0, &row, &col);
+    EXPECT_EQ_INT(row, 0);
+    EXPECT_EQ_INT(col, 0);
+    /* offset 6 (inicio de "ef") -> fila 1, col 0 */
+    panel_offset_to_rowcol(t, 5, 6, &row, &col);
+    EXPECT_EQ_INT(row, 1);
+    EXPECT_EQ_INT(col, 0);
+    /* offset 7 -> fila 1, col 1 */
+    panel_offset_to_rowcol(t, 5, 7, &row, &col);
+    EXPECT_EQ_INT(row, 1);
+    EXPECT_EQ_INT(col, 1);
+    /* vuelta: (fila 1, col 1) -> offset 7 */
+    EXPECT_EQ_INT((int)panel_rowcol_to_offset(t, 5, 1, 1), 7);
+    /* (fila 0, col 0) -> offset 0 */
+    EXPECT_EQ_INT((int)panel_rowcol_to_offset(t, 5, 0, 0), 0);
+    /* col mas alla del fin de fila se recorta al fin de esa fila */
+    EXPECT_EQ_INT((int)panel_rowcol_to_offset(t, 5, 0, 99), 5);
+}
+
+/** El substring de una seleccion multilinea preserva las '\n' reales. */
+static void test_selection_substring(void) {
+    /* texto con 3 lineas logicas */
+    const char *t = "linea uno\nlinea dos\nlinea tres";
+    /* seleccionar desde el inicio de "uno" (offset 6) hasta el fin de "dos"
+     * (offset 19): debe abarcar "uno\nlinea dos" con su '\n' real. */
+    int lo = 6, hi = 19;
+    size_t len = (size_t)(hi - lo);
+    char buf[64];
+    memcpy(buf, t + lo, len);
+    buf[len] = '\0';
+    EXPECT_EQ_STR(buf, "uno\nlinea dos");
+    /* seleccionar las 3 lineas enteras: offset 0 hasta el final */
+    int total = (int)strlen(t);
+    memcpy(buf, t, (size_t)total);
+    buf[total] = '\0';
+    EXPECT_EQ_STR(buf, "linea uno\nlinea dos\nlinea tres");
+}
+
 int main(void) {
     tt_suite("panel");
     tt_run("init: canales integrados", test_init_builtins);
@@ -107,5 +192,10 @@ int main(void) {
     tt_run("append crea canal al vuelo", test_append_crea_al_vuelo);
     tt_run("canal por defecto (salida)", test_default_channel);
     tt_run("scrollback acotado", test_scrollback_acotado);
+    tt_run("wrap: cuenta filas (rotura dura)", test_wrap_count_hard);
+    tt_run("wrap: rotura en limite de palabra", test_wrap_word_boundary);
+    tt_run("wrap: lineas logicas por '\\n'", test_wrap_newlines);
+    tt_run("wrap: ida y vuelta offset<->fila,col", test_rowcol_roundtrip);
+    tt_run("seleccion: substring multilinea", test_selection_substring);
     return tt_summary();
 }

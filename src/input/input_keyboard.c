@@ -469,13 +469,17 @@ static int bottom_panel_copy(Editor *e) {
         panel_at(&e->panels, (size_t)e->bottom_active_chan);
     if (!c) return 0;
 
-    /* sin seleccion: copiar todo el canal */
-    if (!e->bottom_sel_active || e->bottom_sel_anchor < 0) {
+    /* sin seleccion (o seleccion vacia anchor==caret): copiar todo el canal */
+    if (!e->bottom_sel_active || e->bottom_sel_anchor < 0 ||
+        e->bottom_sel_caret < 0 ||
+        e->bottom_sel_anchor == e->bottom_sel_caret) {
         SDL_SetClipboardText(c->text);
         return 1;
     }
 
-    /* con seleccion: recortar al rango de lineas [lo, hi] */
+    /* con seleccion: copiar el substring [lo, hi) de byte-offsets.  Las '\n'
+     * reales del texto se preservan; las roturas por word-wrap NO anyaden '\n'
+     * porque no estan en `text`. */
     int lo = e->bottom_sel_anchor, hi = e->bottom_sel_caret;
     if (hi < lo) {
         int t = lo;
@@ -483,29 +487,13 @@ static int bottom_panel_copy(Editor *e) {
         hi = t;
     }
     if (lo < 0) lo = 0;
+    if ((size_t)hi > c->len) hi = (int)c->len;
+    if (lo > hi) lo = hi;
 
-    /* localizar el inicio de la linea `lo` y el fin de la linea `hi` */
-    const char *p = c->text;
-    int line = 0;
-    const char *start = c->text;
-    const char *end = c->text + c->len;
-    while (*p) {
-        if (line == lo) start = p;
-        if (*p == '\n') {
-            ++line;
-            if (line > hi) {
-                end = p; /* fin = el '\n' que cierra la linea hi */
-                break;
-            }
-        }
-        ++p;
-    }
-    if (lo > line) start = c->text + c->len; /* lo fuera de rango: vacio */
-    if (end < start) end = start;
-    size_t len = (size_t)(end - start);
+    size_t len = (size_t)(hi - lo);
     char *tmp = malloc(len + 1);
     if (!tmp) return 1;
-    memcpy(tmp, start, len);
+    memcpy(tmp, c->text + lo, len);
     tmp[len] = '\0';
     SDL_SetClipboardText(tmp);
     free(tmp);

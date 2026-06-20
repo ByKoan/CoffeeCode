@@ -29,7 +29,7 @@
 
 /* Adelanto: lo usa on_mouse_motion (arrastre de seleccion) antes de su
  * definicion, que vive junto al resto de helpers del panel inferior. */
-static int bottom_line_at(Editor *e, int my);
+static int bottom_offset_at(Editor *e, int mx, int my);
 
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
@@ -454,9 +454,10 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* arrastre para seleccionar lineas en el panel inferior */
+    /* arrastre para seleccionar caracteres en el panel inferior */
     if (e->bottom_selecting) {
-        e->bottom_sel_caret = bottom_line_at(e, mouse_y);
+        int off = bottom_offset_at(e, mouse_x, mouse_y);
+        if (off >= 0) e->bottom_sel_caret = off;
         e->bottom_sel_active = 1;
         e->needs_redraw = 1;
         return;
@@ -788,26 +789,55 @@ int handle_ext_panel_click(Editor *e, int mx, int my) {
     return 0;
 }
 
+/* margen interior del cuerpo del panel (debe coincidir con render_bottom.c) */
+#define BOTTOM_BODY_PAD 6
+
 /**
- * @brief Linea del canal activo (relativa al inicio del scrollback) bajo el
- *        cursor dentro del cuerpo del panel inferior.
+ * @brief Columnas (en bytes) que caben en el cuerpo del panel inferior.
  *
- * Usa la geometria registrada por el render (UI_BOTTOM_BODY) + el scroll del
- * canal activo.  Devuelve un indice de linea >= 0 (recortado al rango del
- * canal), o -1 si el panel no esta abierto o no hay cuerpo registrado.
+ * Usa el ancho del cuerpo registrado por el render (UI_BOTTOM_BODY) y el ancho
+ * de caracter monoespaciado.  Debe replicar exactamente el calculo de
+ * render_bottom.c::body_cols para que el clic cuadre con lo dibujado.
  */
-static int bottom_line_at(Editor *e, int my) {
+static int bottom_body_cols(Editor *e, int width) {
+    int char_w = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
+    int cols = (width - 2 * BOTTOM_BODY_PAD) / char_w;
+    if (cols < 1) cols = 1;
+    return cols;
+}
+
+/**
+ * @brief Byte-offset del canal activo bajo el cursor dentro del cuerpo del panel.
+ *
+ * Traduce (mx,my) a una posicion visual (fila, columna) usando la geometria
+ * registrada por el render (UI_BOTTOM_BODY) + el scroll del canal, y luego a un
+ * byte-offset del texto con el MISMO layout de envoltura que el render
+ * (panel_rowcol_to_offset).  Devuelve un offset >= 0, o -1 si el panel no esta
+ * abierto, no hay cuerpo o no hay canal.
+ */
+static int bottom_offset_at(Editor *e, int mx, int my) {
     if (!e->bottom_panel_open) return -1;
     Rect body = e->ui.single[UI_BOTTOM_BODY];
     if (body.w <= 0) return -1;
-    int rel = my - body.y;
-    if (rel < 0) rel = 0;
-    int line_h = e->line_height > 0 ? e->line_height : 16;
-    int vi = rel / line_h;
     const PanelChannel *c = panel_at(&e->panels, (size_t)e->bottom_active_chan);
-    int scroll = c ? c->scroll : 0;
+    if (!c) return -1;
+
+    int char_w = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
+    int line_h = e->line_height > 0 ? e->line_height : 16;
+    int cols = bottom_body_cols(e, body.w);
+
+    int scroll = c->scroll;
     if (scroll < 0) scroll = 0;
-    return scroll + vi;
+
+    int rel_y = my - body.y;
+    if (rel_y < 0) rel_y = 0;
+    int row = scroll + rel_y / line_h; /* fila visual del documento */
+
+    int rel_x = mx - (body.x + BOTTOM_BODY_PAD);
+    if (rel_x < 0) rel_x = 0;
+    int col = rel_x / char_w; /* columna dentro de la fila */
+
+    return (int)panel_rowcol_to_offset(c->text, cols, row, col);
 }
 
 /**
@@ -843,12 +873,13 @@ static int handle_bottom_panel_click(Editor *e, int mx, int my) {
         return 1;
     }
 
-    /* clic en el cuerpo: empezar una seleccion de lineas */
+    /* clic en el cuerpo: fijar el ancla de la seleccion (vacia hasta arrastrar).
+     * anchor==caret => sin resaltado: un clic simple no resalta nada. */
     if (ui_hit(&e->ui, UI_BOTTOM_BODY, mx, my)) {
-        int ln = bottom_line_at(e, my);
-        e->bottom_sel_anchor = ln;
-        e->bottom_sel_caret = ln;
-        e->bottom_sel_active = 1;
+        int off = bottom_offset_at(e, mx, my);
+        e->bottom_sel_anchor = off;
+        e->bottom_sel_caret = off;
+        e->bottom_sel_active = 1;   /* viva, pero vacia (anchor==caret) */
         e->bottom_selecting = 1;
         e->needs_redraw = 1;
         return 1;

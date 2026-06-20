@@ -119,3 +119,90 @@ void panel_clear(PanelStore *s, const char *id);
  * @return Puntero al canal (valido mientras el almacen viva) o NULL.
  */
 const PanelChannel *panel_at(const PanelStore *s, size_t idx);
+
+/* -- Envoltura del texto al ancho (word-wrap) -----------------------------
+ *
+ * El cuerpo del panel inferior muestra el texto envuelto al ancho del
+ * contenedor: cada LINEA LOGICA (separada por '\n') que excede @c cols columnas
+ * se parte en varias FILAS VISUALES.  Estas funciones son PURAS (sin SDL): el
+ * render y el input comparten EXACTAMENTE el mismo layout, de modo que el clic,
+ * el resaltado y el scroll cuadran con lo dibujado, y todo se prueba en headless.
+ *
+ * UTF-8: el ancho se mide en BYTES (no en celdas de display).  El texto del
+ * panel es casi siempre ASCII, donde byte == columna.  Las roturas por ancho
+ * nunca parten una secuencia multibyte por la mitad (se respetan los bytes de
+ * continuacion 0x80..0xBF), pero un caracter de doble ancho cuenta como sus
+ * bytes, no como 2 columnas.  Documentado como limitacion conocida.
+ */
+
+/**
+ * @brief Una fila visual: un tramo [offset, len) del texto que cabe en el ancho.
+ *
+ * @c offset y @c len son indices/longitudes en BYTES dentro del @c text del
+ * canal.  Una fila NUNCA incluye el '\n' que la termina (si lo hay): el salto de
+ * linea logico vive entre el final de una fila y el inicio de la siguiente.
+ */
+typedef struct {
+    size_t offset; /**< byte donde empieza la fila dentro de @c text */
+    size_t len;    /**< bytes de la fila (sin contar el '\n' final) */
+} PanelRow;
+
+/**
+ * @brief Numero de filas visuales en que @p text se envuelve a @p cols columnas.
+ *
+ * Equivale a iterar ::panel_wrap_next hasta el final y contar.  Una linea
+ * logica vacia cuenta como 1 fila; un texto vacio cuenta como 1 fila.
+ *
+ * @param text Texto del canal (null-terminado).
+ * @param cols Ancho en columnas (>=1; valores <1 se tratan como 1).
+ * @return Total de filas visuales (>=1).
+ */
+int panel_wrap_count(const char *text, int cols);
+
+/**
+ * @brief Calcula la siguiente fila visual a partir del byte @p start.
+ *
+ * Rompe preferentemente en el ultimo espacio que cabe dentro de @p cols; si una
+ * "palabra" no cabe entera, rompe por caracter (respetando limites UTF-8).  El
+ * '\n' real termina la fila sin formar parte de ella.
+ *
+ * @param text  Texto del canal (null-terminado).
+ * @param start Byte desde el que empezar (debe ser 0 o el resultado de una
+ *              llamada previa).
+ * @param cols  Ancho en columnas (>=1).
+ * @param[out] row Fila resultante ([offset,len) en bytes).
+ * @return Byte de inicio de la SIGUIENTE fila, o (size_t)-1 si @p start ya esta
+ *         al final del texto (no hay mas filas).
+ */
+size_t panel_wrap_next(const char *text, size_t start, int cols, PanelRow *row);
+
+/**
+ * @brief Mapea una posicion visual (fila, columna) a un byte-offset del texto.
+ *
+ * Inversa de ::panel_offset_to_rowcol.  Recorta la fila al rango valido y la
+ * columna al final de su fila.  Util para traducir un clic (ya convertido a
+ * fila/col por el input) a un offset de seleccion.
+ *
+ * @param text Texto del canal.
+ * @param cols Ancho en columnas (>=1).
+ * @param row  Fila visual (0-based).  Se recorta a [0, total_filas-1].
+ * @param col  Columna dentro de la fila (0-based).  Se recorta al fin de fila.
+ * @return Byte-offset correspondiente dentro de @c text.
+ */
+size_t panel_rowcol_to_offset(const char *text, int cols, int row, int col);
+
+/**
+ * @brief Mapea un byte-offset del texto a su posicion visual (fila, columna).
+ *
+ * Inversa de ::panel_rowcol_to_offset.  Si @p offset cae en el limite entre dos
+ * filas envueltas por ancho, se asigna al INICIO de la fila siguiente (col 0),
+ * coherente con el avance de ::panel_wrap_next.
+ *
+ * @param text Texto del canal.
+ * @param cols Ancho en columnas (>=1).
+ * @param offset Byte-offset (se recorta a [0, strlen(text)]).
+ * @param[out] row Fila visual (0-based).  Puede ser NULL.
+ * @param[out] col Columna dentro de la fila (0-based).  Puede ser NULL.
+ */
+void panel_offset_to_rowcol(const char *text, int cols, size_t offset, int *row,
+                            int *col);
