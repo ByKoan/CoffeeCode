@@ -27,8 +27,27 @@
 #include <windows.h>
 typedef HMODULE coffee_dll_t; /**< handle de modulo nativo */
 #define COFFEE_DLL_EXT ".dll"
+/* Por si el SDK de MinGW no define los flags de busqueda dirigida. */
+#ifndef LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+#define LOAD_LIBRARY_SEARCH_DEFAULT_DIRS 0x00001000
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+#define LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR 0x00000100
+#endif
 static coffee_dll_t coffee_dll_open(const char *path) {
-    return LoadLibraryA(path);
+    /* LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR hace que el cargador busque las
+     * dependencias de la DLL en el directorio de la PROPIA DLL, no solo en el
+     * del ejecutable / system32 / PATH.  Es imprescindible para extensiones que
+     * traen sus dependencias al lado (p.ej. coffee_vesta.dll junto a
+     * libvesta.dll + OpenSSL): sin esto, cargar la extension falla con
+     * ERROR_MOD_NOT_FOUND (126) aunque sus DLLs esten en la misma carpeta,
+     * porque el cargador no busca ahi por defecto.  Requiere ruta absoluta. */
+    coffee_dll_t h = LoadLibraryExA(path, NULL,
+                                    LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    if (!h) /* fallback para Windows antiguos sin esos flags */
+        h = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    return h;
 }
 static void *coffee_dll_sym(coffee_dll_t h, const char *name) {
     return (void *)GetProcAddress(h, name);
