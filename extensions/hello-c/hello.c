@@ -1,6 +1,6 @@
 /**
  * @file hello.c
- * @brief Extension de ejemplo en C para CoffeeCode (incremento E1).
+ * @brief Extension de ejemplo en C para CoffeeCode.
  *
  * Demuestra el ciclo completo de una extension nativa:
  *   - exporta @c coffee_extension_register (el punto de entrada que el host
@@ -24,7 +24,7 @@
  * @brief Contrato del servicio que esta extension publica.
  *
  * Otra extension lo obtiene con @c get_service("hello.service") y castea a
- * este struct.  En E1 expone una funcion trivial de saludo.
+ * este struct.  Expone una funcion trivial de saludo.
  */
 typedef struct HelloService {
     const char *(*greeting)(void); /**< devuelve un saludo constante */

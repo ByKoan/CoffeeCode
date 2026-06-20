@@ -192,6 +192,22 @@ void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist,
     (void)filter;
     Editor *e = (Editor *)userdata;
     if (!filelist || !filelist[0]) {
+        e->ext_install_mode = 0; /* dialogo cancelado: limpiar el modo */
+        e->needs_redraw = 1;
+        return;
+    }
+    /* Modo "instalar extension": cargar la carpeta elegida como una
+     * extension via el host, en lugar de abrirla en el explorador. */
+    if (e->ext_install_mode) {
+        e->ext_install_mode = 0;
+        if (e->ext_host) {
+            int rc = ext_host_load((CoffeeHost *)e->ext_host, filelist[0]);
+            if (rc != 0)
+                fprintf(stderr,
+                        "[ext-host] instalar '%s' fallo (rc=%d): falta "
+                        "coffee-extension.toml o DLL?\n",
+                        filelist[0], rc);
+        }
         e->needs_redraw = 1;
         return;
     }

@@ -44,5 +44,8 @@ cmake-*
 tem*
 temp*
 tmp*
+*.pdb
+
 # Manifiesto generado por CMake desde coffee-extension.toml.in
 extensions/*/coffee-extension.toml
+

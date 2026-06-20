@@ -202,13 +202,27 @@ typedef struct {
      * render/theme.h) */
     Theme theme;
 
-    /* -- Extension host (sistema de extensiones, incremento E1) -----------
+    /* -- Extension host (sistema de extensiones) -----------
      * Puntero opaco a CoffeeHost (include/ext/ext_host.h).  Se declara como
      * void* para no acoplar este header al de extensiones.  NULL si el host no
      * se inicializo (p.ej. sin directorio de extensiones).  El editor crea el
      * host en editor_init, le fija el buffer activo, emite eventos del IDE y lo
      * destruye en editor_free. */
     void *ext_host;
+
+    /* -- UI del sistema de extensiones -----------------------------
+     * Estado de la interfaz que el IDE expone a las extensiones. */
+    int ext_panel_open;       /* 1 = panel de extensiones visible */
+    char ext_status[256];     /* mensaje de barra de estado puesto por una
+                                 extension (CoffeeApi::set_status); vacio si
+                                 ninguna lo fijo */
+    char ext_output[4096];    /* buffer del panel de salida (output_append);
+                                 acumula texto que las extensiones emiten */
+    size_t ext_output_len;    /* bytes usados de ext_output */
+    int ext_panel_scroll;     /* scroll vertical del panel de extensiones */
+    int ext_install_mode;     /* 1 = el proximo dialogo de carpeta instala una
+                                 extension (ext_host_load) en lugar de abrir el
+                                 explorador (ftree_load) */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */

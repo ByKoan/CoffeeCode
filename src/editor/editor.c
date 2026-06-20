@@ -278,6 +278,57 @@ void editor_cursor_blink_reset(Editor *e) {
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
+/* -- Hooks de UI que el editor da al extension host ------------------
+ * El host invoca estos callbacks (con el Editor como userdata) cuando una
+ * extension usa CoffeeApi::set_status / output_append / output_clear /
+ * request_repaint, de modo que el efecto llegue a la UI real del IDE. */
+
+/** set_status: guarda el mensaje para mostrarlo en la barra de estado real. */
+static void ext_hook_set_status(void *ud, const char *msg) {
+    Editor *e = (Editor *)ud;
+    if (!e) return;
+    snprintf(e->ext_status, sizeof(e->ext_status), "%s", msg ? msg : "");
+    e->needs_redraw = 1;
+}
+
+/** output_append: acumula texto en el buffer del panel de salida. */
+static void ext_hook_output_append(void *ud, const char *text) {
+    Editor *e = (Editor *)ud;
+    if (!e || !text) return;
+    size_t add = strlen(text);
+    size_t cap = sizeof(e->ext_output) - 1; /* reservar el NUL */
+    if (add > cap) {
+        /* texto mas grande que el buffer: quedarse con la cola */
+        text += add - cap;
+        add = cap;
+    }
+    if (e->ext_output_len + add > cap) {
+        /* no cabe: descartar la cabecera mas antigua (scroll del buffer) */
+        size_t drop = e->ext_output_len + add - cap;
+        memmove(e->ext_output, e->ext_output + drop, e->ext_output_len - drop);
+        e->ext_output_len -= drop;
+    }
+    memcpy(e->ext_output + e->ext_output_len, text, add);
+    e->ext_output_len += add;
+    e->ext_output[e->ext_output_len] = '\0';
+    e->needs_redraw = 1;
+}
+
+/** output_clear: vacia el buffer del panel de salida. */
+static void ext_hook_output_clear(void *ud) {
+    Editor *e = (Editor *)ud;
+    if (!e) return;
+    e->ext_output[0] = '\0';
+    e->ext_output_len = 0;
+    e->needs_redraw = 1;
+}
+
+/** request_repaint: pide al editor redibujar en el proximo frame. */
+static void ext_hook_request_repaint(void *ud) {
+    Editor *e = (Editor *)ud;
+    if (e) e->needs_redraw = 1;
+}
+
 /**
  * @brief Inicializa SDL, crea la ventana/renderer, carga la fuente y prepara el
  *        editor; opcionalmente abre un archivo inicial.
@@ -405,7 +456,7 @@ int editor_init(Editor *e, const char *filepath) {
     e->lex = NULL;
     e->undo = NULL;
 
-    /* -- Extension host (E1) ----------------------------------------------
+    /* -- Extension host ----------------------------------------------
      * Crear el host (sin buffer aun: se fija al abrir/cambiar de pestana) y
      * cargar el directorio de extensiones junto al ejecutable, si existe.  El
      * host es opcional: si no hay extensiones, ext_host_load_dir devuelve 0 y
@@ -415,8 +466,11 @@ int editor_init(Editor *e, const char *filepath) {
         memset(&backend, 0, sizeof backend);
         backend.buffer = NULL; /* aun no hay pestana activa */
         backend.ud = e;
-        /* (Los hooks de UI -- set_status/output/etc. -- se cablearan en E1.b;
-         * por ahora el host usa sus stubs por defecto, que loguean.) */
+        /* Hooks de UI: conectan el CoffeeApi a la UI real del IDE. */
+        backend.set_status = ext_hook_set_status;
+        backend.output_append = ext_hook_output_append;
+        backend.output_clear = ext_hook_output_clear;
+        backend.request_repaint = ext_hook_request_repaint;
         CoffeeHost *host = ext_host_create(&backend);
         e->ext_host = host;
         if (host) {

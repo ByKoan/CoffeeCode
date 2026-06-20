@@ -60,6 +60,10 @@ typedef enum {
     UI_ENC_MODE_REOPEN, /**< Botón "Reabrir con" del popup.             */
     UI_ENC_MODE_SAVE,   /**< Botón "Guardar como" del popup.            */
     UI_ENC_LIST,        /**< Área de la lista de codificaciones.        */
+    /* Panel de extensiones */
+    UI_EXT_TOGGLE,      /**< Botón abrir/cerrar el panel de extensiones. */
+    UI_EXT_INSTALL,     /**< Botón "Instalar extension" (desde carpeta). */
+    UI_EXT_PANEL,       /**< Marco del panel (consume clics dentro).     */
     UI_ID_COUNT
 } UiId;
 
@@ -71,6 +75,8 @@ typedef enum {
     UI_LIST_MENU_ITEM, /**< Items del menú "Archivo".        */
     UI_LIST_PREF_FONT, /**< Filas de la lista de fuentes.    */
     UI_LIST_ENC,       /**< Filas del selector de codificación. */
+    UI_LIST_EXT_RELOAD, /**< Botón "recargar" de cada extension. */
+    UI_LIST_EXT_UNLOAD, /**< Botón "descargar" de cada extension. */
     UI_LIST_COUNT
 } UiList;
 

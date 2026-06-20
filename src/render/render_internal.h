@@ -53,3 +53,13 @@ void render_selection(Editor *e, int left_offset, int text_top,
 void render_settings_view(Editor *e);
 /* popup del selector de codificación (desde la barra de estado) */
 void render_enc_popup(Editor *e);
+
+/* -- Sistema de extensiones ----------------------------------------- */
+/* Dibuja las vistas registradas por extensiones (register_view): paneles y
+ * sidebars de extension, con un CoffeePainter recortado a su area. */
+void render_ext_views(Editor *e);
+/* Dibuja el panel de extensiones del IDE (lista de cargadas + acciones). */
+void render_ext_panel(Editor *e);
+/* Geometria de la X (px) donde el panel de extensiones empieza, para que el
+ * resto del cromo no lo pise. 0 si el panel esta cerrado. */
+int render_ext_panel_width(Editor *e);

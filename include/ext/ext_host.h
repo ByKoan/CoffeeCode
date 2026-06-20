@@ -2,7 +2,7 @@
  * @file ext_host.h
  * @brief Extension host de CoffeeCode: cargador de DLLs + respaldo del CoffeeApi.
  *
- * El host es el nucleo del sistema de extensiones (incremento E1).  Implementa:
+ * El host es el nucleo del sistema de extensiones.  Implementa:
  *   - El struct @c CoffeeApi (vtable estable) respaldado por el editor/buffer
  *     activo.  Las extensiones solo ven este contrato; nunca tocan structs
  *     internos del IDE.
@@ -58,7 +58,7 @@ typedef struct CoffeeHostBackend {
     void (*save_file)(void *ud);
     void (*new_tab)(void *ud);
 
-    /* -- Repintado y decoraciones (opcionales; E1.b) -- */
+    /* -- Repintado y decoraciones (opcionales) -- */
     void (*request_repaint)(void *ud);
 } CoffeeHostBackend;
 
@@ -126,6 +126,56 @@ void ext_host_emit(CoffeeHost *host, CoffeeEventType event, const void *data);
 
 /** @brief 1 si la extension @p id esta cargada y activa, 0 si no. */
 int ext_host_has(CoffeeHost *host, const char *id);
+
+/* ===========================================================================
+ *  Introspeccion: listar las extensiones cargadas para el panel de
+ *  extensiones del IDE (el "marketplace de cargadas").
+ * =========================================================================== */
+
+/** @brief Numero de slots de extension del host (incluye slots inactivos). */
+size_t ext_host_count(CoffeeHost *host);
+
+/**
+ * @brief Devuelve los datos de la extension del slot @p idx.
+ *
+ * Pensada para el panel de extensiones: rellena los punteros de salida (los que
+ * no sean NULL) con el id, nombre legible, directorio y estado de la extension
+ * en el slot @p idx.  Las cadenas devueltas son propiedad del host y validas
+ * mientras la extension siga cargada (copiar si se necesitan luego).
+ *
+ * @param host   Host.
+ * @param idx    Indice de slot en [0, ext_host_count).
+ * @param[out] id     Id del manifiesto (o NULL si el slot esta libre).
+ * @param[out] name   Nombre legible (hoy = id; reservado para un campo futuro).
+ * @param[out] dir    Directorio de la extension.
+ * @param[out] active 1 si la extension esta activa, 0 si el slot esta libre.
+ * @return 1 si @p idx es un slot valido, 0 si esta fuera de rango.
+ */
+int ext_host_info(CoffeeHost *host, size_t idx, const char **id,
+                  const char **name, const char **dir, int *active);
+
+/* ===========================================================================
+ *  Vistas registradas: el render del IDE las dibuja.
+ * =========================================================================== */
+
+/** @brief Datos de una vista registrada por una extension (solo lectura). */
+typedef struct CoffeeHostView {
+    const char *id;            /**< id de la vista */
+    const char *title;         /**< titulo legible */
+    CoffeeViewKind kind;       /**< sidebar/panel/overlay/statusbar */
+    CoffeePaintFn paint;       /**< callback de pintado */
+    CoffeeViewInputFn input;   /**< callback de input (puede ser NULL) */
+    void *userdata;            /**< userdata de los callbacks */
+} CoffeeHostView;
+
+/** @brief Numero de vistas registradas y vivas. */
+size_t ext_host_view_count(CoffeeHost *host);
+
+/**
+ * @brief Copia los datos de la vista @p idx en @p out.
+ * @return 1 si @p idx es valido y la vista esta viva, 0 si no.
+ */
+int ext_host_view_at(CoffeeHost *host, size_t idx, CoffeeHostView *out);
 
 #ifdef __cplusplus
 } /* extern "C" */

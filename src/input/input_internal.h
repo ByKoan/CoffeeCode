@@ -12,6 +12,7 @@
 /* Header PRIVADO del modulo input: macros y declaraciones compartidas. No es
  * API publica. */
 #include "editor/editor.h"
+#include "ext/ext_host.h"
 #include "filetree/filetree.h"
 #include "input/input.h"
 #include "render/render.h"
@@ -33,6 +34,8 @@ int get_left_offset(Editor *e); /* ancho del panel lateral izquierdo */
 void handle_ftree_click(Editor *e, int mx, int my);
 /* hover en el explorador de archivos */
 void handle_ftree_hover(Editor *e, int mx, int my);
+/* clic en el panel de extensiones; 1 si lo consumio */
+int handle_ext_panel_click(Editor *e, int mx, int my);
 
 /* ── Movimiento del cursor y selección (input_keyboard.c) ───────────────────
  */

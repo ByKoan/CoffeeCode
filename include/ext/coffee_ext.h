@@ -1,24 +1,11 @@
 /*
- * CoffeeCode - API de extensiones (ABI C estable)
+ * CoffeeCode - API de extensiones (ABI C estable).
  *
- * PROPUESTA DE DISENO (revisar antes de implementar el loader).
- *
- * Filosofia:
- *   - El CORE del IDE se mantiene LIGERO.  NO depende de libvesta ni de
- *     ninguna extension; solo provee el "extension host" (cargador de DLLs)
- *     y esta API.
- *   - Una EXTENSION es una DLL (.dll / .so) que el IDE carga en runtime.
- *     Cada extension exporta el simbolo COFFEE_EXTENSION_ENTRY y, al cargarse,
- *     recibe el CoffeeApi del IDE para registrar comandos, suscribir eventos y
- *     manipular el editor.  Modelo VS Code, pero con DLLs nativas.
- *   - Habra un MARKETPLACE (indice remoto de extensiones); instalar = bajar la
- *     DLL + su manifiesto al directorio de extensiones del usuario.
- *   - libvesta (el compilador+VM de Vex empaquetado como DLL) NO va en el core:
- *     es UNA extension mas.  La extension "vesta" enlaza libvesta y aporta
- *     (a) compilar/ejecutar Vex desde el IDE, y (b) un puente para escribir
- *     EXTENSIONES EN VEX (la extension vesta expone este CoffeeApi a los
- *     programas Vex via register_native_fn + FFI; un .vex puede registrar
- *     comandos del IDE igual que una DLL nativa).
+ * Una extension es una DLL (.dll / .so) que el IDE carga en runtime.  Exporta
+ * el simbolo COFFEE_EXTENSION_ENTRY y, al cargarse, recibe el CoffeeApi del IDE
+ * para registrar comandos, suscribir eventos, dibujar vistas y manipular el
+ * editor.  El core del IDE no depende de ninguna extension; solo provee el
+ * cargador y esta API.
  */
 #ifndef COFFEE_EXT_H
 #define COFFEE_EXT_H
@@ -123,7 +110,7 @@ typedef struct CoffeeApi {
     uint32_t abi_version; /**< = COFFEE_ABI_VERSION */
 
     /* ---- Registro de capacidades ---- */
-    /** Registra un comando invocable (id unico tipo "vesta.run"). 0 = ok. */
+    /** Registra un comando invocable (id unico tipo "editor.format"). 0 = ok. */
     int (*register_command)(CoffeeHost *h, const char *id, const char *title,
                             CoffeeCommandFn fn, void *userdata);
     /** Suscribe un callback a un tipo de evento. 0 = ok. */
@@ -159,7 +146,7 @@ typedef struct CoffeeApi {
     void (*set_status)(CoffeeHost *h, const char *msg); /**< barra de estado */
     void (*show_message)(CoffeeHost *h, const char *title, const char *body);
     void (*log)(CoffeeHost *h, CoffeeLogLevel level, const char *msg);
-    /** Panel de salida (p.ej. la salida de "Ejecutar Vex" o un linter). */
+    /** Panel de salida (p.ej. la salida de un compilador o un linter). */
     void (*output_append)(CoffeeHost *h, const char *text);
     void (*output_clear)(CoffeeHost *h);
 
@@ -191,8 +178,8 @@ typedef struct CoffeeApi {
      *  contrato (un struct en un header compartido). */
     int (*register_service)(CoffeeHost *h, const char *name, void *iface);
     /** Obtiene el servicio publicado por otra extension (NULL si no existe).
-     *  Asi una extension puede depender de otra (p.ej. "vesta" expone un
-     *  servicio "vex.compile" que un linter consume). */
+     *  Asi una extension puede depender de otra (p.ej. un compilador expone un
+     *  servicio "lang.compile" que un linter consume). */
     void *(*get_service)(CoffeeHost *h, const char *name);
     /** True si una extension (por id) esta cargada y activa. */
     int (*has_extension)(CoffeeHost *h, const char *id);
@@ -214,13 +201,13 @@ typedef struct CoffeeApi {
     /** Directorio de datos privado de la extension (para caches, etc.). */
     const char *(*ext_dir)(CoffeeHost *h);
 
-    /* ---- Puente para EXTENSIONES EN VEX ---- */
+    /* ---- Funciones nativas con nombre (para lenguajes embebidos) ---- */
     /**
-     * Registra una funcion nativa accesible por nombre (lib:name).  La usa la
-     * extension "vesta" para exponer este CoffeeApi a los programas Vex: cada
-     * funcion del host se registra aqui y un .vex la llama via
-     * @c extern "coffee" { fn ... }.  Asi una extension escrita en Vex puede
-     * registrar comandos / manipular el editor igual que una DLL nativa.
+     * Registra una funcion nativa accesible por nombre (lib:name).  La usa una
+     * extension que embeba un interprete/compilador para exponer este CoffeeApi
+     * a su lenguaje embebido: cada funcion del host se registra aqui y el script
+     * la invoca por (lib, name).  Asi una extension escrita en un lenguaje de
+     * scripting puede registrar comandos / manipular el editor igual que una DLL.
      */
     int (*register_native_fn)(CoffeeHost *h, const char *lib, const char *name,
                               void *fnptr);

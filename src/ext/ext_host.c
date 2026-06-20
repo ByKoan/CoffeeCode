@@ -1,6 +1,6 @@
 /**
  * @file ext_host.c
- * @brief Implementacion del extension host de CoffeeCode (incremento E1).
+ * @brief Implementacion del extension host de CoffeeCode.
  *
  * Contiene:
  *   - El @c CoffeeHost opaco con sus tablas (comandos, suscripciones a eventos,
@@ -55,7 +55,7 @@ static void coffee_dll_close(coffee_dll_t h) { dlclose(h); }
 
 /** @brief Un comando registrado por una extension. */
 typedef struct {
-    char *id;             /**< id unico ("vesta.run") */
+    char *id;             /**< id unico ("editor.format") */
     char *title;          /**< titulo legible */
     CoffeeCommandFn fn;   /**< callback */
     void *userdata;       /**< userdata del callback */
@@ -91,6 +91,17 @@ typedef struct {
     int active;        /**< 1 si registrada; 0 si su slot quedo libre */
 } HostExtension;
 
+/** @brief Una vista registrada por una extension (panel/overlay/statusbar). */
+typedef struct {
+    char *id;                /**< id de la vista */
+    char *title;             /**< titulo legible */
+    CoffeeViewKind kind;     /**< donde vive la vista */
+    CoffeePaintFn paint;     /**< callback de pintado */
+    CoffeeViewInputFn input; /**< callback de input (puede ser NULL) */
+    void *userdata;          /**< userdata de los callbacks */
+    int owner;               /**< extension dueña (registro por-ext) */
+} HostView;
+
 /**
  * @brief Implementacion concreta del handle opaco @c CoffeeHost.
  *
@@ -112,6 +123,8 @@ struct CoffeeHost {
     size_t cfg_count, cfg_cap;
     HostExtension *exts;
     size_t ext_count, ext_cap;
+    HostView *views;
+    size_t view_count, view_cap;
 
     /** Indice de la extension que se esta registrando ahora mismo (para
      *  atribuir lo que registre).  -1 cuando no hay registro en curso. */
@@ -178,19 +191,19 @@ static int api_subscribe_event(CoffeeHost *h, CoffeeEventType ev,
     return 0;
 }
 
-/* add_menu_item / bind_key: STUB en E1 (loguean; el wiring de menus/atajos del
- * IDE llega en E1.b/E4).  Devuelven 0 para no romper la activacion. */
+/* add_menu_item / bind_key: STUB (loguean; el wiring de menus/atajos del
+ * IDE llega mas adelante).  Devuelven 0 para no romper la activacion. */
 static int api_add_menu_item(CoffeeHost *h, const char *menu_path,
                              const char *command_id) {
     (void)h;
-    fprintf(stderr, "[ext-host] add_menu_item('%s','%s'): stub (E1)\n",
+    fprintf(stderr, "[ext-host] add_menu_item('%s','%s'): stub\n",
             menu_path ? menu_path : "", command_id ? command_id : "");
     return 0;
 }
 static int api_bind_key(CoffeeHost *h, const char *keychord,
                         const char *command_id) {
     (void)h;
-    fprintf(stderr, "[ext-host] bind_key('%s','%s'): stub (E1)\n",
+    fprintf(stderr, "[ext-host] bind_key('%s','%s'): stub\n",
             keychord ? keychord : "", command_id ? command_id : "");
     return 0;
 }
@@ -270,20 +283,20 @@ static void api_open_file(CoffeeHost *h, const char *path) {
     if (h && h->backend.open_file)
         h->backend.open_file(h->backend.ud, path);
     else
-        fprintf(stderr, "[ext-host] open_file('%s'): sin backend (E1)\n",
+        fprintf(stderr, "[ext-host] open_file('%s'): sin backend\n",
                 path ? path : "");
 }
 static void api_save_file(CoffeeHost *h) {
     if (h && h->backend.save_file)
         h->backend.save_file(h->backend.ud);
     else
-        fprintf(stderr, "[ext-host] save_file: sin backend (E1)\n");
+        fprintf(stderr, "[ext-host] save_file: sin backend\n");
 }
 static void api_new_tab(CoffeeHost *h) {
     if (h && h->backend.new_tab)
         h->backend.new_tab(h->backend.ud);
     else
-        fprintf(stderr, "[ext-host] new_tab: sin backend (E1)\n");
+        fprintf(stderr, "[ext-host] new_tab: sin backend\n");
 }
 
 /* ---- UI / feedback ---- */
@@ -317,24 +330,41 @@ static void api_output_clear(CoffeeHost *h) {
     if (h && h->backend.output_clear) h->backend.output_clear(h->backend.ud);
 }
 
-/* ---- Dibujo: vistas y decoraciones (STUB en E1; llega en E1.b) ---- */
+/* ---- Dibujo: vistas y decoraciones (STUB) ---- */
 
 static int api_register_view(CoffeeHost *h, const char *id, CoffeeViewKind kind,
                              const char *title, CoffeePaintFn paint,
                              CoffeeViewInputFn input, void *userdata) {
-    (void)h;
-    (void)kind;
-    (void)title;
-    (void)paint;
-    (void)input;
-    (void)userdata;
-    fprintf(stderr, "[ext-host] register_view('%s'): no implementado en E1\n",
-            id ? id : "");
-    return -1;
+    if (!h || !id || !paint) return -1;
+    /* rechazar duplicados de id de vista */
+    for (size_t i = 0; i < h->view_count; ++i)
+        if (h->views[i].id && strcmp(h->views[i].id, id) == 0) return -2;
+    if (!host_grow((void **)&h->views, &h->view_cap, h->view_count,
+                   sizeof(HostView)))
+        return -3;
+    HostView *v = &h->views[h->view_count++];
+    v->id = host_strdup(id);
+    v->title = host_strdup(title);
+    v->kind = kind;
+    v->paint = paint;
+    v->input = input;
+    v->userdata = userdata;
+    v->owner = h->registering;
+    /* el indice de la vista recien anyadida sirve como id (>=0) */
+    return (int)(h->view_count - 1);
 }
 static void api_remove_view(CoffeeHost *h, const char *id) {
-    (void)h;
-    (void)id;
+    if (!h || !id) return;
+    for (size_t i = 0; i < h->view_count;) {
+        if (h->views[i].id && strcmp(h->views[i].id, id) == 0) {
+            free(h->views[i].id);
+            free(h->views[i].title);
+            h->views[i] = h->views[--h->view_count]; /* swap-remove */
+        } else {
+            ++i;
+        }
+    }
+    if (h->backend.request_repaint) h->backend.request_repaint(h->backend.ud);
 }
 static void api_request_repaint(CoffeeHost *h) {
     if (h && h->backend.request_repaint) h->backend.request_repaint(h->backend.ud);
@@ -343,7 +373,7 @@ static int api_set_line_background(CoffeeHost *h, size_t line, CoffeeColor bg) {
     (void)h;
     (void)line;
     (void)bg;
-    return -1; /* no implementado en E1 */
+    return -1; /* no implementado aun */
 }
 static int api_set_gutter_marker(CoffeeHost *h, size_t line, const char *glyph,
                                  CoffeeColor color) {
@@ -434,20 +464,20 @@ static void api_set_config(CoffeeHost *h, const char *key, const char *value) {
 }
 static const char *api_ext_dir(CoffeeHost *h) {
     if (!h) return NULL;
-    /* En E1 devolvemos el directorio de la extension en curso (si lo hay), o
-     * un valor por defecto.  El almacen de datos persistente llega en E4. */
+    /* Devolvemos el directorio de la extension en curso (si lo hay), o
+     * un valor por defecto.  El almacen de datos persistente llega mas adelante. */
     if (h->registering >= 0 && (size_t)h->registering < h->ext_count)
         return h->exts[h->registering].dir;
     return h->ext_dir_cache;
 }
 
-/* ---- Puente para EXTENSIONES EN VEX (STUB en E1; lo usa la ext vesta en E3) */
+/* ---- Funciones nativas con nombre: STUB (lo usaria una ext con lenguaje embebido) */
 static int api_register_native_fn(CoffeeHost *h, const char *lib,
                                   const char *name, void *fnptr) {
     (void)h;
     (void)fnptr;
     fprintf(stderr,
-            "[ext-host] register_native_fn('%s:%s'): no implementado en E1\n",
+            "[ext-host] register_native_fn('%s:%s'): no implementado aun\n",
             lib ? lib : "", name ? name : "");
     return -1;
 }
@@ -554,6 +584,16 @@ static void host_revoke_owner(CoffeeHost *h, int owner) {
             ++i;
         }
     }
+    /* vistas */
+    for (size_t i = 0; i < h->view_count;) {
+        if (h->views[i].owner == owner) {
+            free(h->views[i].id);
+            free(h->views[i].title);
+            h->views[i] = h->views[--h->view_count];
+        } else {
+            ++i;
+        }
+    }
 }
 
 void ext_host_destroy(CoffeeHost *host) {
@@ -571,6 +611,10 @@ void ext_host_destroy(CoffeeHost *host) {
         free(host->cmds[i].title);
     }
     for (size_t i = 0; i < host->svc_count; ++i) free(host->svcs[i].name);
+    for (size_t i = 0; i < host->view_count; ++i) {
+        free(host->views[i].id);
+        free(host->views[i].title);
+    }
     for (size_t i = 0; i < host->cfg_count; ++i) {
         free(host->cfgs[i].key);
         free(host->cfgs[i].value);
@@ -582,6 +626,7 @@ void ext_host_destroy(CoffeeHost *host) {
     free(host->cmds);
     free(host->subs);
     free(host->svcs);
+    free(host->views);
     free(host->cfgs);
     free(host->exts);
     free(host->ext_dir_cache);
@@ -621,6 +666,39 @@ int ext_host_has(CoffeeHost *host, const char *id) {
             strcmp(host->exts[i].id, id) == 0)
             return 1;
     return 0;
+}
+
+/* ===========================================================================
+ *  Introspeccion
+ * =========================================================================== */
+
+size_t ext_host_count(CoffeeHost *host) { return host ? host->ext_count : 0; }
+
+int ext_host_info(CoffeeHost *host, size_t idx, const char **id,
+                  const char **name, const char **dir, int *active) {
+    if (!host || idx >= host->ext_count) return 0;
+    HostExtension *he = &host->exts[idx];
+    if (id) *id = he->id;
+    if (name) *name = he->id; /* hoy no hay campo "name" separado en el manifiesto */
+    if (dir) *dir = he->dir;
+    if (active) *active = he->active;
+    return 1;
+}
+
+size_t ext_host_view_count(CoffeeHost *host) {
+    return host ? host->view_count : 0;
+}
+
+int ext_host_view_at(CoffeeHost *host, size_t idx, CoffeeHostView *out) {
+    if (!host || idx >= host->view_count || !out) return 0;
+    HostView *v = &host->views[idx];
+    out->id = v->id;
+    out->title = v->title;
+    out->kind = v->kind;
+    out->paint = v->paint;
+    out->input = v->input;
+    out->userdata = v->userdata;
+    return 1;
 }
 
 /* ===========================================================================

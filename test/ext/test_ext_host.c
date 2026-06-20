@@ -1,6 +1,6 @@
 /**
  * @file test_ext_host.c
- * @brief Smoke test HEADLESS del extension host (incremento E1).
+ * @brief Smoke test HEADLESS del extension host.
  *
  * Ejercita el ciclo completo SIN SDL:
  *   1. crea un Buffer real (modulo puro) + un CoffeeHost respaldado por el;
@@ -136,6 +136,77 @@ static void test_recarga(void) {
     buf_free(&b);
 }
 
+/**
+ * @brief Introspeccion + instalar-desde-carpeta + descargar + recargar.
+ *
+ * Ejercita las funciones que alimentan el panel de extensiones del IDE:
+ *   - install desde carpeta = ext_host_load de un directorio;
+ *   - ext_host_count / ext_host_info listan la extension cargada;
+ *   - ext_host_unload la quita de la lista (info la marca inactiva);
+ *   - ext_host_reload la vuelve a dejar activa.
+ */
+static void test_introspeccion_install_unload_reload(void) {
+    Buffer b;
+    buf_init(&b);
+    CoffeeHostBackend backend;
+    memset(&backend, 0, sizeof backend);
+    backend.buffer = &b;
+    CoffeeHost *host = ext_host_create(&backend);
+    EXPECT_NOT_NULL(host);
+
+    /* sin nada cargado: count = 0 */
+    EXPECT_EQ_INT((int)ext_host_count(host), 0);
+
+    /* install desde carpeta = cargar el directorio de la extension hello-c */
+    EXPECT_EQ_INT(ext_host_load(host, COFFEE_HELLO_EXT_DIR), 0);
+
+    /* introspeccion: 1 slot, activo, con id "hello-c" */
+    EXPECT_EQ_INT((int)ext_host_count(host), 1);
+    const char *id = NULL, *name = NULL, *dir = NULL;
+    int active = 0;
+    EXPECT_EQ_INT(ext_host_info(host, 0, &id, &name, &dir, &active), 1);
+    EXPECT_NOT_NULL(id);
+    EXPECT_EQ_STR(id, "hello-c");
+    EXPECT_NOT_NULL(dir); /* el directorio debe estar disponible */
+    EXPECT_EQ_INT(active, 1);
+
+    /* fuera de rango: info devuelve 0 */
+    EXPECT_EQ_INT(ext_host_info(host, 99, &id, &name, &dir, &active), 0);
+
+    /* descargar: deja de estar en la lista de activas */
+    EXPECT_EQ_INT(ext_host_unload(host, "hello-c"), 0);
+    active = 1;
+    /* el slot puede quedar (inactivo) o el id a NULL; en ambos casos NO activo */
+    if (ext_host_info(host, 0, &id, &name, &dir, &active))
+        EXPECT_EQ_INT(active, 0);
+    EXPECT_FALSE(ext_host_has(host, "hello-c"));
+
+    /* reinstalar (load de nuevo) y recargar -> activa otra vez */
+    EXPECT_EQ_INT(ext_host_load(host, COFFEE_HELLO_EXT_DIR), 0);
+    EXPECT_TRUE(ext_host_has(host, "hello-c"));
+    EXPECT_EQ_INT(ext_host_reload(host, "hello-c"), 0);
+    EXPECT_TRUE(ext_host_has(host, "hello-c"));
+
+    /* tras reload, debe existir EXACTAMENTE un slot activo con id "hello-c".
+     * Nota: el unload deja el slot inactivo (no se compacta) y el load posterior
+     * usa un slot nuevo, asi que el activo puede NO ser el indice 0; el panel
+     * de extensiones recorre los slots saltando los inactivos igual que aqui. */
+    int found_active = 0;
+    for (size_t i = 0; i < ext_host_count(host); ++i) {
+        const char *iid = NULL;
+        int iact = 0;
+        if (ext_host_info(host, i, &iid, NULL, NULL, &iact) && iact) {
+            found_active++;
+            EXPECT_NOT_NULL(iid);
+            EXPECT_EQ_STR(iid, "hello-c");
+        }
+    }
+    EXPECT_EQ_INT(found_active, 1);
+
+    ext_host_destroy(host);
+    buf_free(&b);
+}
+
 int main(void) {
     tt_suite("ext_host");
     tt_run("load DLL -> register -> command -> buffer + unload revierte",
@@ -143,5 +214,7 @@ int main(void) {
     tt_run("evento FILE_OPEN al suscriptor + servicio accesible",
            test_evento_y_servicio);
     tt_run("reload deja la extension activa y operativa", test_recarga);
+    tt_run("introspeccion + install/unload/reload",
+           test_introspeccion_install_unload_reload);
     return tt_summary();
 }

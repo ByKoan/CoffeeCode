@@ -156,6 +156,17 @@ void render_navbar(Editor *e) {
         fill_rect(r, title_x + title_w + 6, text_y + e->font_size / 2 - 3, 6,
                   6);
     }
+
+    /* Boton "Extensiones" a la derecha de la navbar (abre/cierra el panel). */
+    {
+        int ext_w = 0, ext_h = 0;
+        TTF_GetStringSize(e->font, "  Extensiones  ", 0, &ext_w, &ext_h);
+        if (ext_w < 40) ext_w = 120; /* fallback si midiera raro */
+        Rect ext_box = {e->win_w - ext_w - NAV_BTN_X, NAV_BTN_Y, ext_w, btn_h};
+        ui_button(e, UI_EXT_TOGGLE, ext_box, "  Extensiones  ",
+                  &e->theme.style_nav,
+                  e->ext_panel_open ? UI_ACTIVE : UI_NORMAL);
+    }
 }
 
 /**

@@ -601,6 +601,55 @@ static void handle_enc_popup_click(Editor *e, int mx, int my) {
     e->needs_redraw = 1;
 }
 
+/**
+ * @brief Procesa un clic dentro del panel de extensiones.
+ *
+ * Resuelve, en orden: el boton "Instalar extension" (abre el dialogo de
+ * carpeta en modo instalacion), los botones "recargar"/"descargar" de cada
+ * fila (por indice de slot del host) y, por ultimo, cualquier clic dentro del
+ * marco del panel (se consume para no caer en el editor de debajo).
+ *
+ * @return 1 si el clic fue consumido por el panel, 0 si no.
+ */
+int handle_ext_panel_click(Editor *e, int mx, int my) {
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+
+    /* Instalar extension: lanzar el dialogo de carpeta en modo instalacion. */
+    if (ui_hit(&e->ui, UI_EXT_INSTALL, mx, my)) {
+        e->ext_install_mode = 1;
+        open_folder_dialog(e);
+        return 1;
+    }
+
+    /* Recargar la extension de la fila pulsada (idx = slot del host). */
+    int rel = ui_hit_idx(&e->ui, UI_LIST_EXT_RELOAD, mx, my);
+    if (rel >= 0 && host) {
+        const char *id = NULL;
+        if (ext_host_info(host, (size_t)rel, &id, NULL, NULL, NULL) && id)
+            ext_host_reload(host, id);
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Descargar la extension de la fila pulsada. */
+    int unl = ui_hit_idx(&e->ui, UI_LIST_EXT_UNLOAD, mx, my);
+    if (unl >= 0 && host) {
+        const char *id = NULL;
+        /* copiar el id: ext_host_unload libera la cadena del host */
+        if (ext_host_info(host, (size_t)unl, &id, NULL, NULL, NULL) && id) {
+            char idbuf[128];
+            snprintf(idbuf, sizeof(idbuf), "%s", id);
+            ext_host_unload(host, idbuf);
+        }
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Clic en cualquier otra parte del marco del panel: consumirlo. */
+    if (ui_hit(&e->ui, UI_EXT_PANEL, mx, my)) return 1;
+    return 0;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
@@ -625,6 +674,16 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         e->needs_redraw = 1;
         return;
     }
+
+    /* Boton "Extensiones" de la navbar: abrir/cerrar el panel. */
+    if (ui_hit(&e->ui, UI_EXT_TOGGLE, mx, my)) {
+        e->ext_panel_open = !e->ext_panel_open;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Clic dentro del panel de extensiones: acciones + consumir el clic. */
+    if (e->ext_panel_open && handle_ext_panel_click(e, mx, my)) return;
 
     /* Menú "Archivo" abierto: tiene prioridad máxima sobre cualquier otra zona.
      * Debe comprobarse ANTES de la barra de pestañas porque el menú se dibuja

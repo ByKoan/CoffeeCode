@@ -364,6 +364,7 @@ static void render_empty_screen(Editor *e) {
         draw_text_c(e, hints[i], center_x - hint_w / 2,
                     mid_y + e->line_height * i, e->theme.txt_welcome_hint);
 
+    render_ext_panel(e); /* panel de extensiones tambien sin archivo */
     draw_status_bar(e, "  CoffeeCode");
     /* mostrar el frame (render_frame ya retornó) */
     SDL_RenderPresent(e->renderer);
@@ -706,9 +707,15 @@ void render_frame(Editor *e) {
 
     /* barra de estado: nombre + posición del cursor (1-based) + '*' si
      * modificado */
-    char status[128];
-    snprintf(status, sizeof(status), " CoffeeCode | Ln %d, Col %d%s |",
-             e->cursor_line + 1, e->cursor_col + 1, e->modified ? "  *" : "");
+    char status[384];
+    if (e->ext_status[0])
+        /* una extension fijo un mensaje (CoffeeApi::set_status): mostrarlo */
+        snprintf(status, sizeof(status), " CoffeeCode | Ln %d, Col %d%s | %s",
+                 e->cursor_line + 1, e->cursor_col + 1, e->modified ? "  *" : "",
+                 e->ext_status);
+    else
+        snprintf(status, sizeof(status), " CoffeeCode | Ln %d, Col %d%s |",
+                 e->cursor_line + 1, e->cursor_col + 1, e->modified ? "  *" : "");
     draw_status_bar(e, status);
 
     /* cromo de la UI por encima del texto */
@@ -717,6 +724,7 @@ void render_frame(Editor *e) {
         render_filetree(e); /* panel lateral abierto */
     else
         render_filetree_toggle_closed(e); /* solo el botón para abrirlo */
+    render_ext_panel(e); /* panel de extensiones, bajo la navbar */
     render_navbar(e);
     render_tabbar(e);
     render_find_bar(e);
