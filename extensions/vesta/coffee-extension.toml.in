@@ -1,0 +1,15 @@
+[extension]
+id           = "vesta"
+name         = "Vesta (Vex)"
+version      = "0.1.0"
+author       = "desmonHak"
+entry        = "coffee_vesta@COFFEE_EXT_DLL_SUFFIX@"
+abi          = 1
+description  = "Compila y ejecuta el lenguaje Vex desde el IDE via libvesta"
+dependencies = []
+provides     = []
+
+[commands]
+"vesta.run"     = "Ejecutar Vex"
+"vesta.show-ir" = "Ver IR del archivo"
+"vesta.compile" = "Compilar a .velb"

@@ -66,4 +66,37 @@ if(COFFEE_BUILD_EXTENSIONS)
     endif()
     # El test necesita que la DLL de la extension exista antes de ejecutarse.
     add_dependencies(test_ext_host coffee_hello)
+
+    # --- extension vesta (IDE -> libvesta -> VM de Vex) --------------------
+    # Solo si la extension vesta se construyo (libvesta presente).  El test
+    # carga coffee_vesta.dll, que a su vez carga libvesta.dll en runtime; por
+    # eso libvesta + sus deps (OpenSSL) se copian junto al ejecutable del test.
+    if(TARGET coffee_vesta)
+        add_coffee_test(test_ext_vesta ext/test_ext_vesta.c
+            "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
+            "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
+            "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
+            "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+        target_compile_definitions(test_ext_vesta PRIVATE
+            "COFFEE_VESTA_EXT_DIR=\"${CMAKE_BINARY_DIR}/extensions/vesta\"")
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(test_ext_vesta PRIVATE dl)
+        endif()
+        add_dependencies(test_ext_vesta coffee_vesta)
+        # Las DLLs de runtime (libvesta + OpenSSL) deben estar junto al
+        # ejecutable del test para que el cargador de Windows las resuelva al
+        # abrir coffee_vesta.dll.
+        set(_vesta_rt "${VESTA_DIR}/cmake-build-release")
+        add_custom_command(TARGET test_ext_vesta POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_vesta_rt}/libvesta.dll"
+                "$<TARGET_FILE_DIR:test_ext_vesta>/libvesta.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_vesta_rt}/libssl-3-x64.dll"
+                "$<TARGET_FILE_DIR:test_ext_vesta>/libssl-3-x64.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_vesta_rt}/libcrypto-3-x64.dll"
+                "$<TARGET_FILE_DIR:test_ext_vesta>/libcrypto-3-x64.dll"
+            COMMENT "Copiando libvesta + deps junto al test de la extension vesta")
+    endif()
 endif()
