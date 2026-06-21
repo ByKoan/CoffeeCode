@@ -40,8 +40,9 @@
  * abrir).
  */
 static void draw_toggle_button(Editor *e, int x, int y, const char *glyph) {
-    set_color_c(e->renderer, e->theme.col_ftree_toggle); /* fondo del botón */
-    fill_rect(e->renderer, x, y, FTREE_TOGGLE_BTN_W, FTREE_TOGGLE_BTN_H);
+    /* fondo del botón: see-through como el resto del cromo del explorador */
+    chrome_fill_bg(e, e->theme.col_ftree_toggle, x, y, FTREE_TOGGLE_BTN_W,
+                   FTREE_TOGGLE_BTN_H);
     /* Glifo centrado verticalmente (alto del botón menos alto de fuente,
      * mitad). */
     draw_text_c(e, glyph, x + 2, y + (FTREE_TOGGLE_BTN_H - e->font_size) / 2,
@@ -170,8 +171,8 @@ void render_filetree(Editor *e) {
     int panel_w = ft->width;
     int panel_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
 
-    set_color_c(r, e->theme.col_ftree_bg); /* fondo del panel */
-    fill_rect(r, panel_x, panel_y, panel_w, panel_h);
+    /* fondo del panel (opaco en BG_MODE_NONE, see-through en los demas) */
+    chrome_fill_bg(e, e->theme.col_ftree_bg, panel_x, panel_y, panel_w, panel_h);
     set_color_c(r,
                 e->theme.col_ftree_sep); /* línea separadora derecha (1 px) */
     fill_rect(r, panel_x + panel_w - 1, panel_y, 1, panel_h);
@@ -200,8 +201,9 @@ void render_filetree(Editor *e) {
     /* Cabecera con el nombre de la carpeta raíz (o "CoffeeCode" si no hay
      * ninguna). */
     int header_y = content_top;
-    set_color_c(r, e->theme.col_ftree_header);
-    fill_rect(r, panel_x, header_y, panel_w - btn_w, FTREE_HEADER_H);
+    /* fondo de la cabecera: see-through como el resto del explorador */
+    chrome_fill_bg(e, e->theme.col_ftree_header, panel_x, header_y,
+                   panel_w - btn_w, FTREE_HEADER_H);
 
     char root_label[64];
     if (ft->root_path[0])

@@ -100,8 +100,8 @@ static const char *last_path_component(const char *path) {
 void render_navbar(Editor *e) {
     SDL_Renderer *r = e->renderer;
 
-    set_color_c(r, e->theme.col_navbar_bg);
-    fill_rect(r, 0, 0, e->win_w, NAVBAR_HEIGHT); /* fondo de la navbar */
+    /* fondo de la navbar (opaco en BG_MODE_NONE, see-through en los demas) */
+    chrome_fill_bg(e, e->theme.col_navbar_bg, 0, 0, e->win_w, NAVBAR_HEIGHT);
     set_color_c(r, e->theme.col_navbar_sep);
     fill_rect(r, 0, NAVBAR_HEIGHT - 1, e->win_w,
               1); /* separador inferior de 1 px */
@@ -310,12 +310,9 @@ static int draw_tab_active(Editor *e, int index, int tx, int bar_y, int bar_h,
     /* registrar el rectángulo de la pestaña para el hit-test (por índice) */
     ui_put_idx(&e->ui, UI_LIST_TAB, index, (Rect){tx, bar_y, tab_w, bar_h});
 
-    if (active)
-        set_color_c(
-            r, e->theme.col_tab_active); /* pestaña activa: fondo más claro */
-    else
-        set_color_c(r, e->theme.col_tabbar_bg);
-    fill_rect(r, tx, bar_y, tab_w, bar_h);
+    /* fondo de la pestaña (activa mas clara): see-through como el resto */
+    chrome_fill_bg(e, active ? e->theme.col_tab_active : e->theme.col_tabbar_bg,
+                   tx, bar_y, tab_w, bar_h);
 
     set_color_c(r, e->theme.col_tabbar_sep); /* borde derecho separador */
     fill_rect(r, tx + tab_w - 1, bar_y, 1, bar_h);
@@ -382,8 +379,8 @@ void render_tabbar(Editor *e) {
     int bar_y = NAVBAR_HEIGHT;
     int bar_h = TAB_BAR_HEIGHT;
 
-    set_color_c(r, e->theme.col_tabbar_bg);
-    fill_rect(r, 0, bar_y, e->win_w, bar_h); /* fondo de la barra */
+    /* fondo de la barra (opaco en BG_MODE_NONE, see-through en los demas) */
+    chrome_fill_bg(e, e->theme.col_tabbar_bg, 0, bar_y, e->win_w, bar_h);
     set_color_c(r, e->theme.col_tabbar_sep);
     fill_rect(r, 0, bar_y + bar_h - 1, e->win_w, 1); /* separador inferior */
 
@@ -402,8 +399,7 @@ void render_tabbar(Editor *e) {
     }
 
     /* Botón + (nueva pestaña), justo después de la última */
-    set_color_c(r, e->theme.col_tabbar_bg);
-    fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
+    chrome_fill_bg(e, e->theme.col_tabbar_bg, tx, bar_y, TAB_NEW_BTN_W, bar_h);
     draw_text_c(e, "+", tx + 7, bar_y + (bar_h - e->font_size) / 2,
                 e->theme.txt_tab_new);
     /* registrar el botón "+" para el hit-test */
@@ -416,8 +412,8 @@ void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
     int bar_h = TAB_BAR_HEIGHT;
 
     /* fondo + separador inferior de la franja de este panel */
-    set_color_c(r, e->theme.col_tabbar_bg);
-    fill_rect(r, pane_left, bar_y, pane_right - pane_left, bar_h);
+    chrome_fill_bg(e, e->theme.col_tabbar_bg, pane_left, bar_y,
+                   pane_right - pane_left, bar_h);
     set_color_c(r, e->theme.col_tabbar_sep);
     fill_rect(r, pane_left, bar_y + bar_h - 1, pane_right - pane_left, 1);
 
@@ -436,8 +432,8 @@ void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
 
     /* Botón "+" de nueva pestaña del grupo, si cabe. */
     if (tx + TAB_NEW_BTN_W <= pane_right) {
-        set_color_c(r, e->theme.col_tabbar_bg);
-        fill_rect(r, tx, bar_y, TAB_NEW_BTN_W, bar_h);
+        chrome_fill_bg(e, e->theme.col_tabbar_bg, tx, bar_y, TAB_NEW_BTN_W,
+                       bar_h);
         draw_text_c(e, "+", tx + 7, bar_y + (bar_h - e->font_size) / 2,
                     e->theme.txt_tab_new);
         ui_put_idx(&e->ui, UI_LIST_SPLIT_NEW, group,
@@ -510,10 +506,10 @@ void render_shortcuts(Editor *e) {
 
     set_color_c(r, e->theme.col_shortcut_sep);
     fill_rect(r, 0, sep_y, e->win_w, 1); /* separador de 1 px */
-    set_color_c(
-        r, e->theme.col_shortcut_bg); /* fondo solo sobre el área del editor */
-    fill_rect(r, left_offset, sep_y + 1, e->win_w - left_offset,
-              SHORTCUT_HEIGHT - 1);
+    /* fondo de la banda (solo sobre el área del editor): see-through como el
+     * resto del cromo */
+    chrome_fill_bg(e, e->theme.col_shortcut_bg, left_offset, sep_y + 1,
+                   e->win_w - left_offset, SHORTCUT_HEIGHT - 1);
 
     /* lista de atajos (tecla, etiqueta) a mostrar en la banda */
     static const struct {

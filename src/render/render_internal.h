@@ -89,6 +89,13 @@ void render_settings_view(Editor *e);
 void render_background_view(Editor *e);
 /* dibuja el fondo configurado bajo el area de texto del editor */
 void render_background_area(Editor *e);
+/* dibuja el fondo configurado cubriendo TODA la ventana (capa bajo el cromo) */
+void render_background_window(Editor *e);
+/* 1 si el editor esta en modo see-through (el fondo se ve a traves del cromo) */
+int render_is_see_through(Editor *e);
+/* rellena el fondo de una banda del cromo: opaco en BG_MODE_NONE, semi-
+ * transparente (compone con el fondo) en los modos see-through */
+void chrome_fill_bg(Editor *e, Color c, int x, int y, int w, int h);
 /* pinta el fondo configurado (color/imagen) dentro de un rectangulo dado;
  * lo usa la previsualizacion de la sub-pantalla "Fondos" */
 void render_background_preview(Editor *e, SDL_FRect area);

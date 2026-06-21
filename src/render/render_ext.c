@@ -179,16 +179,21 @@ void render_ext_panel(Editor *e) {
     int panel_y = NAVBAR_HEIGHT;
     int panel_h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT;
 
-    /* fondo + separador izquierdo + registro del marco (consume clics dentro) */
-    ui_panel(e, (Rect){panel_x, panel_y, panel_w, panel_h},
-             e->theme.col_ftree_bg, e->theme.col_ftree_sep);
+    /* fondo + separador izquierdo + registro del marco (consume clics dentro).
+     * El fondo va por chrome_fill_bg para componer con el fondo en see-through;
+     * el separador se conserva. */
+    chrome_fill_bg(e, e->theme.col_ftree_bg, panel_x, panel_y, panel_w, panel_h);
+    if (e->theme.col_ftree_sep.a) {
+        set_color_c(r, e->theme.col_ftree_sep);
+        stroke_rect(r, panel_x, panel_y, panel_w, panel_h);
+    }
     ui_put(&e->ui, UI_EXT_PANEL, (Rect){panel_x, panel_y, panel_w, panel_h});
 
     int cy = panel_y; /* cursor vertical de dibujo */
 
     /* -- Cabecera -- */
-    set_color_c(r, e->theme.col_ftree_header);
-    fill_rect(r, panel_x, cy, panel_w, EXT_HEADER_H);
+    chrome_fill_bg(e, e->theme.col_ftree_header, panel_x, cy, panel_w,
+                   EXT_HEADER_H);
     draw_text_c(e, " Extensiones", panel_x + EXT_PAD,
                 cy + (EXT_HEADER_H - e->font_size) / 2, e->theme.ftree_txt_root);
     cy += EXT_HEADER_H;

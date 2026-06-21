@@ -58,14 +58,18 @@ void render_bottom_panel(Editor *e) {
     int top = e->win_h - STATUS_HEIGHT - e->bottom_panel_h;
     int height = e->bottom_panel_h;
 
-    /* fondo + borde superior + registro del marco (foco + consumir clics) */
-    ui_panel(e, (Rect){left, top, width, height}, e->theme.col_ftree_bg,
-             e->theme.col_ftree_sep);
+    /* fondo + borde superior + registro del marco (foco + consumir clics).
+     * El fondo va por chrome_fill_bg para que, en modo see-through, el panel
+     * deje ver el fondo igual que el resto del cromo; el borde se mantiene. */
+    chrome_fill_bg(e, e->theme.col_ftree_bg, left, top, width, height);
+    if (e->theme.col_ftree_sep.a) {
+        set_color_c(r, e->theme.col_ftree_sep);
+        stroke_rect(r, left, top, width, height);
+    }
     ui_put(&e->ui, UI_BOTTOM_PANEL, (Rect){left, top, width, height});
 
     /* -- Tira de pestanas (una por canal) -- */
-    set_color_c(r, e->theme.col_ftree_header);
-    fill_rect(r, left, top, width, BOTTOM_TAB_H);
+    chrome_fill_bg(e, e->theme.col_ftree_header, left, top, width, BOTTOM_TAB_H);
 
     int tab_x = left;
     int char_w = (e->char_w > 0 ? e->char_w : 8);
@@ -76,10 +80,10 @@ void render_bottom_panel(Editor *e) {
         int tw = (int)strlen(c->title) * char_w + 2 * BOTTOM_TAB_PAD;
         if (tab_x + tw > right) break; /* no caben mas pestanas */
         int activei = ((int)i == e->bottom_active_chan);
-        /* fondo de la pestana activa resaltado */
+        /* fondo de la pestana activa resaltado (see-through como el cromo) */
         if (activei) {
-            set_color_c(r, e->theme.col_tab_active);
-            fill_rect(r, tab_x, top, tw, BOTTOM_TAB_H);
+            chrome_fill_bg(e, e->theme.col_tab_active, tab_x, top, tw,
+                           BOTTOM_TAB_H);
             /* franja de acento bajo la pestana activa */
             set_color_c(r, e->theme.col_tab_accent);
             fill_rect(r, tab_x, top + BOTTOM_TAB_H - 2, tw, 2);

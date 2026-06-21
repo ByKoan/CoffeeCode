@@ -203,6 +203,75 @@ void render_background_area(Editor *e) {
     bg_fill_area(e, area, 1); /* editor real: compone con el escritorio */
 }
 
+/**
+ * @brief Indica si el editor esta en un modo de fondo "see-through" (la imagen,
+ *        el color o el escritorio deben verse a traves de TODA su superficie).
+ *
+ * Es see-through en cualquier modo distinto de ::BG_MODE_NONE.  En ::BG_MODE_NONE
+ * el editor pinta TODO opaco con el color del tema, identico a antes del fondo.
+ *
+ * @param e Editor. @return 1 si el chrome debe componer con el fondo, 0 si opaco.
+ */
+int render_is_see_through(Editor *e) {
+    return e->settings.background_mode != BG_MODE_NONE;
+}
+
+/**
+ * @brief Pinta el fondo configurado cubriendo TODA la ventana del editor.
+ *
+ * En los modos see-through (color / imagen / transparente) el fondo no se limita
+ * al area de texto: cubre la ventana entera ANTES de dibujar el cromo, de modo
+ * que la imagen / el color / el escritorio se vean a traves de los gutters,
+ * barras de pestanas, divisores, explorador, navbar, barra de estado y panel
+ * inferior.  El cromo se pinta despues semi-transparente (ver ::chrome_fill_bg)
+ * para que el fondo siga asomando.  En ::BG_MODE_NONE no toca nada (cero
+ * regresion: el editor queda con el color opaco del tema del ::SDL_RenderClear).
+ *
+ * @param e Editor.
+ */
+void render_background_window(Editor *e) {
+    SDL_FRect area = {0.0f, 0.0f, (float)e->win_w, (float)e->win_h};
+    bg_fill_area(e, area, 1); /* editor real: compone con el escritorio */
+}
+
+/**
+ * @brief Rellena el fondo de una banda del cromo respetando el modo see-through.
+ *
+ * Es el unico punto por el que pasan los rellenos de FONDO del cromo (gutter,
+ * barras de pestanas, divisores, explorador, navbar, barra de estado, panel
+ * inferior).  En ::BG_MODE_NONE pinta opaco con el color @p c, exactamente igual
+ * que antes (un ::set_color_c + ::fill_rect).  En los modos see-through pinta el
+ * MISMO color pero semi-transparente, premultiplicado por la opacidad
+ * configurada y compuesto (::SDL_BLENDMODE_BLEND_PREMULTIPLIED) sobre la capa de
+ * fondo ya pintada por ::render_background_window: asi el fondo asoma a traves
+ * del cromo y, donde el escritorio se ve (op<255), el alfa se conserva sin dejar
+ * halos.  A mayor opacidad, mas solido el cromo; a menor, mas se ve el fondo.
+ *
+ * @param e       Editor.
+ * @param c       Color de fondo del cromo (el mismo que se usaba opaco).
+ * @param x,y,w,h Rectangulo a rellenar (px).
+ */
+void chrome_fill_bg(Editor *e, Color c, int x, int y, int w, int h) {
+    SDL_Renderer *r = e->renderer;
+    if (!render_is_see_through(e)) {
+        /* modo opaco (sin fondo): identico al comportamiento de siempre */
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        set_color_c(r, c);
+        fill_rect(r, x, y, w, h);
+        return;
+    }
+    int op = e->settings.background_opacity;
+    if (op < 0) op = 0;
+    if (op > 255) op = 255;
+    /* tinte semi-transparente premultiplicado, compuesto sobre la capa de fondo
+     * (que ya esta en alfa premultiplicado tras render_background_window). */
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+    SDL_SetRenderDrawColor(r, (Uint8)(c.r * op / 255), (Uint8)(c.g * op / 255),
+                           (Uint8)(c.b * op / 255), (Uint8)op);
+    fill_rect(r, x, y, w, h);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE); /* restaurar estado */
+}
+
 void render_background_preview(Editor *e, SDL_FRect area) {
     bg_fill_area(e, area, 0); /* previsualizacion: mezcla sobre el tema */
 }
@@ -516,8 +585,8 @@ void render_selection(Editor *e, int left_offset, int text_top,
 static void draw_status_bar(Editor *e, const char *text) {
     SDL_Renderer *r = e->renderer;
     int y = e->win_h - STATUS_HEIGHT; /* la barra va pegada al borde inferior */
-    set_color_c(r, e->theme.col_status_bg);
-    fill_rect(r, 0, y, e->win_w, STATUS_HEIGHT); /* fondo de la barra */
+    /* fondo de la barra (opaco en BG_MODE_NONE, see-through en los demas) */
+    chrome_fill_bg(e, e->theme.col_status_bg, 0, y, e->win_w, STATUS_HEIGHT);
     set_color_c(r, e->theme.col_status_sep);
     fill_rect(r, 0, y, e->win_w, 1); /* separador superior de 1 px */
     int ty = y + (STATUS_HEIGHT - e->font_size) / 2; /* centrado vertical */
@@ -799,9 +868,9 @@ static void render_gutter(Editor *e, int left_offset, int text_top,
                           int text_height, int visible_lines, int total_lines) {
     if (!e->settings.show_line_numbers)
         return; /* gutter oculto: nada que pintar */
-    set_color_c(e->renderer, e->theme.col_gutter);
-    /* fondo del gutter */
-    fill_rect(e->renderer, left_offset, text_top, GUTTER_WIDTH, text_height);
+    /* fondo del gutter (opaco en BG_MODE_NONE, see-through en los demas) */
+    chrome_fill_bg(e, e->theme.col_gutter, left_offset, text_top, GUTTER_WIDTH,
+                   text_height);
 
     for (int vi = 0; vi < visible_lines; vi++) {
         int li = e->scroll_line + vi;
@@ -899,11 +968,13 @@ static void render_dock_dividers(Editor *e, int node, DockRect area) {
     DockRect ra, rb;
     dock_child_areas(&e->dock, node, area, &ra, &rb);
 
-    set_color_c(e->renderer, e->theme.col_tabbar_sep);
+    /* divisor entre hojas: see-through como el resto del cromo */
     if (n->orient == DOCK_VERTICAL)
-        fill_rect(e->renderer, rb.x - 1, area.y, 2, area.h); /* línea vertical */
+        chrome_fill_bg(e, e->theme.col_tabbar_sep, rb.x - 1, area.y, 2,
+                       area.h); /* línea vertical */
     else
-        fill_rect(e->renderer, area.x, rb.y - 1, area.w, 2); /* línea horizontal */
+        chrome_fill_bg(e, e->theme.col_tabbar_sep, area.x, rb.y - 1, area.w,
+                       2); /* línea horizontal */
 
     render_dock_dividers(e, n->child_a, ra);
     render_dock_dividers(e, n->child_b, rb);
@@ -1219,10 +1290,13 @@ void render_frame(Editor *e) {
     set_color_c(r, e->theme.col_bg);
     SDL_RenderClear(r);
 
-    /* Fondo del area de texto segun el modo activo (sin fondo / color / imagen /
-     * transparente).  En los modos que componen con el escritorio, fija el alfa
-     * del area a la opacidad configurada (0 = se ve el escritorio, 255 = solido). */
-    render_background_area(e);
+    /* Fondo a VENTANA COMPLETA segun el modo activo (sin fondo / color / imagen /
+     * transparente).  En los modos see-through la imagen/color/escritorio cubre
+     * TODA la ventana ANTES del cromo, que luego se pinta semi-transparente
+     * (chrome_fill_bg) para dejar asomar el fondo por gutters, barras, divisores,
+     * explorador, navbar, status y panel inferior.  En BG_MODE_NONE no toca nada
+     * y queda el color opaco del tema del RenderClear (cero regresion). */
+    render_background_window(e);
 
     if (e->tab_count == 0) {    /* sin archivos: pantalla de bienvenida */
         render_empty_screen(e); /* (hace su propio RenderPresent) */
