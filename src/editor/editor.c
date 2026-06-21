@@ -508,6 +508,8 @@ int editor_init(Editor *e, const char *filepath) {
     e->float_drag = -1;    /* sin flotante en arrastre            */
     e->float_resizing = 0;
     e->float_resize_edges = 0;
+    e->float_dock_target_group = -1; /* sin destino de re-acople al arrancar */
+    e->float_dock_zone = DOCK_DZ_NONE;
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;

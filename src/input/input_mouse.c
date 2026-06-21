@@ -701,6 +701,17 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
             int nx = mouse_x - e->float_drag_off_x;
             int ny = mouse_y - e->float_drag_off_y;
             fp->rect = float_clamp_move(fp->rect, nx, ny, bounds);
+            /* Re-acople por arrastre: si el cursor cae sobre una hoja del dock (y
+             * no sobre otro flotante), anotar el destino para la guia y el drop. */
+            int tg = -1, tz = DOCK_DZ_NONE;
+            if (editor_float_dock_target(e, e->float_drag, mouse_x, mouse_y, &tg,
+                                         &tz)) {
+                e->float_dock_target_group = tg;
+                e->float_dock_zone = tz;
+            } else {
+                e->float_dock_target_group = -1;
+                e->float_dock_zone = DOCK_DZ_NONE;
+            }
         }
         e->needs_redraw = 1;
         return;

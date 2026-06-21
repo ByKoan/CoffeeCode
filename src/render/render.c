@@ -1084,6 +1084,7 @@ void render_frame(Editor *e) {
     render_navbar(e);
     if (e->dock.leaf_count <= 1) render_tabbar(e);
     render_floats(e);   /* paneles flotantes: overlay ENCIMA del dock */
+    render_float_dock_guide(e); /* guia de re-acople de un flotante arrastrado */
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */

@@ -506,6 +506,15 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
             e->bottom_selecting = 0; /* fin de la seleccion del panel inferior */
+            /* Si se solto un flotante (movido por su titulo, no redimensionado)
+             * sobre una hoja del dock, acoplarlo ahi antes de limpiar el estado. */
+            if (e->float_drag >= 0 && e->float_drag < e->float_count &&
+                !e->float_resizing && e->float_dock_target_group >= 0 &&
+                e->float_dock_zone != DOCK_DZ_NONE)
+                editor_float_dock_to(e, e->float_drag, e->float_dock_target_group,
+                                     e->float_dock_zone);
+            e->float_dock_target_group = -1; /* limpiar el destino siempre */
+            e->float_dock_zone = DOCK_DZ_NONE;
             e->float_drag = -1;      /* fin del arrastre de un flotante         */
             e->float_resizing = 0;
         }

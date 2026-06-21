@@ -1044,3 +1044,82 @@ void editor_float_dock(Editor *e, int fi) {
     editor_sync_cursor(e);
     e->needs_redraw = 1;
 }
+
+int editor_float_dock_target(Editor *e, int drag_fi, int mx, int my,
+                             int *out_group, int *out_zone) {
+    /* Sobre OTRO flotante: nunca se acopla (el flotante esta encima del dock). */
+    for (int i = 0; i < e->float_count; i++) {
+        if (i == drag_fi) continue;            /* el propio flotante no estorba */
+        if (rect_has(e->floats[i].rect, mx, my)) return 0;
+    }
+    /* Sobre una hoja del dock: su group_id + la zona de drop dentro de su rect. */
+    int group = -1, zone = DOCK_DZ_NONE;
+    if (!editor_drag_target(e, mx, my, &group, &zone, NULL)) return 0;
+    if (zone == DOCK_DZ_NONE) return 0;
+    if (out_group) *out_group = group;
+    if (out_zone) *out_zone = zone;
+    return 1;
+}
+
+void editor_float_dock_to(Editor *e, int fi, int target_group, int zone) {
+    if (fi < 0 || fi >= e->float_count) return;
+    if (zone == DOCK_DZ_NONE) return;
+
+    int group = e->floats[fi].group_id;        /* grupo del flotante a acoplar */
+    int active = e->group_active_tab[group];   /* su pestana activa            */
+
+    /* la hoja destino debe existir en el arbol de dock */
+    int target_leaf = dock_leaf_by_group(&e->dock, target_group);
+    if (target_leaf == DOCK_NONE) return;
+
+    editor_tab_save_state(e);
+
+    int dst_group = target_group; /* grupo final donde caeran las pestanas */
+
+    if (zone != DOCK_DZ_CENTER) {
+        /* zonas de borde: dividir la hoja destino y volcar las pestanas a la
+         * hoja nueva (misma maquinaria que editor_tab_drop). */
+        if (e->dock.leaf_count >= DOCK_MAX_LEAVES) return; /* tope de hojas */
+        int new_group = dock_alloc_group_id(&e->dock);
+        if (new_group == DOCK_NONE) return; /* sin ids libres */
+
+        DockOrient orient = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_RIGHT)
+                                ? DOCK_VERTICAL
+                                : DOCK_HORIZONTAL;
+        int new_first = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_TOP);
+        int new_leaf = dock_split_leaf_side(&e->dock, target_leaf, orient,
+                                            new_group, new_first);
+        if (new_leaf == DOCK_NONE) return; /* no se pudo dividir */
+        dst_group = new_group;
+    }
+
+    /* mover TODAS las pestanas del flotante a la hoja destino */
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == group) e->tabs[i].group = dst_group;
+    if (active >= 0 && active < e->tab_count && e->tabs[active].group == dst_group)
+        e->group_active_tab[dst_group] = active; /* su activa sigue activa */
+
+    /* quitar el flotante del array (su grupo ya no tiene pestanas) */
+    int idx = editor_float_by_group(e, group);
+    if (idx >= 0) {
+        for (int i = idx; i < e->float_count - 1; i++)
+            e->floats[i] = e->floats[i + 1];
+        e->float_count--;
+    }
+
+    /* enfocar la hoja destino con la pestana movida como activa */
+    e->active_group = dst_group;
+    e->dock.focused_leaf = dock_leaf_by_group(&e->dock, dst_group);
+    int fidx = e->group_active_tab[dst_group];
+    if (fidx < 0 || fidx >= e->tab_count || e->tabs[fidx].group != dst_group)
+        fidx = editor_group_first_tab(e, dst_group);
+    if (fidx >= 0) {
+        e->active_tab = fidx;
+        e->group_active_tab[dst_group] = fidx;
+    }
+    if (e->dock.leaf_count <= 1) e->pane_active = 0;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}

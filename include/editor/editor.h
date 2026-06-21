@@ -335,6 +335,15 @@ typedef struct Editor {
     int float_resize_edges;/* mascara FLOAT_EDGE_* de los bordes que se arrastran */
     int float_drag_off_x;  /* desfase X cursor -> esquina del marco al mover   */
     int float_drag_off_y;  /* desfase Y cursor -> esquina del marco al mover   */
+
+    /* -- Re-acople de un flotante arrastrando su barra de titulo ------------
+     * Mientras se mueve un flotante (float_drag>=0, float_resizing==0), si el
+     * cursor cae sobre una hoja del dock (y no sobre OTRO flotante) se anota
+     * aqui el destino de acople: el group_id de la hoja y la zona (DockDropZone)
+     * dentro de ella.  El render dibuja la guia y el mouse-up acopla.  Con
+     * float_dock_target_group == -1 no hay destino: el flotante solo se mueve. */
+    int float_dock_target_group; /* group_id de la hoja destino, o -1            */
+    int float_dock_zone;         /* DockDropZone dentro de la hoja destino       */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -471,6 +480,24 @@ void editor_float_close(Editor *e, int fi);
  * pestana activa del flotante queda como activa en el destino.  No hace nada si
  * @p fi es invalido. */
 void editor_float_dock(Editor *e, int fi);
+
+/* Acopla el flotante de indice @p fi a una hoja CONCRETA del dock (no a la
+ * enfocada): mueve TODAS sus pestanas al grupo @p target_group cuando @p zone es
+ * DOCK_DZ_CENTER, o divide esa hoja en la direccion de la zona de borde
+ * (LEFT/RIGHT/TOP/BOTTOM) creando una hoja nueva con las pestanas del flotante.
+ * Tras esto el flotante desaparece y la hoja resultante queda enfocada.  Lo usa
+ * el re-acople por arrastre de la barra de titulo.  No hace nada si @p fi,
+ * @p target_group o @p zone son invalidos. */
+void editor_float_dock_to(Editor *e, int fi, int target_group, int zone);
+
+/* Detecta el destino de re-acople de un flotante cuyo cursor esta en (@p mx,
+ * @p my): si el punto cae sobre una hoja del dock y NO sobre otro flotante,
+ * escribe en @p out_group el group_id de la hoja, en @p out_zone la DockDropZone
+ * y devuelve 1.  Devuelve 0 (sin destino) si el cursor esta fuera del dock o
+ * sobre cualquier flotante distinto del que se arrastra (@p drag_fi).  Funcion
+ * de apoyo del arrastre de la barra de titulo. */
+int editor_float_dock_target(Editor *e, int drag_fi, int mx, int my,
+                             int *out_group, int *out_zone);
 
 /* Retira del array cualquier panel flotante que se haya quedado sin pestanas
  * (p.ej. tras arrastrar su ultima pestana al dock).  Compacta el z-order. */

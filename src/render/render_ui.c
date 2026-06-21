@@ -650,6 +650,39 @@ static DockRect drag_zone_rect(DockRect r, int zone) {
     return r;
 }
 
+void render_float_dock_guide(Editor *e) {
+    /* solo durante el arrastre de un flotante (por el titulo) con destino */
+    if (e->float_drag < 0 || e->float_resizing) return;
+    if (e->float_dock_target_group < 0 || e->float_dock_zone == DOCK_DZ_NONE)
+        return;
+    SDL_Renderer *r = e->renderer;
+
+    /* rect de la hoja destino (la del group_id anotado durante el arrastre) */
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    DockRect leaf_rect;
+    int found = 0;
+    for (int i = 0; i < n; i++)
+        if (leaves[i].group_id == e->float_dock_target_group) {
+            leaf_rect = leaves[i].rect;
+            found = 1;
+            break;
+        }
+    if (!found) return;
+
+    /* mismo overlay translucido de zona que el arrastre de pestanas */
+    DockRect z = drag_zone_rect(leaf_rect, e->float_dock_zone);
+    Color acc = e->theme.col_tab_accent;
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    set_color(r, acc.r, acc.g, acc.b, 0x40); /* relleno translucido */
+    fill_rect(r, z.x, z.y, z.w, z.h);
+    set_color(r, acc.r, acc.g, acc.b, 0xC0); /* borde mas opaco */
+    stroke_rect(r, z.x, z.y, z.w, z.h);
+    stroke_rect(r, z.x + 1, z.y + 1, z.w - 2, z.h - 2);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+}
+
 void render_tab_drag(Editor *e) {
     if (!e->dragging_tab || e->drag_tab < 0) return; /* sin arrastre real */
     SDL_Renderer *r = e->renderer;

@@ -66,6 +66,15 @@ add_coffee_test(test_dock dock/test_dock.c
 add_coffee_test(test_float dock/test_float.c
     "${CMAKE_SOURCE_DIR}/src/dock/float.c")
 
+# --- float-dock (puro: deteccion + acople de un flotante al dock, sin SDL) ---
+# Verifica la logica pura del re-acople por arrastre: dock_drop_zone (deteccion
+# del destino), el movimiento de todas las pestanas del grupo (caso CENTER) y la
+# division de la hoja destino (caso de borde).  Enlaza dock.c (arbol) y float.c
+# (geometria del marco); el wireado al Editor vive en input/render y necesita SDL.
+add_coffee_test(test_float_dock dock/test_float_dock.c
+    "${CMAKE_SOURCE_DIR}/src/dock/dock.c"
+    "${CMAKE_SOURCE_DIR}/src/dock/float.c")
+
 # --- tab_membership (puro: invariante "pestana activa por grupo", sin SDL) --
 # Evita el bug del "buffer compartido": el indice activo de un grupo nunca debe
 # apuntar a una pestana de otro grupo (p.ej. una movida a un flotante).
