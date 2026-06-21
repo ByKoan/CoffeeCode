@@ -66,6 +66,12 @@ add_coffee_test(test_dock dock/test_dock.c
 add_coffee_test(test_float dock/test_float.c
     "${CMAKE_SOURCE_DIR}/src/dock/float.c")
 
+# --- tab_membership (puro: invariante "pestana activa por grupo", sin SDL) --
+# Evita el bug del "buffer compartido": el indice activo de un grupo nunca debe
+# apuntar a una pestana de otro grupo (p.ej. una movida a un flotante).
+add_coffee_test(test_tab_membership editor/test_tab_membership.c
+    "${CMAKE_SOURCE_DIR}/src/editor/tab_membership.c")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.

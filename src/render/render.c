@@ -771,7 +771,9 @@ static void render_split_panes(Editor *e, DockRect area) {
     for (int li = 0; li < nleaves; li++) {
         int g = leaves[li].group_id;
         DockRect lr = leaves[li].rect; /* rect total de la hoja (incluye tabbar) */
-        int idx = e->group_active_tab[g];
+        /* indice VALIDO del grupo: solo dibuja una pestana que pertenezca a esta
+         * hoja (nunca el buffer de otro grupo si el indice guardado quedo obsoleto) */
+        int idx = editor_group_valid_active_tab(e, g);
 
         /* geometría del contenido de la hoja: bajo su barra de pestañas */
         int text_top = lr.y + TAB_BAR_HEIGHT;
@@ -987,10 +989,22 @@ void render_frame(Editor *e) {
      * dock; render_floats y el cierre del frame rebindan despues. */
     int focus_in_dock = (dock_leaf_by_group(&e->dock, e->active_group) != DOCK_NONE);
     int dock_draw_tab = e->active_tab; /* por defecto, la enfocada */
+    /* 1 = la hoja del dock con foco tiene una pestana valida que dibujar.  Con el
+     * foco dentro del dock siempre la hay; con el foco en un flotante depende de
+     * que la hoja del dock no se haya quedado vacia. */
+    int dock_has_tab = 1;
     if (!focus_in_dock) {
+        /* el foco esta en un flotante: el dock dibuja la pestana de SU hoja con
+         * foco.  Usar el indice VALIDO del grupo (que pertenece a la hoja): si la
+         * hoja se quedo vacia (su unica pestana se fue al flotante) di es -1 y NO
+         * se dibuja su contenido, evitando pintar el buffer del flotante en el
+         * area del dock (bug del buffer compartido). */
         int dg = e->dock.nodes[e->dock.focused_leaf].group_id;
-        int di = e->group_active_tab[dg];
-        if (di >= 0 && di < e->tab_count) dock_draw_tab = di;
+        int di = editor_group_valid_active_tab(e, dg);
+        if (di >= 0 && di < e->tab_count)
+            dock_draw_tab = di;
+        else
+            dock_has_tab = 0; /* hoja del dock vacia: area en blanco */
     }
 
     if (e->dock.leaf_count > 1) {
@@ -1003,35 +1017,41 @@ void render_frame(Editor *e) {
          * foco esta en un flotante, dibujar el contenido del dock con su hoja
          * (recalculando total_lines para ESA pestana, no la del flotante). */
         int dl = total_lines;
-        if (!focus_in_dock) {
+        if (!focus_in_dock && dock_has_tab) {
             editor_render_bind_tab(e, dock_draw_tab);
             update_lexer_cache(e); /* tokens de la pestana del dock */
             dl = buf_line_count(e->buf);
         }
-        /* resaltado de la línea activa (banda completa; solo si está activado en
-         * preferencias y no hay selección) */
-        if (e->settings.highlight_current_line && !e->sel_active) {
-            int vi_cursor = e->cursor_line - e->scroll_line;
-            if (vi_cursor >= 0 && vi_cursor < visible_lines) {
-                set_color_c(r, e->theme.col_cursor_line);
-                fill_rect(r, 0, text_top + vi_cursor * e->line_height, e->win_w,
-                          e->line_height);
+        /* Dibujar el contenido del area del dock solo si hay una pestana suya que
+         * mostrar.  Si el foco esta en un flotante y la hoja del dock se quedo
+         * vacia, el area queda en blanco (el fondo ya esta limpio) en vez de
+         * pintar el buffer del flotante. */
+        if (focus_in_dock || dock_has_tab) {
+            /* resaltado de la línea activa (banda completa; solo si está activado
+             * en preferencias y no hay selección) */
+            if (e->settings.highlight_current_line && !e->sel_active) {
+                int vi_cursor = e->cursor_line - e->scroll_line;
+                if (vi_cursor >= 0 && vi_cursor < visible_lines) {
+                    set_color_c(r, e->theme.col_cursor_line);
+                    fill_rect(r, 0, text_top + vi_cursor * e->line_height, e->win_w,
+                              e->line_height);
+                }
             }
-        }
 
-        /* capas del área de edición, de atrás hacia delante */
-        render_selection(e, left_offset, text_top,
-                         visible_lines); /* fondo selección */
-        render_text_area(e, left_offset, text_top, visible_lines,
-                         dl); /* texto resaltado */
-        render_gutter(e, left_offset, text_top, text_height, visible_lines,
-                      dl); /* numeros de linea */
-        render_cursor(e, left_offset, text_top,
-                      visible_lines); /* barra del cursor */
+            /* capas del área de edición, de atrás hacia delante */
+            render_selection(e, left_offset, text_top,
+                             visible_lines); /* fondo selección */
+            render_text_area(e, left_offset, text_top, visible_lines,
+                             dl); /* texto resaltado */
+            render_gutter(e, left_offset, text_top, text_height, visible_lines,
+                          dl); /* numeros de linea */
+            render_cursor(e, left_offset, text_top,
+                          visible_lines); /* barra del cursor */
+        }
 
         /* si se dibujo el dock con la pestana de su hoja (foco en flotante),
          * rebindar la pestana enfocada para que el status bar la refleje. */
-        if (!focus_in_dock) {
+        if (!focus_in_dock && dock_has_tab) {
             editor_render_bind_tab(e, e->group_active_tab[e->active_group]);
             update_lexer_cache(e);
         }

@@ -679,6 +679,23 @@ static int editor_group_first_tab(Editor *e, int group) {
     return -1;
 }
 
+/* Indice valido de la pestana activa de @p g (o -1 si vacio).  Transcribe la
+ * logica pura de tab_membership.c sobre e->tabs[].group para no copiar todo el
+ * array de grupos a cada consulta del render.  Ver tab_membership.h. */
+int editor_group_valid_active_tab(Editor *e, int g) {
+    int saved = e->group_active_tab[g];
+    if (saved >= 0 && saved < e->tab_count && e->tabs[saved].group == g)
+        return saved; /* el guardado sigue vivo y pertenece al grupo */
+    return editor_group_first_tab(e, g); /* si no, la primera del grupo, o -1 */
+}
+
+/* Restaura la invariante de @p g: deja group_active_tab[g] apuntando a una
+ * pestana del grupo, o a -1 si quedo vacio.  Se llama tras cada mutacion de
+ * membresia (detach a flotante, drop entre hojas, cierre). */
+static void editor_group_repair_active(Editor *e, int g) {
+    e->group_active_tab[g] = editor_group_valid_active_tab(e, g);
+}
+
 void editor_tab_drop(Editor *e, int tab, int target_group, int zone) {
     if (e->tab_count == 0) return;
     if (tab < 0 || tab >= e->tab_count) return;
@@ -739,15 +756,11 @@ void editor_tab_drop(Editor *e, int tab, int target_group, int zone) {
         target_group = new_group; /* enfocar la hoja nueva con la pestana movida */
     }
 
-    /* reparar pestana activa de la hoja origen si sigue viva y perdio la suya */
+    /* reparar pestana activa de la hoja origen si sigue viva (invariante: queda
+     * apuntando a una pestana suya, o a -1 si se quedo sin pestanas). */
     int sleaf = dock_leaf_by_group(&e->dock, src_group);
-    if (sleaf != DOCK_NONE) {
-        int sa = e->group_active_tab[src_group];
-        if (sa < 0 || sa >= e->tab_count || e->tabs[sa].group != src_group) {
-            int first = editor_group_first_tab(e, src_group);
-            if (first >= 0) e->group_active_tab[src_group] = first;
-        }
-    }
+    if (sleaf != DOCK_NONE)
+        editor_group_repair_active(e, src_group);
 
     /* enfocar la hoja destino con la pestana recien movida como activa */
     int focus_group = target_group;
@@ -900,15 +913,15 @@ void editor_float_detach_tab(Editor *e, int tab, int cx, int cy) {
         }
     }
 
-    /* reparar la pestana activa de la hoja/flotante origen si perdio la suya */
+    /* Restaurar la invariante en la hoja/flotante origen.  CRITICO: si el origen
+     * era la hoja raiz del dock (que NO colapsa) y perdio su UNICA pestana, su
+     * group_active_tab seguia apuntando a la pestana ya movida al flotante; sin
+     * fijarlo a -1 el dock dibujaria el buffer del flotante (bug del buffer
+     * compartido).  editor_group_repair_active lo deja en -1 cuando el grupo
+     * queda vacio. */
     if (dock_leaf_by_group(&e->dock, src_group) != DOCK_NONE ||
-        editor_float_by_group(e, src_group) >= 0) {
-        int sa = e->group_active_tab[src_group];
-        if (sa < 0 || sa >= e->tab_count || e->tabs[sa].group != src_group) {
-            int first = editor_group_first_tab(e, src_group);
-            if (first >= 0) e->group_active_tab[src_group] = first;
-        }
-    }
+        editor_float_by_group(e, src_group) >= 0)
+        editor_group_repair_active(e, src_group);
 
     /* enfocar el flotante recien creado (queda al frente) */
     int fi = editor_float_by_group(e, new_group);

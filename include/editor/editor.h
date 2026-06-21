@@ -436,6 +436,13 @@ DockRect editor_dock_area(Editor *e);
  * con foco. No usar para cambiar el foco real (eso es editor_focus_group). */
 void editor_render_bind_tab(Editor *e, int idx);
 
+/* Indice GLOBAL valido de la pestana activa del grupo @p g, o -1 si el grupo
+ * esta vacio.  Devuelve el indice registrado solo si esa pestana sigue viva y
+ * pertenece a @p g; en otro caso la primera del grupo, o -1.  El render lo usa
+ * como guarda para no dibujar el buffer de un grupo ajeno (ver
+ * editor/tab_membership.h).  No muta el editor. */
+int editor_group_valid_active_tab(Editor *e, int g);
+
 /* -- Paneles flotantes (ver dock/float.h) --------------------------------- */
 /* Limites validos (px) en los que un flotante puede moverse/redimensionarse:
  * toda la ventana bajo la navbar (para que la barra de titulo no tape la navbar)
