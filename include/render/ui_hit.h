@@ -68,6 +68,9 @@ typedef enum {
     UI_BOTTOM_TOGGLE,   /**< Botón abrir/cerrar el panel inferior.       */
     UI_BOTTOM_PANEL,    /**< Marco del panel inferior (consume clics + foco). */
     UI_BOTTOM_BODY,     /**< Area de texto del canal activo (rueda + sel). */
+    /* División del editor (split panes) */
+    UI_SPLIT_V,         /**< Botón dividir el editor en vertical (lado a lado). */
+    UI_SPLIT_H,         /**< Botón dividir el editor en horizontal (arriba/abajo). */
     UI_ID_COUNT
 } UiId;
 

@@ -574,7 +574,15 @@ void editor_focus_group(Editor *e, int g) {
 }
 
 void editor_split_dir(Editor *e, DockOrient orient) {
-    if (e->tab_count == 0) return;   /* sin nada que dividir */
+    if (e->tab_count == 0) {
+        /* sin nada que dividir: avisar en la barra de estado en vez de no hacer
+         * nada en silencio (en la pantalla de bienvenida el usuario no sabria
+         * por que el atajo o el boton no responden). */
+        snprintf(e->ext_status, sizeof(e->ext_status),
+                 "Abre o crea un archivo (Ctrl+N) para dividir el editor");
+        e->needs_redraw = 1;
+        return;
+    }
     if (e->dock.leaf_count >= DOCK_MAX_LEAVES) return; /* tope de hojas */
 
     int src_group = e->active_group;                     /* grupo enfocado */

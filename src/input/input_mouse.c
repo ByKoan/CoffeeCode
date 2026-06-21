@@ -1029,6 +1029,18 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* Botones de division del editor (split panes) de la navbar. */
+    if (ui_hit(&e->ui, UI_SPLIT_V, mx, my)) {
+        editor_split_dir(e, DOCK_VERTICAL);
+        e->needs_redraw = 1;
+        return;
+    }
+    if (ui_hit(&e->ui, UI_SPLIT_H, mx, my)) {
+        editor_split_dir(e, DOCK_HORIZONTAL);
+        e->needs_redraw = 1;
+        return;
+    }
+
     /* Clic dentro del panel inferior: foco + pestanas + seleccion. */
     if (e->bottom_panel_open && handle_bottom_panel_click(e, mx, my)) return;
 
