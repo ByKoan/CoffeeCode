@@ -281,7 +281,11 @@ static void set_divider_cursor(int which, int dock_orient) {
  * @param my Y del raton en pixeles.
  */
 static void update_divider_hover(Editor *e, int mx, int my) {
-    int hit = layout_hit_divider(e, mx, my);
+    /* Los flotantes van ENCIMA del dock: si el cursor esta sobre uno, no es un
+     * divisor (p.ej. su esquina de resize solapa la zona del divisor inferior). */
+    int hit = (e->float_count > 0 && float_at_point(e, mx, my) >= 0)
+                  ? DIVIDER_NONE
+                  : layout_hit_divider(e, mx, my);
     if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
         e->hovered_divider = hit;
         set_divider_cursor(hit, e->dock_drag_orient);
@@ -298,6 +302,10 @@ static void update_divider_hover(Editor *e, int mx, int my) {
  * @return 1 si empezo a arrastrar un divisor (clic consumido), 0 si no.
  */
 static int try_start_divider_drag(Editor *e, int mx, int my) {
+    /* Un flotante (encima del dock) tiene prioridad sobre cualquier divisor: si
+     * el cursor esta sobre uno, no arrancar un arrastre de divisor (asi su
+     * esquina de resize no se la roba el divisor del panel inferior). */
+    if (e->float_count > 0 && float_at_point(e, mx, my) >= 0) return 0;
     int hit = layout_hit_divider(e, mx, my);
     if (hit == DIVIDER_NONE) return 0;
     e->dragging_divider = hit; /* entrar en modo arrastre */
@@ -729,8 +737,9 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param my Coordenada Y del clic en píxeles.
  */
 static int click_tabbar(Editor *e, int mx, int my) {
-    /* Botón "+" del editor dividido (por hoja): crea una pestaña en esa hoja. */
-    if (e->dock.leaf_count > 1) {
+    /* Botón "+" por grupo (hojas del editor dividido Y paneles flotantes): cada
+     * uno registra su "+" con UI_LIST_SPLIT_NEW indexado por group_id. */
+    if (e->dock.leaf_count > 1 || e->float_count > 0) {
         int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
         if (gnew >= 0) {
             editor_focus_group(e, gnew); /* enfocar ese grupo */
