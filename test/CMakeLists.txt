@@ -141,11 +141,29 @@ add_coffee_test(test_panel panel/test_panel.c
 # Smoke test HEADLESS del cargador de extensiones: carga la DLL hello-c,
 # dispara su comando, manipula el buffer y verifica la descarga limpia.
 if(COFFEE_BUILD_EXTENSIONS)
+    # El extension host (ext_host.c) ahora delega el facility de subprocesos en
+    # ext_proc.c, que usa SDL para hilos/mutex/eventos.  Por eso TODO test que
+    # enlace ext_host.c arrastra ext_proc.c + SDL.  Helper para no repetirlo.
+    function(coffee_link_ext_host name)
+        target_sources(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/ext/ext_proc.c")
+        if(TARGET SDL3::SDL3-static)
+            target_link_libraries(${name} PRIVATE SDL3::SDL3-static)
+        endif()
+        if(WIN32)
+            target_link_libraries(${name} PRIVATE winmm imm32 version setupapi
+                                                  ole32 uuid shell32)
+        endif()
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(${name} PRIVATE m dl pthread)
+        endif()
+    endfunction()
+
     add_coffee_test(test_ext_host ext/test_ext_host.c
         "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
         "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
         "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
         "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+    coffee_link_ext_host(test_ext_host)
     # Ruta del directorio de la extension (manifiesto generado + DLL) inyectada
     # en compile.  Apunta al BUILD dir: ahi viven el coffee-extension.toml
     # generado por configure_file y la DLL coffee_hello, no en el arbol fuente
@@ -168,13 +186,30 @@ if(COFFEE_BUILD_EXTENSIONS)
         "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
         "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
         "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+    coffee_link_ext_host(test_ext_errors)
     target_compile_definitions(test_ext_errors PRIVATE
         "COFFEE_ERR_TMP_DIR=\"${CMAKE_BINARY_DIR}/test_ext_errors_tmp\"")
-    if(UNIX AND NOT APPLE)
-        target_link_libraries(test_ext_errors PRIVATE dl)
-    endif()
     # Asegurar que el dir temporal de fixtures existe antes de ejecutar.
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test_ext_errors_tmp")
+
+    # --- facility de subprocesos asincronos (ext_proc + SDL para hilos) ------
+    # Smoke test HEADLESS del facility: lanza un proceso conocido, drena la cola
+    # con ext_proc_pump y verifica los callbacks de datos/fin + kill sin colgar.
+    # Usa SDL para hilos/mutex/eventos (sin video), asi que solo se construye si
+    # el target SDL3 esta disponible (lo trae COFFEE_BUILD_APP).
+    if(TARGET SDL3::SDL3-static)
+        add_coffee_test(test_ext_proc ext/test_ext_proc.c
+            "${CMAKE_SOURCE_DIR}/src/ext/ext_proc.c")
+        target_link_libraries(test_ext_proc PRIVATE SDL3::SDL3-static)
+        if(WIN32)
+            target_link_libraries(test_ext_proc PRIVATE winmm imm32 version
+                                                        setupapi ole32 uuid
+                                                        shell32)
+        endif()
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(test_ext_proc PRIVATE m dl pthread)
+        endif()
+    endif()
 
     # --- extension vesta (IDE -> libvesta -> VM de Vex) --------------------
     # Solo si la extension vesta se construyo (libvesta presente).  El test
@@ -186,11 +221,9 @@ if(COFFEE_BUILD_EXTENSIONS)
             "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
             "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
             "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+        coffee_link_ext_host(test_ext_vesta)
         target_compile_definitions(test_ext_vesta PRIVATE
             "COFFEE_VESTA_EXT_DIR=\"${CMAKE_BINARY_DIR}/extensions/vesta\"")
-        if(UNIX AND NOT APPLE)
-            target_link_libraries(test_ext_vesta PRIVATE dl)
-        endif()
         add_dependencies(test_ext_vesta coffee_vesta)
         # Las DLLs de runtime (libvesta + OpenSSL) deben estar junto al
         # ejecutable del test para que el cargador de Windows las resuelva al

@@ -23,8 +23,14 @@ extern "C" {
  *  v2: anyadidos register_output_channel / channel_append / channel_clear al
  *      final del CoffeeApi (canales del panel inferior).  Como solo se anyaden
  *      punteros AL FINAL del struct, las extensiones v1 siguen cargando: el IDE
- *      acepta cualquier extension con abi <= COFFEE_ABI_VERSION. */
-#define COFFEE_ABI_VERSION 2u
+ *      acepta cualquier extension con abi <= COFFEE_ABI_VERSION.
+ *
+ *  v3: anyadido el facility de subprocesos asincronos (proc_spawn / proc_write /
+ *      proc_on_data / proc_on_exit / proc_kill) y el tick por frame
+ *      (register_tick), todo AL FINAL del struct.  El core gestiona los hilos:
+ *      la extension solo recibe los datos/salida del hijo en el hilo principal.
+ *      Las extensiones v1/v2 siguen cargando (solo no ven estas funciones). */
+#define COFFEE_ABI_VERSION 3u
 
 /** Handle opaco del IDE.  Las extensiones lo reciben y lo pasan de vuelta a
  *  cada funcion del CoffeeApi.  Su layout es privado al IDE (ABI estable). */
@@ -98,6 +104,23 @@ typedef void (*CoffeeCommandFn)(CoffeeHost *host, void *userdata);
 /** Callback de un evento suscrito.  @p data depende del CoffeeEventType. */
 typedef void (*CoffeeEventFn)(CoffeeHost *host, CoffeeEventType ev,
                               const void *data, void *userdata);
+
+/* ====================  SUBPROCESOS ASINCRONOS (ABI v3)  ==================== */
+/* El core lanza procesos hijos (p.ej. un servidor LSP) con stdin/stdout por
+ * pipes y los lee en hilos propios.  La extension NO maneja hilos: recibe los
+ * datos del hijo y su salida SIEMPRE en el hilo principal, via callbacks. */
+
+/** Handle opaco de un proceso hijo lanzado por el core. */
+typedef struct CoffeeProcImpl *CoffeeProc;
+
+/** Callback (hilo principal) con un chunk de stdout del hijo. */
+typedef void (*CoffeeProcDataFn)(void *userdata, const char *bytes, size_t len);
+
+/** Callback (hilo principal) cuando el hijo termina, con su codigo de salida. */
+typedef void (*CoffeeProcExitFn)(void *userdata, int exit_code);
+
+/** Callback periodico (hilo principal), invocado una vez por frame. */
+typedef void (*CoffeeTickFn)(void *userdata);
 
 /**
  * @brief API que el IDE expone a las extensiones.
@@ -235,6 +258,31 @@ typedef struct CoffeeApi {
     void (*channel_append)(CoffeeHost *h, const char *id, const char *text);
     /** Vacia el scrollback del canal @p id. */
     void (*channel_clear)(CoffeeHost *h, const char *id);
+
+    /* ---- Subprocesos asincronos + tick por frame (ABI v3) ----
+     * NOTA ABI: punteros anyadidos AL FINAL del struct; las extensiones v1/v2
+     * compiladas contra el layout anterior siguen siendo compatibles.  El core
+     * crea/gestiona los hilos; los callbacks corren en el HILO PRINCIPAL. */
+
+    /** Lanza @p exe con @p argc argumentos (@p argv, sin contar argv[0], que el
+     *  core fija al propio @p exe).  stdin/stdout del hijo quedan redirigidos por
+     *  pipes.  Devuelve el handle del proceso, o NULL si fallo. */
+    CoffeeProc (*proc_spawn)(CoffeeHost *h, const char *exe,
+                             const char *const *argv, int argc);
+    /** Escribe @p len bytes a stdin del hijo.  Devuelve bytes escritos o -1. */
+    int (*proc_write)(CoffeeHost *h, CoffeeProc p, const void *bytes, size_t len);
+    /** Registra el callback de datos de stdout (invocado en el hilo principal). */
+    void (*proc_on_data)(CoffeeHost *h, CoffeeProc p, CoffeeProcDataFn cb,
+                         void *userdata);
+    /** Registra el callback de fin del hijo (invocado en el hilo principal). */
+    void (*proc_on_exit)(CoffeeHost *h, CoffeeProc p, CoffeeProcExitFn cb,
+                         void *userdata);
+    /** Termina el hijo y libera sus recursos (hilo lector, pipes, handle). */
+    void (*proc_kill)(CoffeeHost *h, CoffeeProc p);
+
+    /** Registra un callback periodico llamado UNA vez por frame (hilo
+     *  principal), para trabajo periodico de la extension.  Soporta varios. */
+    void (*register_tick)(CoffeeHost *h, CoffeeTickFn cb, void *userdata);
 } CoffeeApi;
 
 /**

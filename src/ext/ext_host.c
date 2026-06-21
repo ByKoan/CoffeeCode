@@ -17,6 +17,8 @@
  */
 #include "ext/ext_host.h"
 
+#include "ext/ext_proc.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -584,6 +586,40 @@ static int api_register_native_fn(CoffeeHost *h, const char *lib,
     return -1;
 }
 
+/* ---- Subprocesos asincronos + tick por frame (ABI v3) ----
+ * El facility de procesos es global al proceso (ext_proc.c), asi que estos
+ * wrappers ignoran el host y delegan.  El core gestiona los hilos; los
+ * callbacks de la extension corren en el hilo principal via ext_proc_pump. */
+
+static CoffeeProc api_proc_spawn(CoffeeHost *h, const char *exe,
+                                 const char *const *argv, int argc) {
+    (void)h;
+    return ext_proc_spawn(exe, argv, argc);
+}
+static int api_proc_write(CoffeeHost *h, CoffeeProc p, const void *bytes,
+                          size_t len) {
+    (void)h;
+    return ext_proc_write(p, bytes, len);
+}
+static void api_proc_on_data(CoffeeHost *h, CoffeeProc p, CoffeeProcDataFn cb,
+                             void *userdata) {
+    (void)h;
+    ext_proc_on_data(p, cb, userdata);
+}
+static void api_proc_on_exit(CoffeeHost *h, CoffeeProc p, CoffeeProcExitFn cb,
+                             void *userdata) {
+    (void)h;
+    ext_proc_on_exit(p, cb, userdata);
+}
+static void api_proc_kill(CoffeeHost *h, CoffeeProc p) {
+    (void)h;
+    ext_proc_kill(p);
+}
+static void api_register_tick(CoffeeHost *h, CoffeeTickFn cb, void *userdata) {
+    (void)h;
+    ext_proc_register_tick(cb, userdata);
+}
+
 /* -- Rellena la vtable del CoffeeApi con TODAS las funciones (sin NULLs) ----- */
 static void host_fill_api(CoffeeHost *h) {
     CoffeeApi *a = &h->api;
@@ -639,6 +675,13 @@ static void host_fill_api(CoffeeHost *h) {
     a->register_output_channel = api_register_output_channel;
     a->channel_append = api_channel_append;
     a->channel_clear = api_channel_clear;
+
+    a->proc_spawn = api_proc_spawn;
+    a->proc_write = api_proc_write;
+    a->proc_on_data = api_proc_on_data;
+    a->proc_on_exit = api_proc_on_exit;
+    a->proc_kill = api_proc_kill;
+    a->register_tick = api_register_tick;
 }
 
 /* ===========================================================================

@@ -15,6 +15,7 @@
 #include "app/app.h"
 #include "app/winhit.h"
 #include "ext/ext_host.h"
+#include "ext/ext_proc.h"
 #include "input/input.h"
 #include "render/render.h"
 #include "session/layout_persist.h"
@@ -388,17 +389,44 @@ void app_layout_restore(App *a) {
     a->prev_focused = 0;
 }
 
+/* 1 si @p ev es el evento de wakeup del facility de subprocesos: el hilo lector
+ * lo empuja para sacar al bucle de su espera ociosa cuando un hijo manda datos.
+ * No requiere mas tratamiento que drenar la cola (ext_proc_pump, mas abajo). */
+static int app_is_proc_wakeup(const SDL_Event *ev) {
+    unsigned int w = ext_proc_wakeup_event();
+    return w != 0 && ev->type == w;
+}
+
 void app_run(App *a) {
     if (!a || a->window_count < 1) return;
     g_app = a;
 
+    /* Facility de subprocesos asincronos: registra el evento de wakeup y prepara
+     * el estado global.  Las extensiones lo usan via el CoffeeApi; el bucle lo
+     * drena cada frame con ext_proc_pump. */
+    ext_proc_init();
+
     SDL_Event ev;
-    /* el bucle vive mientras la ventana principal este viva */
+    /* el bucle vive mientras la ventana principal este viva.  Espera ociosa
+     * eficiente: SDL_WaitEventTimeout duerme hasta ~16ms o hasta que llega un
+     * evento (incluido el wakeup del facility), bajando la CPU en reposo sin
+     * perder latencia de teclado/raton ni el parpadeo del cursor (que sigue en
+     * editor_frame_tasks). */
     while (a->windows[0] && a->windows[0]->running) {
         if (SDL_WaitEventTimeout(&ev, 16)) {
-            app_dispatch(a, &ev);
-            while (SDL_PollEvent(&ev)) app_dispatch(a, &ev);
+            if (!app_is_proc_wakeup(&ev)) app_dispatch(a, &ev);
+            while (SDL_PollEvent(&ev))
+                if (!app_is_proc_wakeup(&ev)) app_dispatch(a, &ev);
         }
+
+        /* Entregar datos/salida de los procesos hijos en el HILO PRINCIPAL e
+         * invocar sus ticks periodicos.  Si llego algo de un hijo, marcar la
+         * ventana enfocada para repintar (la extension pudo cambiar su estado). */
+        int proc_activity = ext_proc_pump();
+        ext_proc_run_ticks();
+        if (proc_activity > 0 && a->focused >= 0 &&
+            a->focused < a->window_count && a->windows[a->focused])
+            a->windows[a->focused]->needs_redraw = 1;
 
         /* tareas periodicas + render POR CADA ventana */
         for (int i = 0; i < a->window_count; i++) {
@@ -423,6 +451,9 @@ void app_run(App *a) {
      * mientras las secundarias aun existen.  Marca la principal para que su
      * editor_free no vuelva a guardar solo-principal por encima. */
     app_layout_save(a);
+
+    /* cerrar el facility: matar los hijos vivos + join de sus hilos lectores. */
+    ext_proc_shutdown();
 
     g_app = NULL;
 }
