@@ -602,8 +602,14 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
     /* Preferencias abiertas: la rueda sobre la lista de fuentes la desplaza
      * (ui_list recorta el scroll a un rango válido al dibujar). */
     if (e->settings_open) {
-        if (ui_hit(&e->ui, UI_PREF_FONT_LIST, cursor_x, cursor_y))
+        if (e->background_view_open) {
+            /* Sub-pantalla Fondos: la rueda sobre la rejilla desplaza la galeria
+             * (el render recorta el scroll a un rango valido al dibujar). */
+            if (ui_hit(&e->ui, UI_BG_GALLERY, cursor_x, cursor_y))
+                e->bg_gallery_scroll -= (int)ev->wheel.y;
+        } else if (ui_hit(&e->ui, UI_PREF_FONT_LIST, cursor_x, cursor_y)) {
             e->font_list_scroll -= (int)ev->wheel.y;
+        }
         e->needs_redraw = 1;
         return;
     }
@@ -1229,14 +1235,20 @@ static void SDLCALL bg_file_dialog_cb(void *userdata,
     (void)filter;
     Editor *e = (Editor *)userdata;
     if (!filelist || !filelist[0]) { e->needs_redraw = 1; return; }
-    const char *path = filelist[0];
-    if (editor_load_background(e, path)) {
-        strncpy(e->settings.background_path, path,
+    /* SDL admite multi-seleccion: agregar TODAS las elegidas a la galeria
+     * (dedup) y dejar la ultima como imagen activa. */
+    const char *last_ok = NULL;
+    for (const char *const *p = filelist; *p; p++) {
+        if (settings_gallery_add(&e->settings, *p) >= 0) last_ok = *p;
+    }
+    if (last_ok && editor_load_background(e, last_ok)) {
+        strncpy(e->settings.background_path, last_ok,
                 sizeof e->settings.background_path - 1);
         e->settings.background_path[sizeof e->settings.background_path - 1] = '\0';
         e->settings.background_mode = BG_MODE_IMAGE; /* elegir imagen activa el modo imagen */
-        settings_save(&e->settings);
     }
+    editor_bg_thumbs_invalidate(e); /* la galeria cambio: reconstruir miniaturas */
+    settings_save(&e->settings);
     e->needs_redraw = 1;
 }
 
@@ -1276,6 +1288,7 @@ static unsigned int bg_set_comp(unsigned int color, int shift, int comp) {
 static void handle_background_view_click(Editor *e, int mx, int my) {
     Settings *s = &e->settings;
     int paso_op = 15; /* paso de la opacidad */
+    int idx;          /* indice de celda/quitar de la galeria (-1 = ninguno) */
 
     if (ui_hit(&e->ui, UI_BG_BACK, mx, my)) {
         e->background_view_open = 0; /* volver a preferencias */
@@ -1289,12 +1302,44 @@ static void handle_background_view_click(Editor *e, int mx, int my) {
             editor_load_background(e, ""); /* libera la textura si la habia */
         settings_save(s);
     } else if (s->background_mode == BG_MODE_IMAGE &&
-               ui_hit(&e->ui, UI_BG_PICK, mx, my)) {
-        open_bg_file_dialog(e); /* el callback aplica + guarda */
+               ui_hit(&e->ui, UI_BG_ADD, mx, my)) {
+        open_bg_file_dialog(e); /* el callback agrega a la galeria + guarda */
     } else if (s->background_mode == BG_MODE_IMAGE &&
                ui_hit(&e->ui, UI_BG_SCALE, mx, my)) {
         s->background_scaling = (s->background_scaling + 1) % 5;
         settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               (idx = ui_hit_idx(&e->ui, UI_LIST_BG_THUMB_DEL, mx, my)) >= 0) {
+        /* quitar la imagen idx de la galeria.  Si era la activa, pasar a la
+         * siguiente disponible (o sin imagen si la galeria queda vacia). */
+        int was_active = (settings_gallery_index_of(s, s->background_path) == idx);
+        settings_gallery_remove(s, idx);
+        if (was_active) {
+            if (s->background_gallery_count > 0) {
+                int ni = idx < s->background_gallery_count
+                             ? idx
+                             : s->background_gallery_count - 1;
+                strncpy(s->background_path, s->background_gallery[ni],
+                        sizeof s->background_path - 1);
+                s->background_path[sizeof s->background_path - 1] = '\0';
+                editor_load_background(e, s->background_path);
+            } else {
+                s->background_path[0] = '\0';
+                editor_load_background(e, ""); /* sin imagen */
+            }
+        }
+        editor_bg_thumbs_invalidate(e); /* la galeria cambio */
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               (idx = ui_hit_idx(&e->ui, UI_LIST_BG_THUMB, mx, my)) >= 0) {
+        /* seleccionar la imagen idx como fondo activo (aplica en vivo). */
+        if (idx < s->background_gallery_count) {
+            strncpy(s->background_path, s->background_gallery[idx],
+                    sizeof s->background_path - 1);
+            s->background_path[sizeof s->background_path - 1] = '\0';
+            editor_load_background(e, s->background_path);
+            settings_save(s);
+        }
     } else if (s->background_mode == BG_MODE_COLOR &&
                ui_hit(&e->ui, UI_BG_R_DEC, mx, my)) {
         s->background_color = bg_set_comp(
@@ -1352,6 +1397,8 @@ static void handle_settings_click(Editor *e, int mx, int my) {
 
         /* Sin fondo personalizado por defecto: limpiar la textura si había */
         editor_load_background(e, "");
+        editor_bg_thumbs_invalidate(e); /* la galeria queda vacia: reconstruir */
+        e->bg_gallery_scroll = 0;
 
         e->font_list_scroll = 0; /* "Predeterminada" vuelve a ser la fila 0 */
         settings_save(s);
@@ -1390,6 +1437,8 @@ static void handle_settings_click(Editor *e, int mx, int my) {
     } else if (ui_hit(&e->ui, UI_PREF_BG, mx, my)) {
         /* Abrir la sub-pantalla "Fondos" con todos los controles del fondo. */
         e->background_view_open = 1;
+        editor_bg_thumbs_invalidate(e); /* reconstruir miniaturas al entrar */
+        e->bg_gallery_scroll = 0;
     } else {
         /* Lista de fuentes: un clic sobre una fila la selecciona. La fila 0 es
          * "Predeterminada" (vuelve a la fuente por defecto). */

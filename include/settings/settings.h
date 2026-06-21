@@ -38,6 +38,9 @@ typedef enum {
 /** Opacidad por defecto del fondo (0..255); coincide con el valor historico. */
 #define SETTINGS_BG_OPACITY_DEFAULT 180
 
+/** Tope de imagenes guardadas en la galeria de fondos. */
+#define BG_GALLERY_MAX 32
+
 /** Preferencias del editor. */
 typedef struct {
     int theme;     /**< Índice del preset de tema (0 = oscuro).        */
@@ -54,7 +57,32 @@ typedef struct {
     unsigned int background_color; /**< Color solido 0xRRGGBB (modo color).  */
     int background_opacity; /**< Opacidad del fondo [0..255].                */
     int background_scaling; /**< Encaje de la imagen (::BgScale).            */
+    /** Galeria de imagenes de fondo: rutas que el usuario va acumulando para
+     *  elegir entre ellas en la sub-pantalla "Fondos". */
+    char background_gallery[BG_GALLERY_MAX][512];
+    int background_gallery_count; /**< Numero de rutas validas en la galeria. */
 } Settings;
+
+/**
+ * @brief Anyade @p path a la galeria de fondos si no esta ya (dedup) y hay sitio.
+ *
+ * Ignora rutas nulas o vacias.  No persiste (el llamante decide cuando guardar).
+ *
+ * @return Indice de la entrada (nueva o existente), o -1 si no se pudo anyadir
+ *         (ruta invalida o galeria llena).
+ */
+int settings_gallery_add(Settings *s, const char *path);
+
+/**
+ * @brief Quita la entrada @p index de la galeria, compactando el resto.
+ *        No hace nada si @p index esta fuera de rango.
+ */
+void settings_gallery_remove(Settings *s, int index);
+
+/**
+ * @brief Indice de @p path en la galeria, o -1 si no esta (o es vacio).
+ */
+int settings_gallery_index_of(const Settings *s, const char *path);
 
 /** Rellena @p s con los valores por defecto. */
 void settings_defaults(Settings *s);

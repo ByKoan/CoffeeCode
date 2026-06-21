@@ -404,6 +404,16 @@ int editor_init(Editor *e, const char *filepath) {
     e->background_w = 0;
     e->background_h = 0;
     e->background_view_open = 0;
+    /* cache de miniaturas de la galeria: vacia e invalidada (se construye al
+     * entrar a la sub-pantalla Fondos en modo Imagen). */
+    for (int i = 0; i < BG_GALLERY_MAX; i++) {
+        e->bg_thumb[i] = NULL;
+        e->bg_thumb_w[i] = 0;
+        e->bg_thumb_h[i] = 0;
+    }
+    e->bg_thumb_count = 0;
+    e->bg_thumb_valid = 0;
+    e->bg_gallery_scroll = 0;
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -717,6 +727,7 @@ void editor_free(Editor *e) {
     fonts_free(&e->fonts);               /* lista de fuentes del sistema */
     if (e->background_texture)
         SDL_DestroyTexture(e->background_texture); /* liberar textura de fondo */
+    editor_bg_thumbs_free(e); /* liberar miniaturas de la galeria de fondos */
     if (e->font) TTF_CloseFont(e->font); /* liberar la fuente abierta */
     if (e->renderer)
         SDL_StopTextInput(e->window); /* desactivar eventos de texto */
@@ -868,4 +879,45 @@ int editor_load_background(Editor *e, const char *path) {
     fprintf(stdout, "[CoffeeCode] Fondo cargado: %s (%dx%d)\n",
             path, e->background_w, e->background_h);
     return 1;
+}
+
+/* -- Cache de miniaturas de la galeria de fondos --------------------------- */
+
+void editor_bg_thumbs_free(Editor *e) {
+    for (int i = 0; i < e->bg_thumb_count; i++) {
+        if (e->bg_thumb[i]) SDL_DestroyTexture(e->bg_thumb[i]);
+        e->bg_thumb[i] = NULL;
+        e->bg_thumb_w[i] = 0;
+        e->bg_thumb_h[i] = 0;
+    }
+    e->bg_thumb_count = 0;
+    e->bg_thumb_valid = 0; /* tras liberar, la cache esta vacia y desactualizada */
+}
+
+void editor_bg_thumbs_invalidate(Editor *e) { e->bg_thumb_valid = 0; }
+
+void editor_bg_thumbs_build(Editor *e) {
+    if (e->bg_thumb_valid) return; /* ya esta al dia: nada que hacer */
+    editor_bg_thumbs_free(e);      /* descartar lo previo antes de reconstruir */
+
+    int n = e->settings.background_gallery_count;
+    if (n > BG_GALLERY_MAX) n = BG_GALLERY_MAX;
+    for (int i = 0; i < n; i++) {
+        const char *path = e->settings.background_gallery[i];
+        e->bg_thumb[i] = NULL;
+        e->bg_thumb_w[i] = 0;
+        e->bg_thumb_h[i] = 0;
+        if (!path[0]) continue;
+        /* Cargar la imagen a una superficie (CPU) y subirla como textura.  Si
+         * falla (ruta borrada / formato roto), la entrada queda NULL y el render
+         * dibuja un placeholder: nunca se cae por una imagen invalida. */
+        SDL_Surface *surf = IMG_Load(path);
+        if (!surf) continue;
+        e->bg_thumb[i] = SDL_CreateTextureFromSurface(e->renderer, surf);
+        e->bg_thumb_w[i] = surf->w;
+        e->bg_thumb_h[i] = surf->h;
+        SDL_DestroySurface(surf);
+    }
+    e->bg_thumb_count = n;
+    e->bg_thumb_valid = 1;
 }

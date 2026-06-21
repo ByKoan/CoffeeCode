@@ -247,6 +247,165 @@ void render_settings_view(Editor *e) {
             row_h, &e->font_list_scroll, sel, font_row, NULL);
 }
 
+/* -- Galeria de miniaturas de fondos --------------------------------------- */
+
+/* Geometria de la rejilla (px). */
+#define BG_GAL_COLS 4       /* columnas de la cuadricula                  */
+#define BG_GAL_CELL_H 72    /* alto de cada celda                         */
+#define BG_GAL_GAP 8        /* separacion entre celdas                    */
+#define BG_GAL_ROWS_VIS 3   /* filas visibles antes de necesitar scroll   */
+#define BG_GAL_DEL 16       /* lado del boton "x" de quitar en cada celda  */
+
+/**
+ * @brief Dibuja una miniatura (cover) dentro de @p cell, recortada a la celda.
+ *
+ * Escala la imagen para CUBRIR la celda conservando proporcion y recorta el
+ * sobrante con un clip rectangular (igual criterio que BG_SCALE_FILL).
+ */
+static void bg_thumb_draw(SDL_Renderer *r, SDL_Texture *tex, int tw, int th,
+                          Rect cell) {
+    if (!tex || tw <= 0 || th <= 0) return;
+    float AW = (float)cell.w, AH = (float)cell.h;
+    float fw = (float)tw, fh = (float)th;
+    float sc = AW / fw;
+    if (fh * sc < AH) sc = AH / fh; /* el lado mayor manda (cover) */
+    float w = fw * sc, h = fh * sc;
+    SDL_FRect dst = {cell.x + (AW - w) / 2.0f, cell.y + (AH - h) / 2.0f, w, h};
+    SDL_Rect clip = {cell.x, cell.y, cell.w, cell.h};
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+    SDL_SetRenderClipRect(r, &clip);
+    SDL_RenderTexture(r, tex, NULL, &dst);
+    SDL_SetRenderClipRect(r, NULL);
+}
+
+/**
+ * @brief Dibuja la galeria de fondos (rejilla de miniaturas + "Anyadir").
+ *
+ * Construye la cache de miniaturas si hace falta, pinta el boton de anyadir,
+ * y una cuadricula con scroll donde cada celda muestra una imagen de
+ * @c settings.background_gallery (recortada estilo cover).  Resalta la celda de
+ * la imagen ACTIVA, dibuja un placeholder para las que no cargaron y registra
+ * en e->ui cada celda (UI_LIST_BG_THUMB) y su boton de quitar
+ * (UI_LIST_BG_THUMB_DEL), mas el area de la rejilla (UI_BG_GALLERY) para la
+ * rueda del raton.
+ *
+ * @return La Y (px) justo debajo de la galeria, para seguir colocando filas.
+ */
+static int render_bg_gallery(Editor *e, int x, int y, int col_w) {
+    SDL_Renderer *r = e->renderer;
+    Settings *s = &e->settings;
+
+    editor_bg_thumbs_build(e); /* perezoso: solo trabaja si esta invalidada */
+
+    /* Boton "Anyadir imagen...", a la izquierda de la fila. */
+    Rect add = {x, y, 180, PREF_ROW_H - 8};
+    ui_button(e, UI_BG_ADD, add, "Anyadir imagen...", &e->theme.style_button,
+              UI_NORMAL);
+    /* contador de imagenes, a la derecha */
+    {
+        char info[48];
+        snprintf(info, sizeof info, "%d imagen(es)", s->background_gallery_count);
+        draw_text_c(e, info, x + col_w - 120, row_text_y(e, y, PREF_ROW_H - 8),
+                    e->theme.col_ftree_file);
+    }
+    y += PREF_ROW_H;
+
+    int n = s->background_gallery_count;
+    int cell_w = (col_w - (BG_GAL_COLS - 1) * BG_GAL_GAP) / BG_GAL_COLS;
+    if (cell_w < 1) cell_w = 1;
+    int rows = (n + BG_GAL_COLS - 1) / BG_GAL_COLS;
+    if (rows < 1) rows = 1; /* reservar siempre algo de alto, aunque vacia */
+    int vis_rows = rows < BG_GAL_ROWS_VIS ? rows : BG_GAL_ROWS_VIS;
+    int grid_h = vis_rows * BG_GAL_CELL_H + (vis_rows - 1) * BG_GAL_GAP;
+
+    Rect grid = {x, y, col_w, grid_h};
+    /* registrar el area para la rueda del raton (scroll de la galeria) */
+    ui_put(&e->ui, UI_BG_GALLERY, grid);
+    /* fondo del area de la rejilla */
+    set_color_c(r, e->theme.col_sb_track);
+    fill_rect(r, grid.x, grid.y, grid.w, grid.h);
+
+    /* acotar el scroll al rango valido (en filas) */
+    int max_scroll = rows - vis_rows;
+    if (max_scroll < 0) max_scroll = 0;
+    if (e->bg_gallery_scroll < 0) e->bg_gallery_scroll = 0;
+    if (e->bg_gallery_scroll > max_scroll) e->bg_gallery_scroll = max_scroll;
+
+    if (n == 0) {
+        /* galeria vacia: mensaje guia centrado en el area */
+        const char *msg = "Sin imagenes. Pulsa \"Anyadir imagen...\".";
+        int mw = 0, mh = 0;
+        TTF_GetStringSize(e->font, msg, 0, &mw, &mh);
+        draw_text_c(e, msg, grid.x + (grid.w - mw) / 2,
+                    grid.y + (grid.h - e->font_size) / 2,
+                    e->theme.col_ftree_file);
+        return y + grid_h + 12;
+    }
+
+    /* recortar el dibujo de las celdas al area de la rejilla */
+    SDL_Rect clip = {grid.x, grid.y, grid.w, grid.h};
+    SDL_SetRenderClipRect(r, &clip);
+
+    int active = settings_gallery_index_of(s, s->background_path);
+    int first = e->bg_gallery_scroll * BG_GAL_COLS;
+    for (int i = first; i < n; i++) {
+        int rel = i - first;
+        int rrow = rel / BG_GAL_COLS;
+        int ccol = rel % BG_GAL_COLS;
+        if (rrow >= vis_rows) break; /* fuera del area visible */
+        Rect cell = {grid.x + ccol * (cell_w + BG_GAL_GAP),
+                     grid.y + rrow * (BG_GAL_CELL_H + BG_GAL_GAP), cell_w,
+                     BG_GAL_CELL_H};
+        /* registrar la celda y su boton de quitar para el hit-test del input */
+        ui_put_idx(&e->ui, UI_LIST_BG_THUMB, i, cell);
+
+        /* miniatura o placeholder */
+        if (i < e->bg_thumb_count && e->bg_thumb[i]) {
+            bg_thumb_draw(r, e->bg_thumb[i], e->bg_thumb_w[i], e->bg_thumb_h[i],
+                          cell);
+        } else {
+            /* placeholder: recuadro con una marca (imagen no disponible) */
+            set_color_c(r, e->theme.col_bg);
+            fill_rect(r, cell.x, cell.y, cell.w, cell.h);
+            const char *ph = "?";
+            int pw = 0, phh = 0;
+            TTF_GetStringSize(e->font, ph, 0, &pw, &phh);
+            draw_text_c(e, ph, cell.x + (cell.w - pw) / 2,
+                        cell.y + (cell.h - e->font_size) / 2,
+                        e->theme.col_status_sep);
+        }
+
+        /* borde: acento grueso si es la imagen activa, fino si no */
+        if (i == active) {
+            set_color_c(r, e->theme.style_primary.bg);
+            stroke_rect(r, cell.x, cell.y, cell.w, cell.h);
+            stroke_rect(r, cell.x + 1, cell.y + 1, cell.w - 2, cell.h - 2);
+        } else {
+            set_color_c(r, e->theme.col_status_sep);
+            stroke_rect(r, cell.x, cell.y, cell.w, cell.h);
+        }
+
+        /* boton "x" para quitar, en la esquina superior derecha de la celda */
+        Rect del = {cell.x + cell.w - BG_GAL_DEL - 2, cell.y + 2, BG_GAL_DEL,
+                    BG_GAL_DEL};
+        ui_put_idx(&e->ui, UI_LIST_BG_THUMB_DEL, i, del);
+        set_color_c(r, e->theme.col_navbar_bg);
+        fill_rect(r, del.x, del.y, del.w, del.h);
+        set_color_c(r, e->theme.col_status_sep);
+        stroke_rect(r, del.x, del.y, del.w, del.h);
+        {
+            int cw = 0, chh = 0;
+            TTF_GetStringSize(e->font, "x", 0, &cw, &chh);
+            draw_text_c(e, "x", del.x + (del.w - cw) / 2,
+                        del.y + (del.h - e->font_size) / 2 + 1,
+                        e->theme.tokens[TOK_DEFAULT]);
+        }
+    }
+    SDL_SetRenderClipRect(r, NULL);
+
+    return y + grid_h + 12;
+}
+
 /* -- Sub-pantalla "Fondos" ------------------------------------------------- */
 
 void render_background_view(Editor *e) {
@@ -279,22 +438,12 @@ void render_background_view(Editor *e) {
 
     /* Controles condicionales segun el modo activo. */
     if (s->background_mode == BG_MODE_IMAGE) {
-        /* Boton para elegir imagen: muestra el nombre del archivo actual. */
-        const char *bg_label = "Seleccionar imagen...";
-        char bg_name[64] = {0};
-        if (s->background_path[0]) {
-            const char *p = s->background_path;
-            const char *last = p;
-            for (; *p; p++)
-                if (*p == '/' || *p == '\\') last = p + 1;
-            snprintf(bg_name, sizeof bg_name, "%s", last);
-            bg_label = bg_name;
-        }
-        pref_choice(e, UI_BG_PICK, x, y, col_w, "Imagen", bg_label);
-        y += PREF_ROW_H;
+        /* Escalado (afecta a la imagen ACTIVA y a la previsualizacion). */
         pref_choice(e, UI_BG_SCALE, x, y, col_w, "Escalado",
                     bg_scale_name(s->background_scaling));
         y += PREF_ROW_H;
+        /* Galeria de miniaturas + boton "Anyadir imagen...". */
+        y = render_bg_gallery(e, x, y, col_w);
     } else if (s->background_mode == BG_MODE_COLOR) {
         /* Editor de color por componentes + muestra del color resultante. */
         pref_stepper(e, UI_BG_R_DEC, UI_BG_R_INC, x, y, col_w, "Rojo",

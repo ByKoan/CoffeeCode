@@ -399,6 +399,20 @@ typedef struct Editor {
     SDL_Texture *background_texture; /**< Textura de imagen de fondo (NULL si no hay). */
     int background_w;                /**< Ancho original de la imagen de fondo.         */
     int background_h;                /**< Alto original de la imagen de fondo.          */
+
+    /* -- Cache de miniaturas de la galeria de fondos -------------------------
+     * Una textura por entrada de settings.background_gallery (en el MISMO
+     * orden), construida de forma perezosa al entrar a la sub-pantalla Fondos
+     * en modo Imagen.  thumb[i] == NULL = la imagen no se pudo cargar (ruta
+     * borrada / formato roto) y el render dibuja un placeholder en su celda.
+     * thumb_valid==0 fuerza una reconstruccion la proxima vez que se necesite
+     * (al agregar/quitar una imagen o reabrir Ajustes). */
+    SDL_Texture *bg_thumb[BG_GALLERY_MAX]; /**< Miniatura de cada entrada (o NULL). */
+    int bg_thumb_w[BG_GALLERY_MAX];        /**< Ancho original de cada miniatura.  */
+    int bg_thumb_h[BG_GALLERY_MAX];        /**< Alto original de cada miniatura.   */
+    int bg_thumb_count;                    /**< Numero de miniaturas construidas.  */
+    int bg_thumb_valid;                    /**< 1 = cache al dia; 0 = reconstruir. */
+    int bg_gallery_scroll;                 /**< Primera fila visible de la rejilla. */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -676,3 +690,19 @@ void editor_detached_close(Editor *e, int di);
  * @return 1 si se cargó (o limpió) exitosamente; 0 en caso de error.
  */
 int editor_load_background(Editor *e, const char *path);
+
+/**
+ * @brief (Re)construye la cache de miniaturas de la galeria de fondos.
+ *
+ * Libera las miniaturas previas y carga una textura por cada ruta de
+ * @c e->settings.background_gallery.  Las imagenes que no carguen quedan con
+ * miniatura NULL (el render dibuja un placeholder).  Marca @c bg_thumb_valid=1.
+ * Solo hace trabajo si la cache esta invalidada; llamarla a menudo es barato.
+ */
+void editor_bg_thumbs_build(Editor *e);
+
+/** Libera todas las miniaturas de la galeria y deja la cache invalidada. */
+void editor_bg_thumbs_free(Editor *e);
+
+/** Invalida la cache de miniaturas (se reconstruira al pintar la galeria). */
+void editor_bg_thumbs_invalidate(Editor *e);

@@ -30,6 +30,36 @@ void settings_defaults(Settings *s) {
     s->background_color = SETTINGS_BG_COLOR_DEFAULT;
     s->background_opacity = SETTINGS_BG_OPACITY_DEFAULT;
     s->background_scaling = BG_SCALE_STRETCH; /* historico: imagen estirada */
+    s->background_gallery_count = 0;          /* galeria vacia por defecto   */
+    s->background_gallery[0][0] = '\0';
+}
+
+int settings_gallery_index_of(const Settings *s, const char *path) {
+    if (!path || !path[0]) return -1;
+    for (int i = 0; i < s->background_gallery_count; i++)
+        if (strcmp(s->background_gallery[i], path) == 0) return i;
+    return -1;
+}
+
+int settings_gallery_add(Settings *s, const char *path) {
+    if (!path || !path[0]) return -1;          /* ruta vacia: ignorar       */
+    int existing = settings_gallery_index_of(s, path);
+    if (existing >= 0) return existing;        /* dedup: ya esta             */
+    if (s->background_gallery_count >= BG_GALLERY_MAX) return -1; /* llena    */
+    int i = s->background_gallery_count++;
+    strncpy(s->background_gallery[i], path, sizeof s->background_gallery[i] - 1);
+    s->background_gallery[i][sizeof s->background_gallery[i] - 1] = '\0';
+    return i;
+}
+
+void settings_gallery_remove(Settings *s, int index) {
+    if (index < 0 || index >= s->background_gallery_count) return;
+    /* desplazar las siguientes una posicion hacia atras (compactar) */
+    for (int i = index; i < s->background_gallery_count - 1; i++)
+        memcpy(s->background_gallery[i], s->background_gallery[i + 1],
+               sizeof s->background_gallery[i]);
+    s->background_gallery_count--;
+    s->background_gallery[s->background_gallery_count][0] = '\0';
 }
 
 /**
@@ -110,11 +140,44 @@ void settings_load(Settings *s) {
         else if (!strcmp(key, "background_scaling"))
             s->background_scaling =
                 clampi(atoi(val), BG_SCALE_FIT, BG_SCALE_TILE);
+        else if (!strcmp(key, "bg_gallery_count")) {
+            /* el numero de entradas se acota; cada ruta se lee por su clave */
+            s->background_gallery_count =
+                clampi(atoi(val), 0, BG_GALLERY_MAX);
+        }
+        else if (!strncmp(key, "bg_gallery_", 11) &&
+                 key[11] >= '0' && key[11] <= '9') {
+            /* clave "bg_gallery_<n>": guardar la ruta en su indice si cabe */
+            int idx = atoi(key + 11);
+            if (idx >= 0 && idx < BG_GALLERY_MAX && val[0]) {
+                strncpy(s->background_gallery[idx], val,
+                        sizeof s->background_gallery[idx] - 1);
+                s->background_gallery[idx][sizeof s->background_gallery[idx] - 1] =
+                    '\0';
+            }
+        }
         /* legacy: clave del esquema antiguo (solo activado si/no) */
         else if (!strcmp(key, "background_enabled"))
             legacy_bg_enabled = atoi(val) ? 1 : 0;
     }
     fclose(f);
+
+    /* Coherencia de la galeria: el contador podria ser mayor que las rutas
+     * realmente presentes (settings.ini editado a mano o truncado).  Recortar
+     * al primer hueco vacio para no exponer entradas basura. */
+    {
+        int valid = 0;
+        while (valid < s->background_gallery_count &&
+               s->background_gallery[valid][0])
+            valid++;
+        s->background_gallery_count = valid;
+    }
+
+    /* Migracion suave: si hay una imagen activa que no esta en la galeria,
+     * agregarla (asi los usuarios que ya eligieron un fondo no lo pierden y
+     * aparece en la nueva cuadricula). */
+    if (s->background_path[0])
+        settings_gallery_add(s, s->background_path);
 
     /* Migracion: un settings.ini viejo no tiene "background_mode".  Si trae
      * "background_enabled=1" y hay una ruta, el fondo era una imagen; en
@@ -148,5 +211,9 @@ void settings_save(const Settings *s) {
     fprintf(f, "background_color=0x%06X\n", s->background_color & 0xFFFFFFu);
     fprintf(f, "background_opacity=%d\n", s->background_opacity);
     fprintf(f, "background_scaling=%d\n", s->background_scaling);
+    /* Galeria de fondos: contador + una clave por ruta. */
+    fprintf(f, "bg_gallery_count=%d\n", s->background_gallery_count);
+    for (int i = 0; i < s->background_gallery_count; i++)
+        fprintf(f, "bg_gallery_%d=%s\n", i, s->background_gallery[i]);
     fclose(f);
 }

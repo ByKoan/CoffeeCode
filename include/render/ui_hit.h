@@ -71,6 +71,8 @@ typedef enum {
     UI_BG_G_INC,        /**< Stepper componente verde del color: mas.      */
     UI_BG_B_DEC,        /**< Stepper componente azul del color: menos.     */
     UI_BG_B_INC,        /**< Stepper componente azul del color: mas.        */
+    UI_BG_ADD,          /**< Boton "Anyadir imagen..." de la galeria.       */
+    UI_BG_GALLERY,      /**< Area de la rejilla de miniaturas (para la rueda). */
     UI_STATUS_ENC,      /**< Codificación en la barra de estado (clic).  */
     UI_ENC_MODE_REOPEN, /**< Botón "Reabrir con" del popup.             */
     UI_ENC_MODE_SAVE,   /**< Botón "Guardar como" del popup.            */
@@ -102,6 +104,8 @@ typedef enum {
     UI_LIST_BOTTOM_TAB, /**< Pestañas del panel inferior (por índice de canal). */
     UI_LIST_SPLIT_NEW,  /**< Botón "+" de nueva pestaña de cada grupo (split),
                            indexado por número de grupo (0 o 1).            */
+    UI_LIST_BG_THUMB,     /**< Celda (miniatura) de la galeria de fondos, por indice. */
+    UI_LIST_BG_THUMB_DEL, /**< Boton "x" de quitar de cada celda, por indice.        */
     UI_LIST_COUNT
 } UiList;
 
