@@ -398,14 +398,12 @@ int editor_init(Editor *e, const char *filepath) {
     e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
     fonts_scan(&e->fonts); /* fuentes del sistema para el selector */
 
-    /* fondo personalizado: inicializar y cargar si estaba habilitado */
+    /* fondo personalizado: inicializar (la textura se carga mas abajo, ya con
+     * el renderer creado, solo si el modo activo es "imagen"). */
     e->background_texture = NULL;
     e->background_w = 0;
     e->background_h = 0;
-    if (e->settings.background_enabled && e->settings.background_path[0]) {
-        /* Se carga después de crear el renderer (más abajo); guardamos el flag
-         * para hacerlo en el momento correcto. Por ahora solo inicializamos. */
-    }
+    e->background_view_open = 0;
 
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
@@ -482,8 +480,10 @@ int editor_init(Editor *e, const char *filepath) {
     /* -- Panel explorador de archivos -- */
     ftree_init(&e->ftree);
 
-    /* Cargar fondo personalizado ahora que el renderer ya está creado */
-    if (e->settings.background_enabled && e->settings.background_path[0]) {
+    /* Cargar la imagen de fondo ahora que el renderer ya esta creado, solo si
+     * el modo activo es "imagen" y hay una ruta guardada. */
+    if (e->settings.background_mode == BG_MODE_IMAGE &&
+        e->settings.background_path[0]) {
         editor_load_background(e, e->settings.background_path);
     }
 

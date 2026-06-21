@@ -34,6 +34,135 @@
 #define LINE_BUF_SZ 4096 /* buffer temporal por línea visible           */
 #define TOKEN_CHUNK 255  /* máx. caracteres por fragmento de texto       */
 
+/* -- Fondo del area de texto (modo color/imagen, escalado y opacidad) ------
+ */
+
+/**
+ * @brief Dibuja la imagen de fondo @p tex dentro del rectangulo @p area segun
+ *        el modo de escalado @p scaling, con la opacidad @p opacity (0..255).
+ *
+ * Comparte la logica entre el fondo real del editor y la previsualizacion de la
+ * sub-pantalla "Fondos".  Recorta al area cuando el dibujo puede salirse de
+ * ella (rellenar/centrar/mosaico) y restaura el alfa de la textura al terminar.
+ *
+ * @param r       Renderer destino.
+ * @param tex     Textura de la imagen (no nula).
+ * @param bw,bh   Tamano nativo de la imagen en pixeles.
+ * @param area    Rectangulo destino en pixeles.
+ * @param scaling Modo de encaje (::BgScale).
+ * @param opacity Opacidad aplicada (0..255).
+ */
+static void bg_draw_image(SDL_Renderer *r, SDL_Texture *tex, int bw, int bh,
+                          SDL_FRect area, int scaling, int opacity) {
+    if (!tex || bw <= 0 || bh <= 0) return; /* sin imagen valida: nada */
+    Uint8 a = (Uint8)(opacity < 0 ? 0 : (opacity > 255 ? 255 : opacity));
+    SDL_SetTextureAlphaMod(tex, a);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+
+    float AW = area.w, AH = area.h;
+    float fbw = (float)bw, fbh = (float)bh;
+
+    switch (scaling) {
+    case BG_SCALE_STRETCH: { /* deformar hasta llenar el area */
+        SDL_RenderTexture(r, tex, NULL, &area);
+        break;
+    }
+    case BG_SCALE_FIT: { /* cabe entera, conserva proporcion (letterbox) */
+        float s = AW / fbw;
+        if (fbh * s > AH) s = AH / fbh; /* el lado limitante manda */
+        float w = fbw * s, h = fbh * s;
+        SDL_FRect dst = {area.x + (AW - w) / 2.0f, area.y + (AH - h) / 2.0f, w,
+                         h};
+        SDL_RenderTexture(r, tex, NULL, &dst);
+        break;
+    }
+    case BG_SCALE_FILL: { /* cubre el area, recorta el sobrante (cover) */
+        float s = AW / fbw;
+        if (fbh * s < AH) s = AH / fbh; /* el lado mayor manda */
+        float w = fbw * s, h = fbh * s;
+        SDL_FRect dst = {area.x + (AW - w) / 2.0f, area.y + (AH - h) / 2.0f, w,
+                         h};
+        SDL_Rect clip = {(int)area.x, (int)area.y, (int)area.w, (int)area.h};
+        SDL_SetRenderClipRect(r, &clip);
+        SDL_RenderTexture(r, tex, NULL, &dst);
+        SDL_SetRenderClipRect(r, NULL);
+        break;
+    }
+    case BG_SCALE_CENTER: { /* tamano nativo centrado, recortado al area */
+        SDL_FRect dst = {area.x + (AW - fbw) / 2.0f, area.y + (AH - fbh) / 2.0f,
+                         fbw, fbh};
+        SDL_Rect clip = {(int)area.x, (int)area.y, (int)area.w, (int)area.h};
+        SDL_SetRenderClipRect(r, &clip);
+        SDL_RenderTexture(r, tex, NULL, &dst);
+        SDL_SetRenderClipRect(r, NULL);
+        break;
+    }
+    case BG_SCALE_TILE: { /* repetir el tamano nativo cubriendo el area */
+        SDL_Rect clip = {(int)area.x, (int)area.y, (int)area.w, (int)area.h};
+        SDL_SetRenderClipRect(r, &clip);
+        for (float ty = area.y; ty < area.y + AH; ty += fbh)
+            for (float tx = area.x; tx < area.x + AW; tx += fbw) {
+                SDL_FRect dst = {tx, ty, fbw, fbh};
+                SDL_RenderTexture(r, tex, NULL, &dst);
+            }
+        SDL_SetRenderClipRect(r, NULL);
+        break;
+    }
+    default:
+        SDL_RenderTexture(r, tex, NULL, &area);
+        break;
+    }
+
+    SDL_SetTextureAlphaMod(tex, 255); /* restaurar */
+}
+
+/**
+ * @brief Pinta el fondo configurado dentro del rectangulo @p area.
+ *
+ * Despacha por @c e->settings.background_mode: sin fondo (no dibuja nada),
+ * color solido (rellena con @c background_color + opacidad) o imagen (delega en
+ * ::bg_draw_image con el escalado y la opacidad configurados).  Reutilizable
+ * tanto para el fondo del editor como para la previsualizacion.
+ */
+static void bg_fill_area(Editor *e, SDL_FRect area) {
+    const Settings *s = &e->settings;
+    int op = s->background_opacity;
+    if (op < 0) op = 0;
+    if (op > 255) op = 255;
+
+    if (s->background_mode == BG_MODE_COLOR) {
+        Uint8 R = (Uint8)((s->background_color >> 16) & 0xFF);
+        Uint8 G = (Uint8)((s->background_color >> 8) & 0xFF);
+        Uint8 B = (Uint8)(s->background_color & 0xFF);
+        SDL_SetRenderDrawBlendMode(e->renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(e->renderer, R, G, B, (Uint8)op);
+        SDL_RenderFillRect(e->renderer, &area);
+    } else if (s->background_mode == BG_MODE_IMAGE && e->background_texture) {
+        bg_draw_image(e->renderer, e->background_texture, e->background_w,
+                      e->background_h, area, s->background_scaling, op);
+    }
+    /* BG_MODE_NONE: no se dibuja nada -> queda el color del tema. */
+}
+
+/**
+ * @brief Dibuja el fondo del area de texto del editor (bajo todo el contenido).
+ *
+ * Calcula el rectangulo del area de texto (igual que el render del editor) y
+ * delega en ::bg_fill_area.  Con el modo "sin fondo" no toca nada, asi que el
+ * editor pinta exactamente igual que antes de la migracion.
+ */
+void render_background_area(Editor *e) {
+    int text_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
+    int text_h = e->win_h - text_top - STATUS_HEIGHT - editor_shortcut_h(e);
+    if (text_h < 0) text_h = 0;
+    SDL_FRect area = {0.0f, (float)text_top, (float)e->win_w, (float)text_h};
+    bg_fill_area(e, area);
+}
+
+void render_background_preview(Editor *e, SDL_FRect area) {
+    bg_fill_area(e, area);
+}
+
 /* ── Geometría del área de contenido (respeta el split de paneles) ──────────
  */
 
@@ -1007,9 +1136,13 @@ void render_frame(Editor *e) {
      * este frame (ver render/ui_hit.h). */
     ui_reset(&e->ui);
 
-    /* Pantalla de preferencias: sustituye al editor mientras está abierta. */
+    /* Pantalla de preferencias: sustituye al editor mientras esta abierta.
+     * Si ademas esta abierta la sub-pantalla "Fondos", se dibuja esa. */
     if (e->settings_open) {
-        render_settings_view(e);
+        if (e->background_view_open)
+            render_background_view(e);
+        else
+            render_settings_view(e);
         SDL_RenderPresent(r);
         return;
     }
@@ -1029,15 +1162,9 @@ void render_frame(Editor *e) {
     set_color_c(r, e->theme.col_bg);
     SDL_RenderClear(r); /* borra el frame con el color de fondo */
 
-    /* Fondo personalizado: se dibuja justo después del clear, debajo de todo */
-    if (e->settings.background_enabled && e->background_texture) {
-        int text_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
-        int text_h   = e->win_h - text_top - STATUS_HEIGHT - editor_shortcut_h(e);
-        SDL_FRect dst = {0.0f, (float)text_top, (float)e->win_w, (float)text_h};
-        SDL_SetTextureAlphaMod(e->background_texture, 180); /* ~70 % opaco */
-        SDL_RenderTexture(e->renderer, e->background_texture, NULL, &dst);
-        SDL_SetTextureAlphaMod(e->background_texture, 255); /* restaurar */
-    }
+    /* Fondo personalizado: se dibuja justo despues del clear, debajo de todo,
+     * segun el modo activo (sin fondo / color solido / imagen). */
+    render_background_area(e);
 
     if (e->tab_count == 0) {    /* sin archivos: pantalla de bienvenida */
         render_empty_screen(e); /* (hace su propio RenderPresent) */

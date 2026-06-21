@@ -309,6 +309,7 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
     case SDLK_Q: e->running = 0; break; /* salir del bucle principal */
     case SDLK_COMMA:                    /* Ctrl+, abre las preferencias */
         e->settings_open = 1;
+        e->background_view_open = 0; /* arrancar en la pagina principal */
         e->needs_redraw = 1;
         break;
     case SDLK_F: open_find_bar(e); break;
@@ -429,10 +430,14 @@ static void edit_key(Editor *e, SDL_Keycode key, int shift) {
 static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
     SDL_Keycode key = ev->key.key; /* tecla lógica (keycode) de la pulsación */
 
-    /* Preferencias abiertas: pantalla modal; solo ESC la cierra. */
+    /* Preferencias abiertas: pantalla modal; ESC retrocede.  Si esta abierta la
+     * sub-pantalla "Fondos", ESC vuelve a preferencias; si no, cierra. */
     if (e->settings_open) {
         if (key == SDLK_ESCAPE) {
-            e->settings_open = 0;
+            if (e->background_view_open)
+                e->background_view_open = 0;
+            else
+                e->settings_open = 0;
             e->needs_redraw = 1;
         }
         return;

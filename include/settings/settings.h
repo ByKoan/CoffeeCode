@@ -16,6 +16,28 @@
 #define SETTINGS_FONT_MIN 10
 #define SETTINGS_FONT_MAX 24
 
+/** Modo del fondo del area de texto. */
+typedef enum {
+    BG_MODE_NONE = 0,  /**< Sin fondo: solo el color del tema.        */
+    BG_MODE_IMAGE = 1, /**< Imagen cargada desde @c background_path.  */
+    BG_MODE_COLOR = 2  /**< Color solido @c background_color.         */
+} BgMode;
+
+/** Forma de encajar la imagen de fondo dentro del area de texto. */
+typedef enum {
+    BG_SCALE_FIT = 0,     /**< Ajustar: cabe entera, conserva proporcion. */
+    BG_SCALE_FILL = 1,    /**< Rellenar: cubre el area, recorta sobrante. */
+    BG_SCALE_STRETCH = 2, /**< Estirar: deforma hasta llenar el area.     */
+    BG_SCALE_CENTER = 3,  /**< Centrar: tamano nativo, recortado al area. */
+    BG_SCALE_TILE = 4     /**< Mosaico: repite el tamano nativo.          */
+} BgScale;
+
+/** Color de fondo por defecto en modo color (gris muy oscuro 0xRRGGBB). */
+#define SETTINGS_BG_COLOR_DEFAULT 0x101015u
+
+/** Opacidad por defecto del fondo (0..255); coincide con el valor historico. */
+#define SETTINGS_BG_OPACITY_DEFAULT 180
+
 /** Preferencias del editor. */
 typedef struct {
     int theme;     /**< Índice del preset de tema (0 = oscuro).        */
@@ -27,8 +49,11 @@ typedef struct {
                                  */
     int show_shortcuts;  /**< 1 = mostrar la barra de atajos inferior.       */
     char font_path[512]; /**< Ruta a la fuente; "" = fuente por defecto.     */
-    char background_path[512]; /**< Ruta a imagen de fondo personalizado.     */
-    int background_enabled; /**< 1 = usar fondo personalizado.                */
+    char background_path[512]; /**< Ruta a la imagen de fondo activa.         */
+    int background_mode; /**< Modo del fondo (::BgMode).                     */
+    unsigned int background_color; /**< Color solido 0xRRGGBB (modo color).  */
+    int background_opacity; /**< Opacidad del fondo [0..255].                */
+    int background_scaling; /**< Encaje de la imagen (::BgScale).            */
 } Settings;
 
 /** Rellena @p s con los valores por defecto. */

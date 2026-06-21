@@ -728,6 +728,7 @@ void menu_exec(Editor *e, int item) {
         break;
     case MENU_PREFS:
         e->settings_open = 1; /* abrir la pantalla de preferencias */
+        e->background_view_open = 0; /* arrancar en la pagina principal */
         break;
     default: break;
     }

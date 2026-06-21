@@ -97,6 +97,27 @@ static void pref_choice(Editor *e, UiId id, int x, int y, int w,
     ui_button(e, id, box, value, &e->theme.style_button, UI_NORMAL);
 }
 
+/** Nombre legible del modo de fondo (::BgMode). */
+static const char *bg_mode_name(int mode) {
+    switch (mode) {
+    case BG_MODE_IMAGE: return "Imagen";
+    case BG_MODE_COLOR: return "Color";
+    default:            return "Ninguno";
+    }
+}
+
+/** Nombre legible del modo de escalado de la imagen (::BgScale). */
+static const char *bg_scale_name(int scaling) {
+    switch (scaling) {
+    case BG_SCALE_FIT:     return "Ajustar";
+    case BG_SCALE_FILL:    return "Rellenar";
+    case BG_SCALE_STRETCH: return "Estirar";
+    case BG_SCALE_CENTER:  return "Centrar";
+    case BG_SCALE_TILE:    return "Mosaico";
+    default:               return "Estirar";
+    }
+}
+
 /* -- Lista de fuentes con previsualización --------------------------------- */
 
 /* Abrir una TTF por fila y frame sería costoso: cacheamos las últimas abiertas
@@ -185,24 +206,11 @@ void render_settings_view(Editor *e) {
     pref_choice(e, UI_PREF_THEME, x, y, col_w, "Tema",
                 theme_name(e->settings.theme));
     y += PREF_ROW_H;
-    pref_toggle(e, UI_PREF_BG_ENABLED, x, y, col_w, "Fondo personalizado",
-                e->settings.background_enabled);
-    y += PREF_ROW_H;
-    {
-        /* Mostrar solo el nombre del archivo, no la ruta completa */
-        const char *bg_label = "Seleccionar...";
-        char bg_name[64] = {0};
-        if (e->settings.background_path[0]) {
-            const char *p = e->settings.background_path;
-            const char *last = p;
-            for (; *p; p++)
-                if (*p == '/' || *p == '\\') last = p + 1;
-            snprintf(bg_name, sizeof bg_name, "%s", last);
-            bg_label = bg_name;
-        }
-        pref_choice(e, UI_PREF_BG_LOAD, x, y, col_w, "Imagen de fondo",
-                    bg_label);
-    }
+    /* Una sola fila "Fondo" que muestra el modo actual y abre la sub-pantalla
+     * "Fondos" con todos los controles (asi no hay un boton de imagen suelto
+     * que se pueda pulsar con el fondo desactivado). */
+    pref_choice(e, UI_PREF_BG, x, y, col_w, "Fondo",
+                bg_mode_name(e->settings.background_mode));
     y += PREF_ROW_H;
     pref_stepper(e, UI_PREF_FONTSZ_DEC, UI_PREF_FONTSZ_INC, x, y, col_w,
                  "Tamano de fuente", e->settings.font_size);
@@ -237,4 +245,116 @@ void render_settings_view(Editor *e) {
     Rect lb = {x, y, col_w, list_h};
     ui_list(e, lb, UI_PREF_FONT_LIST, UI_LIST_PREF_FONT, e->fonts.count + 1,
             row_h, &e->font_list_scroll, sel, font_row, NULL);
+}
+
+/* -- Sub-pantalla "Fondos" ------------------------------------------------- */
+
+void render_background_view(Editor *e) {
+    SDL_Renderer *r = e->renderer;
+    Settings *s = &e->settings;
+
+    set_color_c(r, e->theme.col_bg);
+    fill_rect(r, 0, 0, e->win_w, e->win_h);
+
+    /* -- Cabecera: boton Volver + titulo -- */
+    set_color_c(r, e->theme.col_navbar_bg);
+    fill_rect(r, 0, 0, e->win_w, PREF_HEADER_H);
+    Rect back = {12, 8, 110, PREF_HEADER_H - 16};
+    ui_button(e, UI_BG_BACK, back, "< Volver", &e->theme.style_button,
+              UI_NORMAL);
+    draw_text_c(e, "Fondo del editor", 140, row_text_y(e, 0, PREF_HEADER_H),
+                e->theme.tokens[TOK_DEFAULT]);
+
+    /* -- Columna de contenido centrada -- */
+    int col_w = e->win_w - 2 * PREF_SIDE_PAD;
+    if (col_w > PREF_COL_MAX) col_w = PREF_COL_MAX;
+    int x = (e->win_w - col_w) / 2;
+    int y = PREF_HEADER_H + 24;
+
+    /* Selector de modo (Ninguno / Imagen / Color), aplica al instante. */
+    y = pref_section(e, x, y, "Apariencia del fondo");
+    pref_choice(e, UI_BG_MODE, x, y, col_w, "Modo",
+                bg_mode_name(s->background_mode));
+    y += PREF_ROW_H;
+
+    /* Controles condicionales segun el modo activo. */
+    if (s->background_mode == BG_MODE_IMAGE) {
+        /* Boton para elegir imagen: muestra el nombre del archivo actual. */
+        const char *bg_label = "Seleccionar imagen...";
+        char bg_name[64] = {0};
+        if (s->background_path[0]) {
+            const char *p = s->background_path;
+            const char *last = p;
+            for (; *p; p++)
+                if (*p == '/' || *p == '\\') last = p + 1;
+            snprintf(bg_name, sizeof bg_name, "%s", last);
+            bg_label = bg_name;
+        }
+        pref_choice(e, UI_BG_PICK, x, y, col_w, "Imagen", bg_label);
+        y += PREF_ROW_H;
+        pref_choice(e, UI_BG_SCALE, x, y, col_w, "Escalado",
+                    bg_scale_name(s->background_scaling));
+        y += PREF_ROW_H;
+    } else if (s->background_mode == BG_MODE_COLOR) {
+        /* Editor de color por componentes + muestra del color resultante. */
+        pref_stepper(e, UI_BG_R_DEC, UI_BG_R_INC, x, y, col_w, "Rojo",
+                     (int)((s->background_color >> 16) & 0xFF));
+        y += PREF_ROW_H;
+        pref_stepper(e, UI_BG_G_DEC, UI_BG_G_INC, x, y, col_w, "Verde",
+                     (int)((s->background_color >> 8) & 0xFF));
+        y += PREF_ROW_H;
+        pref_stepper(e, UI_BG_B_DEC, UI_BG_B_INC, x, y, col_w, "Azul",
+                     (int)(s->background_color & 0xFF));
+        y += PREF_ROW_H;
+        /* swatch del color (con su valor RGB) */
+        {
+            Color sw = {(Uint8)((s->background_color >> 16) & 0xFF),
+                        (Uint8)((s->background_color >> 8) & 0xFF),
+                        (Uint8)(s->background_color & 0xFF), 255};
+            draw_text_c(e, "Color", x, row_text_y(e, y, PREF_ROW_H),
+                        e->theme.tokens[TOK_DEFAULT]);
+            Rect box = {x + col_w - PREF_CTRL_W, y + 6, PREF_CTRL_W,
+                        PREF_ROW_H - 12};
+            set_color_c(r, sw);
+            fill_rect(r, box.x, box.y, box.w, box.h);
+            stroke_rect(r, box.x, box.y, box.w, box.h);
+            y += PREF_ROW_H;
+        }
+    }
+
+    /* Opacidad: stepper + barra de progreso (todos los modos que dibujan). */
+    if (s->background_mode != BG_MODE_NONE) {
+        pref_stepper(e, UI_BG_OPACITY_DEC, UI_BG_OPACITY_INC, x, y, col_w,
+                     "Opacidad", s->background_opacity);
+        y += PREF_ROW_H;
+        /* barra visual del nivel (0..255) bajo la fila del stepper */
+        {
+            int bar_w = col_w;
+            int bar_h = 8;
+            int bx = x, by = y;
+            set_color_c(r, e->theme.col_sb_track);
+            fill_rect(r, bx, by, bar_w, bar_h);
+            int fill = (int)((long)bar_w * s->background_opacity / 255);
+            if (fill < 0) fill = 0;
+            if (fill > bar_w) fill = bar_w;
+            set_color_c(r, e->theme.style_primary.bg);
+            fill_rect(r, bx, by, fill, bar_h);
+            y += bar_h + 16;
+        }
+    }
+
+    /* -- Previsualizacion -- */
+    y = pref_section(e, x, y, "Previsualizacion");
+    int prev_h = e->win_h - y - 24;
+    if (prev_h > 200) prev_h = 200;
+    if (prev_h < 60) prev_h = 60;
+    Rect pb = {x, y, col_w, prev_h};
+    /* fondo base de la muestra = color del tema, para imitar el editor */
+    set_color_c(r, e->theme.col_bg);
+    fill_rect(r, pb.x, pb.y, pb.w, pb.h);
+    SDL_FRect parea = {(float)pb.x, (float)pb.y, (float)pb.w, (float)pb.h};
+    render_background_preview(e, parea);
+    /* marco de la muestra */
+    set_color_c(r, e->theme.col_status_sep);
+    stroke_rect(r, pb.x, pb.y, pb.w, pb.h);
 }

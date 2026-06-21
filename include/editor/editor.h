@@ -238,6 +238,7 @@ typedef struct Editor {
     /* preferencias persistentes (tema, fuente, tab, autoguardado...) */
     Settings settings;
     int settings_open; /* 1 = mostrando la pantalla de preferencias */
+    int background_view_open; /* 1 = sub-pantalla "Fondos" dentro de preferencias */
 
     /* fuentes del sistema descubiertas (para el selector de preferencias) */
     FontList fonts;

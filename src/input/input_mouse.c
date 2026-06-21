@@ -1234,8 +1234,105 @@ static void SDLCALL bg_file_dialog_cb(void *userdata,
         strncpy(e->settings.background_path, path,
                 sizeof e->settings.background_path - 1);
         e->settings.background_path[sizeof e->settings.background_path - 1] = '\0';
-        e->settings.background_enabled = 1;
+        e->settings.background_mode = BG_MODE_IMAGE; /* elegir imagen activa el modo imagen */
         settings_save(&e->settings);
+    }
+    e->needs_redraw = 1;
+}
+
+/** Abre el dialogo del sistema para elegir una imagen de fondo. */
+static void open_bg_file_dialog(Editor *e) {
+    SDL_DialogFileFilter filters[] = {
+        {"Imagenes", "png;jpg;jpeg;bmp;gif;tiff;tif;webp"},
+        {"Todos los archivos", "*"},
+    };
+    SDL_ShowOpenFileDialog(bg_file_dialog_cb, e, e->window, filters, 2, NULL,
+                           false);
+}
+
+/** Recorta @p v al rango [@p lo, @p hi]. */
+static int bg_clampi(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+/** Sustituye la componente @p shift (0/8/16) del color por @p comp (0..255). */
+static unsigned int bg_set_comp(unsigned int color, int shift, int comp) {
+    comp = bg_clampi(comp, 0, 255);
+    color &= ~(0xFFu << shift);             /* limpiar la componente */
+    color |= ((unsigned int)comp << shift); /* y volver a ponerla */
+    return color & 0xFFFFFFu;
+}
+
+/**
+ * @brief Procesa un clic en la sub-pantalla "Fondos" de preferencias.
+ *
+ * Resuelve los controles con ui_hit y aplica cada cambio en vivo (cargando o
+ * limpiando la textura cuando hace falta), guardando con settings_save.  Los
+ * botones de imagen/escalado solo existen en modo Imagen y los de color solo en
+ * modo Color, asi que no hay forma de pulsar un control que no aplique.
+ */
+static void handle_background_view_click(Editor *e, int mx, int my) {
+    Settings *s = &e->settings;
+    int paso_op = 15; /* paso de la opacidad */
+
+    if (ui_hit(&e->ui, UI_BG_BACK, mx, my)) {
+        e->background_view_open = 0; /* volver a preferencias */
+    } else if (ui_hit(&e->ui, UI_BG_MODE, mx, my)) {
+        /* ciclo Ninguno -> Imagen -> Color -> Ninguno */
+        s->background_mode = (s->background_mode + 1) % 3;
+        /* cargar/limpiar la textura al entrar/salir del modo imagen */
+        if (s->background_mode == BG_MODE_IMAGE && s->background_path[0])
+            editor_load_background(e, s->background_path);
+        else
+            editor_load_background(e, ""); /* libera la textura si la habia */
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               ui_hit(&e->ui, UI_BG_PICK, mx, my)) {
+        open_bg_file_dialog(e); /* el callback aplica + guarda */
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               ui_hit(&e->ui, UI_BG_SCALE, mx, my)) {
+        s->background_scaling = (s->background_scaling + 1) % 5;
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_R_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 16, (int)((s->background_color >> 16) & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_R_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 16, (int)((s->background_color >> 16) & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_G_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 8, (int)((s->background_color >> 8) & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_G_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 8, (int)((s->background_color >> 8) & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_B_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 0, (int)(s->background_color & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_B_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 0, (int)(s->background_color & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode != BG_MODE_NONE &&
+               ui_hit(&e->ui, UI_BG_OPACITY_DEC, mx, my)) {
+        s->background_opacity = bg_clampi(s->background_opacity - paso_op, 0, 255);
+        settings_save(s);
+    } else if (s->background_mode != BG_MODE_NONE &&
+               ui_hit(&e->ui, UI_BG_OPACITY_INC, mx, my)) {
+        s->background_opacity = bg_clampi(s->background_opacity + paso_op, 0, 255);
+        settings_save(s);
     }
     e->needs_redraw = 1;
 }
@@ -1290,22 +1387,9 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
         editor_reload_font(e);
         settings_save(s);
-    } else if (ui_hit(&e->ui, UI_PREF_BG_ENABLED, mx, my)) {
-        /* Toggle: habilitar/deshabilitar fondo personalizado */
-        s->background_enabled = !s->background_enabled;
-        if (s->background_enabled && s->background_path[0])
-            editor_load_background(e, s->background_path);
-        else if (!s->background_enabled)
-            editor_load_background(e, ""); /* limpiar textura */
-        settings_save(s);
-    } else if (ui_hit(&e->ui, UI_PREF_BG_LOAD, mx, my)) {
-        /* Abrir diálogo de archivo para elegir imagen de fondo */
-        SDL_DialogFileFilter filters[] = {
-            {"Imagenes", "png;jpg;jpeg;bmp;gif;tiff;tif;webp"},
-            {"Todos los archivos", "*"},
-        };
-        SDL_ShowOpenFileDialog(bg_file_dialog_cb, e, e->window,
-                               filters, 2, NULL, false);
+    } else if (ui_hit(&e->ui, UI_PREF_BG, mx, my)) {
+        /* Abrir la sub-pantalla "Fondos" con todos los controles del fondo. */
+        e->background_view_open = 1;
     } else {
         /* Lista de fuentes: un clic sobre una fila la selecciona. La fila 0 es
          * "Predeterminada" (vuelve a la fuente por defecto). */
@@ -1538,9 +1622,13 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int my = (int)ev->button.y;
     if (ev->button.button != SDL_BUTTON_LEFT) return; /* solo botón izquierdo */
 
-    /* Preferencias abiertas: la pantalla es modal y consume todo el ratón. */
+    /* Preferencias abiertas: la pantalla es modal y consume todo el raton.
+     * Si ademas esta abierta la sub-pantalla "Fondos", el clic va a ella. */
     if (e->settings_open) {
-        handle_settings_click(e, mx, my);
+        if (e->background_view_open)
+            handle_background_view_click(e, mx, my);
+        else
+            handle_settings_click(e, mx, my);
         return;
     }
 

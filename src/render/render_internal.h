@@ -85,6 +85,13 @@ void render_selection(Editor *e, int left_offset, int text_top,
                       int visible_lines);
 /* pantalla de preferencias (a pantalla completa) */
 void render_settings_view(Editor *e);
+/* sub-pantalla "Fondos" de preferencias (a pantalla completa) */
+void render_background_view(Editor *e);
+/* dibuja el fondo configurado bajo el area de texto del editor */
+void render_background_area(Editor *e);
+/* pinta el fondo configurado (color/imagen) dentro de un rectangulo dado;
+ * lo usa la previsualizacion de la sub-pantalla "Fondos" */
+void render_background_preview(Editor *e, SDL_FRect area);
 /* popup del selector de codificación (desde la barra de estado) */
 void render_enc_popup(Editor *e);
 

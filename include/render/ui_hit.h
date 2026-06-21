@@ -57,8 +57,20 @@ typedef enum {
     UI_PREF_FONTSZ_DEC, /**< Stepper tamaño de fuente: −.             */
     UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
     UI_PREF_FONT_LIST,  /**< Área de la lista de fuentes (para la rueda). */
-    UI_PREF_BG_ENABLED, /**< Toggle para habilitar/deshabilitar fondo personalizado. */
-    UI_PREF_BG_LOAD,    /**< Botón para cargar imagen de fondo.           */
+    UI_PREF_BG,         /**< Fila "Fondo" de Apariencia: abre la sub-pantalla Fondos. */
+    /* Sub-pantalla "Fondos" (dentro de Apariencia) */
+    UI_BG_BACK,         /**< Boton "< Volver" de la sub-pantalla Fondos.  */
+    UI_BG_MODE,         /**< Selector ciclico de modo (Ninguno/Imagen/Color). */
+    UI_BG_PICK,         /**< Boton "Seleccionar imagen..." (modo Imagen).  */
+    UI_BG_SCALE,        /**< Selector ciclico de escalado (modo Imagen).   */
+    UI_BG_OPACITY_DEC,  /**< Stepper opacidad: menos.                      */
+    UI_BG_OPACITY_INC,  /**< Stepper opacidad: mas.                        */
+    UI_BG_R_DEC,        /**< Stepper componente rojo del color: menos.     */
+    UI_BG_R_INC,        /**< Stepper componente rojo del color: mas.       */
+    UI_BG_G_DEC,        /**< Stepper componente verde del color: menos.    */
+    UI_BG_G_INC,        /**< Stepper componente verde del color: mas.      */
+    UI_BG_B_DEC,        /**< Stepper componente azul del color: menos.     */
+    UI_BG_B_INC,        /**< Stepper componente azul del color: mas.        */
     UI_STATUS_ENC,      /**< Codificación en la barra de estado (clic).  */
     UI_ENC_MODE_REOPEN, /**< Botón "Reabrir con" del popup.             */
     UI_ENC_MODE_SAVE,   /**< Botón "Guardar como" del popup.            */
