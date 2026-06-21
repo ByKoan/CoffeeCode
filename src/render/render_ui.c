@@ -708,11 +708,25 @@ void render_tab_drag(Editor *e) {
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
     }
 
+    /* Objetivo de BARRA (reordenar/insertar): la barra manda sobre el dock, asi
+     * que se dibuja una linea vertical de insercion y NO el overlay de zona. */
+    int bar_target = !float_mode && e->tab_reorder_group >= 0;
+    if (bar_target) {
+        Color acc = e->theme.col_tab_accent;
+        int lx = e->tab_reorder_x;
+        int ly = e->tab_reorder_bar_y;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color(r, acc.r, acc.g, acc.b, 0xFF);
+        fill_rect(r, lx - 1, ly, 2, TAB_BAR_HEIGHT); /* linea fina de insercion */
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    }
+
     /* zona destino bajo el cursor */
     int group = -1, zone = DOCK_DZ_NONE;
     DockRect leaf_rect;
-    int over = !float_mode && editor_drag_target(e, e->drag_mx, e->drag_my, &group,
-                                                 &zone, &leaf_rect);
+    int over = !float_mode && !bar_target &&
+               editor_drag_target(e, e->drag_mx, e->drag_my, &group, &zone,
+                                  &leaf_rect);
 
     /* overlay translucido de la zona destino (si el cursor esta sobre una hoja
      * y la zona no es nula). */

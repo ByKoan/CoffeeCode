@@ -504,6 +504,7 @@ int editor_init(Editor *e, const char *filepath) {
     e->dock_drag_orient = DOCK_VERTICAL;
     e->drag_tab = -1;      /* sin pestana en arrastre/candidata */
     e->dragging_tab = 0;
+    e->tab_reorder_group = -1; /* sin objetivo de barra para reordenar */
     e->float_count = 0;    /* sin paneles flotantes al arrancar  */
     e->float_drag = -1;    /* sin flotante en arrastre            */
     e->float_resizing = 0;

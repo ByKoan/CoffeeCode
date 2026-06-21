@@ -13,11 +13,16 @@
  * pisa el trabajo del usuario.
  */
 #include "editor_internal.h"
+#include "editor/tab_reorder.h"
 #include "ext/ext_host.h"
 
 /* Colapsa una hoja vacía del árbol de dock (definida más abajo); la usa
  * editor_tab_close al quedarse una hoja sin pestañas. */
 static void editor_unsplit(Editor *e, int group);
+
+/* Indice del flotante cuyo group_id es @p g, o -1 (definida mas abajo); la usa
+ * editor_tab_reorder para reparar la invariante del grupo origen flotante. */
+static int editor_float_by_group(Editor *e, int g);
 
 /* Notifica al extension host (si existe) que la pestana activa cambio: fija el
  * buffer activo y emite COFFEE_EVENT_FILE_OPEN con la ruta del archivo. */
@@ -777,6 +782,76 @@ void editor_tab_drop(Editor *e, int tab, int target_group, int zone) {
         e->group_active_tab[focus_group] = e->active_tab;
     }
     if (e->dock.leaf_count <= 1) e->pane_active = 0;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
+void editor_tab_reorder(Editor *e, int tab, int target_group, int insert_pos) {
+    if (e->tab_count == 0) return;
+    if (tab < 0 || tab >= e->tab_count) return;
+
+    /* la hoja/flotante destino debe existir (dock o flotante). */
+    int target_leaf = dock_leaf_by_group(&e->dock, target_group);
+    int target_float = -1;
+    for (int i = 0; i < e->float_count; i++)
+        if (e->floats[i].group_id == target_group) { target_float = i; break; }
+    if (target_leaf == DOCK_NONE && target_float < 0) return; /* destino invalido */
+
+    int src_group = e->tabs[tab].group;
+
+    /* No-op: reordenar a la MISMA posicion logica dentro del mismo grupo.  Si el
+     * grupo no cambia y la posicion de insercion no altera el orden, se evita el
+     * trabajo (y el cambio de foco/seleccion).  Se calcula comparando contra la
+     * posicion actual de `tab` dentro de su grupo. */
+    if (src_group == target_group) {
+        int cur_pos = 0;
+        for (int i = 0; i < tab; i++)
+            if (e->tabs[i].group == src_group) cur_pos++;
+        /* insertar en cur_pos o cur_pos+1 deja el orden intacto */
+        if (insert_pos == cur_pos || insert_pos == cur_pos + 1) {
+            e->needs_redraw = 1;
+            return;
+        }
+    }
+
+    editor_tab_save_state(e); /* preservar la vista actual antes de barajar */
+
+    /* snapshot del grupo de cada pestana para la logica pura */
+    int groups[MAX_TABS];
+    for (int i = 0; i < e->tab_count; i++) groups[i] = e->tabs[i].group;
+
+    int new_order[MAX_TABS];
+    int moved = tab_reorder_move(groups, e->tab_count, tab, target_group,
+                                 insert_pos, &e->active_tab, e->group_active_tab,
+                                 MAX_GROUPS, new_order);
+
+    /* aplicar la permutacion a la tabla de pestanas (reordenar e->tabs[]). */
+    EditorTab tmp[MAX_TABS];
+    for (int i = 0; i < e->tab_count; i++) tmp[i] = e->tabs[new_order[i]];
+    for (int i = 0; i < e->tab_count; i++) e->tabs[i] = tmp[i];
+    /* la logica pura ya fijo groups[]; reflejar el grupo de la pestana movida. */
+    e->tabs[moved].group = target_group;
+
+    /* si la hoja origen se quedo sin pestanas, colapsarla (solo dock). */
+    if (src_group != target_group && e->dock.leaf_count > 1 &&
+        editor_group_tab_count(e, src_group) == 0)
+        editor_unsplit(e, src_group);
+
+    /* reparar la invariante de la hoja/flotante origen si sigue viva. */
+    if (dock_leaf_by_group(&e->dock, src_group) != DOCK_NONE ||
+        editor_float_by_group(e, src_group) >= 0)
+        editor_group_repair_active(e, src_group);
+
+    /* enfocar el grupo destino con la pestana movida como activa. */
+    e->active_group = target_group;
+    int dleaf = dock_leaf_by_group(&e->dock, target_group);
+    if (dleaf != DOCK_NONE) e->dock.focused_leaf = dleaf;
+    e->active_tab = moved;
+    e->group_active_tab[target_group] = moved;
+    if (e->dock.leaf_count <= 1) e->pane_active = 0;
+
     editor_tab_load_state(e);
     editor_update_lexer(e, 0);
     editor_sync_cursor(e);

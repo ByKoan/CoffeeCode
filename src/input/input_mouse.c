@@ -17,6 +17,7 @@
  * funciones @c on_mouse_* de aquí.
  */
 #include "input_internal.h"
+#include "editor/tab_reorder.h"
 
 #define FALLBACK_CHAR_W 8 /* ancho de carácter por defecto              */
 /* líneas desplazadas por "muesca" de rueda */
@@ -39,6 +40,9 @@ static int bottom_offset_at(Editor *e, int mx, int my);
 static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
                               int *col);
 static int click_tabbar(Editor *e, int mx, int my);
+/* Adelanto: on_mouse_motion lo usa durante el arrastre (definido mas abajo,
+ * junto al resto de helpers del reordenado de pestanas). */
+static void update_tab_reorder_target(Editor *e, int mx, int my);
 
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
@@ -739,6 +743,13 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
                 e->dragging_tab = 1; /* umbral superado: arrastre real */
         }
         if (e->dragging_tab) {
+            /* Sin Ctrl: comprobar si el cursor esta sobre una barra de pestanas
+             * para reordenar/insertar ahi (la barra manda sobre el dock).  Con
+             * Ctrl el destino es un flotante: no buscar barra. */
+            if (SDL_GetModState() & SDL_KMOD_CTRL)
+                e->tab_reorder_group = -1;
+            else
+                update_tab_reorder_target(e, mouse_x, mouse_y);
             e->needs_redraw = 1; /* repintar la guia de la zona destino */
             return;              /* arrastre en curso: consume el motion */
         }
@@ -877,14 +888,119 @@ static int click_tabbar(Editor *e, int mx, int my) {
     return 1;
 }
 
+/**
+ * @brief Recolecta los rects de las pestanas del grupo @p group en orden visual
+ *        desde el registro de hit-test del frame, y devuelve la Y de su barra.
+ *
+ * El render dibuja (y registra en UI_LIST_TAB por indice global) las pestanas de
+ * un grupo en su orden dentro de e->tabs[].  Aqui se filtran las de @p group y
+ * se ordenan por X de pantalla (que coincide con el orden de dibujo).
+ *
+ * @param e         Editor.
+ * @param group     group_id de la barra.
+ * @param[out] rects   Array destino (capacidad @p cap) con (x,w) de cada pestana.
+ * @param[out] gidx    Array paralelo con el indice GLOBAL de cada pestana.
+ * @param cap       Capacidad de @p rects / @p gidx.
+ * @param[out] bar_y   Y de la barra (top del rect de la primera pestana).
+ * @return Numero de pestanas recolectadas del grupo.
+ */
+static int collect_group_tab_rects(Editor *e, int group, TabRect *rects,
+                                    int *gidx, int cap, int *bar_y) {
+    int n = 0;
+    for (int i = 0; i < e->ui.indexed_count && n < cap; i++) {
+        const UiIndexed *u = &e->ui.indexed[i];
+        if (u->list != UI_LIST_TAB) continue;
+        int ti = u->idx; /* indice global de la pestana */
+        if (ti < 0 || ti >= e->tab_count) continue;
+        if (e->tabs[ti].group != group) continue;
+        rects[n].x = u->r.x;
+        rects[n].w = u->r.w;
+        gidx[n] = ti;
+        if (bar_y) *bar_y = u->r.y;
+        n++;
+    }
+    /* ordenar por X (orden visual); UI_LIST_TAB ya suele venir en orden, pero el
+     * registro mezcla varias barras, asi que se ordena por seguridad. */
+    for (int a = 1; a < n; a++) {
+        TabRect tr = rects[a];
+        int tg = gidx[a];
+        int b = a - 1;
+        while (b >= 0 && rects[b].x > tr.x) {
+            rects[b + 1] = rects[b];
+            gidx[b + 1] = gidx[b];
+            b--;
+        }
+        rects[b + 1] = tr;
+        gidx[b + 1] = tg;
+    }
+    return n;
+}
+
+/**
+ * @brief Durante un arrastre de pestana, detecta si el cursor esta sobre una
+ *        BARRA de pestanas y, en tal caso, anota el grupo + la posicion de
+ *        insercion (por X) y la geometria de la linea de insercion para el
+ *        render.  Si no hay barra bajo el cursor, deja tab_reorder_group = -1.
+ *
+ * La barra se identifica por la BANDA VERTICAL de los rects registrados en
+ * UI_LIST_TAB: cualquier grupo cuyas pestanas ocupen una franja [bar_y,
+ * bar_y+TAB_BAR_HEIGHT) que contenga @p my es candidato (asi se detecta tambien
+ * la zona a la derecha de la ultima pestana, donde no hay rect pero si barra).
+ */
+static void update_tab_reorder_target(Editor *e, int mx, int my) {
+    e->tab_reorder_group = -1; /* por defecto: sin objetivo de barra */
+
+    /* buscar la barra (grupo) cuya banda vertical contiene my; nos quedamos con
+     * la del grupo de la primera pestana cuyo rect contiene my en Y. */
+    int target_group = -1, bar_y = 0;
+    for (int i = 0; i < e->ui.indexed_count; i++) {
+        const UiIndexed *u = &e->ui.indexed[i];
+        if (u->list != UI_LIST_TAB) continue;
+        int ti = u->idx;
+        if (ti < 0 || ti >= e->tab_count) continue;
+        if (my >= u->r.y && my < u->r.y + u->r.h) {
+            target_group = e->tabs[ti].group;
+            bar_y = u->r.y;
+            break;
+        }
+    }
+    if (target_group < 0) return; /* el cursor no esta sobre ninguna barra */
+
+    /* recolectar las pestanas del grupo en orden visual y calcular la posicion
+     * de insercion bajo la X del cursor. */
+    TabRect rects[MAX_TABS];
+    int gidx[MAX_TABS];
+    int n = collect_group_tab_rects(e, target_group, rects, gidx, MAX_TABS,
+                                    &bar_y);
+    int pos = tab_reorder_insert_index(rects, n, mx);
+
+    /* X de la linea de insercion: borde izquierdo de la pestana en `pos`, o el
+     * borde derecho de la ultima si pos == n (al final). */
+    int line_x;
+    if (n == 0)
+        line_x = mx; /* barra sin pestanas: junto al cursor */
+    else if (pos < n)
+        line_x = rects[pos].x;
+    else
+        line_x = rects[n - 1].x + rects[n - 1].w;
+
+    e->tab_reorder_group = target_group;
+    e->tab_reorder_pos = pos;
+    e->tab_reorder_x = line_x;
+    e->tab_reorder_bar_y = bar_y;
+}
+
 int on_tab_drag_release(Editor *e, int mx, int my) {
     if (e->drag_tab < 0) return 0; /* no habia candidato */
     int was_dragging = e->dragging_tab;
     int tab = e->drag_tab;
+    int reorder_group = e->tab_reorder_group; /* objetivo de barra (o -1) */
+    int reorder_pos = e->tab_reorder_pos;
     /* limpiar el estado de arrastre ANTES de cualquier reorganizacion para no
      * arrastrar indices viejos si tab[] cambia (drop puede recolocar pestanas) */
     e->drag_tab = -1;
     e->dragging_tab = 0;
+    e->tab_reorder_group = -1; /* limpiar el objetivo de reordenado siempre */
     if (!was_dragging) return 0; /* fue un clic normal: ya lo gestiono el down */
 
     /* validar el indice por si tab_count cambio entre tanto */
@@ -897,6 +1013,15 @@ int on_tab_drag_release(Editor *e, int mx, int my) {
      * centrado en el cursor, en vez de acoplarla al arbol de dock. */
     if (SDL_GetModState() & SDL_KMOD_CTRL) {
         editor_float_detach_tab(e, tab, mx, my);
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Objetivo de BARRA: insertar/reordenar la pestana en esa posicion.  La barra
+     * manda sobre las zonas del dock (CENTER/borde). */
+    if (reorder_group >= 0) {
+        editor_tab_reorder(e, tab, reorder_group, reorder_pos);
+        editor_float_gc_empty(e); /* si salio de un flotante y lo dejo vacio */
         e->needs_redraw = 1;
         return 1;
     }

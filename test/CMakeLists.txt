@@ -81,6 +81,13 @@ add_coffee_test(test_float_dock dock/test_float_dock.c
 add_coffee_test(test_tab_membership editor/test_tab_membership.c
     "${CMAKE_SOURCE_DIR}/src/editor/tab_membership.c")
 
+# --- tab_reorder (puro: reordenado/insercion de pestanas en una barra) ------
+# Verifica el calculo de la posicion de insercion por X y el reordenado del
+# array de pestanas con remapeo de los indices guardados (active_tab +
+# group_active_tab[]).  Logica pura sobre enteros, sin SDL ni la struct Editor.
+add_coffee_test(test_tab_reorder editor/test_tab_reorder.c
+    "${CMAKE_SOURCE_DIR}/src/editor/tab_reorder.c")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.

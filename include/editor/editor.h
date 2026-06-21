@@ -302,6 +302,19 @@ typedef struct Editor {
     int drag_start_y;     /* Y del raton al pulsar                            */
     int drag_mx, drag_my; /* posicion actual del raton durante el arrastre   */
 
+    /* -- Reordenado/insercion de pestanas sobre una barra ------------------
+     * Durante un arrastre (dragging_tab=1), si el cursor cae sobre una BARRA de
+     * pestanas (la global, la de una hoja o la de un flotante), se anota aqui el
+     * grupo de esa barra y la posicion de insercion (0..n) bajo la X del cursor.
+     * Cuando hay objetivo de barra, la barra manda: soltar INSERTA la pestana en
+     * esa posicion (reordena si es el mismo grupo, mueve-e-inserta si es otro) y
+     * el render dibuja una linea vertical de insercion en lugar del overlay de
+     * zona del dock.  tab_reorder_group < 0 = sin objetivo de barra. */
+    int tab_reorder_group; /* group_id de la barra bajo el cursor, o -1       */
+    int tab_reorder_pos;   /* posicion de insercion (0..n) en ese grupo        */
+    int tab_reorder_x;     /* X (px) de la linea de insercion para el render   */
+    int tab_reorder_bar_y; /* Y de la barra destino (para la linea de insercion) */
+
     /* -- Override transitorio del área de contenido del editor --------------
      * Cuando el editor está dividido, el render dibuja CADA hoja haciendo su
      * pestaña activa la activa temporalmente y fijando aquí el sub-rectángulo
@@ -421,6 +434,15 @@ void editor_split(Editor *e);
  * colapsa (el hermano hereda el espacio).  Repara foco, pestana activa y estado.
  * No hace nada en zonas/objetivos invalidos o si el movimiento es un no-op. */
 void editor_tab_drop(Editor *e, int tab, int target_group, int zone);
+
+/* Reordena/inserta la pestana global @p tab para que quede en la posicion
+ * @p insert_pos DENTRO de @p target_group, reasignando su grupo si difiere.
+ * Reordena la tabla de pestanas y remapea los indices guardados (active_tab +
+ * group_active_tab[]) para que sigan apuntando a las MISMAS pestanas logicas.
+ * Si la hoja origen se queda vacia, la colapsa (el hermano hereda).  Enfoca el
+ * grupo destino con la pestana movida como activa.  Es la accion de soltar una
+ * pestana arrastrada SOBRE una barra de pestanas. */
+void editor_tab_reorder(Editor *e, int tab, int target_group, int insert_pos);
 
 /* Calcula la hoja y la zona de drop bajo el cursor (@p mx,@p my) para el
  * arrastre de pestanas.  Recorre las hojas del arbol (vale tambien con una sola
