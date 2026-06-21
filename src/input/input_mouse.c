@@ -1216,10 +1216,48 @@ static void start_text_selection(Editor *e, int mx, int my) {
  * e->ui; aquí se resuelven con ui_hit, se aplica el cambio y se persiste con
  * settings_save.
  */
+/**
+ * @brief Callback del diálogo de archivo para seleccionar imagen de fondo.
+ *
+ * SDL lo invoca de forma asíncrona cuando el usuario elige (o cancela) el
+ * diálogo. Si eligió un archivo, lo carga como textura de fondo y guarda la
+ * ruta en preferencias.
+ */
+static void SDLCALL bg_file_dialog_cb(void *userdata,
+                                       const char *const *filelist,
+                                       int filter) {
+    (void)filter;
+    Editor *e = (Editor *)userdata;
+    if (!filelist || !filelist[0]) { e->needs_redraw = 1; return; }
+    const char *path = filelist[0];
+    if (editor_load_background(e, path)) {
+        strncpy(e->settings.background_path, path,
+                sizeof e->settings.background_path - 1);
+        e->settings.background_path[sizeof e->settings.background_path - 1] = '\0';
+        e->settings.background_enabled = 1;
+        settings_save(&e->settings);
+    }
+    e->needs_redraw = 1;
+}
+
 static void handle_settings_click(Editor *e, int mx, int my) {
     Settings *s = &e->settings;
     if (ui_hit(&e->ui, UI_PREF_BACK, mx, my)) {
         e->settings_open = 0; /* volver al editor */
+    } else if (ui_hit(&e->ui, UI_PREF_RESET, mx, my)) {
+        /* Restablecer todas las preferencias a sus valores por defecto */
+        settings_defaults(s);
+
+        /* Reaplicar los ajustes que afectan al estado "en vivo" del editor */
+        e->autosave = s->autosave;
+        e->theme = theme_preset(s->theme); /* paleta de colores por defecto */
+        editor_reload_font(e); /* font_path/font_size vuelven a sus defaults */
+
+        /* Sin fondo personalizado por defecto: limpiar la textura si había */
+        editor_load_background(e, "");
+
+        e->font_list_scroll = 0; /* "Predeterminada" vuelve a ser la fila 0 */
+        settings_save(s);
     } else if (ui_hit(&e->ui, UI_PREF_THEME, mx, my)) {
         s->theme = (s->theme + 1) % THEME_COUNT; /* siguiente preset */
         e->theme = theme_preset(s->theme);       /* aplicar al instante */
@@ -1252,6 +1290,22 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
         editor_reload_font(e);
         settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_BG_ENABLED, mx, my)) {
+        /* Toggle: habilitar/deshabilitar fondo personalizado */
+        s->background_enabled = !s->background_enabled;
+        if (s->background_enabled && s->background_path[0])
+            editor_load_background(e, s->background_path);
+        else if (!s->background_enabled)
+            editor_load_background(e, ""); /* limpiar textura */
+        settings_save(s);
+    } else if (ui_hit(&e->ui, UI_PREF_BG_LOAD, mx, my)) {
+        /* Abrir diálogo de archivo para elegir imagen de fondo */
+        SDL_DialogFileFilter filters[] = {
+            {"Imagenes", "png;jpg;jpeg;bmp;gif;tiff;tif;webp"},
+            {"Todos los archivos", "*"},
+        };
+        SDL_ShowOpenFileDialog(bg_file_dialog_cb, e, e->window,
+                               filters, 2, NULL, false);
     } else {
         /* Lista de fuentes: un clic sobre una fila la selecciona. La fila 0 es
          * "Predeterminada" (vuelve a la fuente por defecto). */

@@ -20,6 +20,7 @@
 #include "render/render.h"
 #include "session/layout_persist.h"
 #include "utf8/utf8.h"
+#include <SDL3_image/SDL_image.h>
 
 /**
  * @brief Abre la fuente TrueType del editor desde disco.
@@ -212,29 +213,6 @@ void editor_update_lexer(Editor *e, int from_line) {
     int total = buf_line_count(e->buf);
     lexer_cache_resize(e->lex, total);
     lexer_cache_dirty(e->lex, from_line);
-
-    /* Notificar al servidor LSP del cambio de contenido.
-     * Solo se notifica si hay un cliente LSP activo para la pestaña actual.
-     * La solicitud de tokens semánticos se hace de forma "perezosa": solo si
-     * from_line == 0 (recarga completa) para no saturar el servidor con cada
-     * pulsación de tecla. La actualización continua se delega al sistema de
-     * dirty lines; los tokens LSP se refresca en cada recarga o guardado. */
-    if (e->tab_count > 0) {
-        EditorTab *t = &e->tabs[e->active_tab];
-        if (t->lsp_active && t->lsp.initialized) {
-            size_t txt_len = buf_length(e->buf);
-            char *txt = (char *)malloc(txt_len + 1);
-            if (txt) {
-                buf_get_text(e->buf, 0, txt_len, txt);
-                txt[txt_len] = '\0';
-                lsp_change(&t->lsp, txt);
-                free(txt);
-                /* Solicitar tokens solo en recargas completas para no bloquear
-                 * el hilo principal en cada keystroke */
-                if (from_line == 0) lsp_tokens_full(&t->lsp);
-            }
-        }
-    }
 }
 
 /**
@@ -420,6 +398,15 @@ int editor_init(Editor *e, const char *filepath) {
     e->theme = theme_preset(e->settings.theme); /* paleta de colores activa */
     fonts_scan(&e->fonts); /* fuentes del sistema para el selector */
 
+    /* fondo personalizado: inicializar y cargar si estaba habilitado */
+    e->background_texture = NULL;
+    e->background_w = 0;
+    e->background_h = 0;
+    if (e->settings.background_enabled && e->settings.background_path[0]) {
+        /* Se carga después de crear el renderer (más abajo); guardamos el flag
+         * para hacerlo en el momento correcto. Por ahora solo inicializamos. */
+    }
+
     /* -- Subsistema de vídeo de SDL -- */
 #ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_Init\n"); /* trazas de arranque solo en debug */
@@ -494,6 +481,11 @@ int editor_init(Editor *e, const char *filepath) {
 
     /* -- Panel explorador de archivos -- */
     ftree_init(&e->ftree);
+
+    /* Cargar fondo personalizado ahora que el renderer ya está creado */
+    if (e->settings.background_enabled && e->settings.background_path[0]) {
+        editor_load_background(e, e->settings.background_path);
+    }
 
     /* -- Pestañas --
      * Si se pasó un filepath, abrir ese archivo en la primera pestaña; si no,
@@ -723,6 +715,8 @@ void editor_free(Editor *e) {
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);
     fonts_free(&e->fonts);               /* lista de fuentes del sistema */
+    if (e->background_texture)
+        SDL_DestroyTexture(e->background_texture); /* liberar textura de fondo */
     if (e->font) TTF_CloseFont(e->font); /* liberar la fuente abierta */
     if (e->renderer)
         SDL_StopTextInput(e->window); /* desactivar eventos de texto */
@@ -747,65 +741,6 @@ void editor_free(Editor *e) {
  * actividad.
  */
 #define CURSOR_BLINK_MS 530 /* medio periodo del parpadeo del cursor (ms) */
-
-/**
- * @brief Sondea las instalaciones LSP en curso y arranca el servidor cuando
- *        el instalador termina con exito.
- *
- * Se llama una vez por frame desde editor_run(). Para cada pestana con una
- * instalacion en curso (lsp_install.status == LSP_INSTALL_RUNNING) llama a
- * lsp_install_poll(). Si la instalacion termino bien, reintenta lsp_start()
- * y arranca el cliente LSP normalmente.
- *
- * @param e Editor.
- */
-static void editor_poll_lsp_install(Editor *e) {
-    for (int i = 0; i < e->tab_count; i++) {
-        EditorTab *t = &e->tabs[i];
-        if (t->lsp_active) continue; /* ya tiene LSP activo */
-        if (t->lsp_install.status != LSP_INSTALL_RUNNING) continue;
-
-        LspInstallStatus st = lsp_install_poll(&t->lsp_install);
-
-        if (st == LSP_INSTALL_DONE) {
-            /* Instalacion completada: intentar arrancar el servidor LSP */
-            const char *lang = lsp_language_id_for_path(t->filepath);
-            const char *cmd = lang ? lsp_server_cmd_for_language(lang) : NULL;
-            if (cmd && t->filepath[0]) {
-                char ws_uri[512], ws_path[512];
-                strncpy(ws_path, t->filepath, sizeof(ws_path) - 1);
-                char *sep = strrchr(ws_path, '/');
-#ifdef _WIN32
-                char *sep2 = strrchr(ws_path, '\\');
-                if (!sep || (sep2 && sep2 > sep)) sep = sep2;
-#endif
-                if (sep)
-                    *sep = '\0';
-                else
-                    strncpy(ws_path, ".", sizeof(ws_path) - 1);
-                path_to_uri(ws_path, ws_uri, sizeof(ws_uri));
-
-                if (lsp_start(&t->lsp, cmd, ws_uri)) {
-                    size_t txt_len = buf_length(&t->buf);
-                    char *txt = (char *)malloc(txt_len + 1);
-                    if (txt) {
-                        buf_get_text(&t->buf, 0, txt_len, txt);
-                        txt[txt_len] = '\0';
-                        lsp_open(&t->lsp, t->filepath, lang, txt);
-                        free(txt);
-                        lsp_tokens_full(&t->lsp);
-                        t->lsp_active = 1;
-                        /* Forzar re-tokenizado de todas las lineas */
-                        lexer_cache_dirty(&t->lex, 0);
-                        e->needs_redraw = 1;
-                    }
-                }
-            }
-        }
-        /* Si fallo (LSP_INSTALL_FAILED) simplemente no se hace nada:
-         * el editor sigue funcionando con el resaltado estatico. */
-    }
-}
 
 void editor_frame_tasks(Editor *e) {
     /* Autoguardado: si está activado y hay cambios sin guardar, persistir
@@ -835,9 +770,6 @@ void editor_frame_tasks(Editor *e) {
         }
     }
 
-    /* Sondear instalaciones LSP en curso */
-    editor_poll_lsp_install(e);
-
     /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
      * Solo se marca needs_redraw cuando cambia el estado, evitando
      * redibujos innecesarios cuando el cursor no ha cambiado. */
@@ -865,7 +797,7 @@ void editor_run(Editor *e) {
                 input_handle_event(e, &ev);
         }
 
-        editor_frame_tasks(e); /* autoguardado + LSP + parpadeo del cursor */
+        editor_frame_tasks(e); /* autoguardado + parpadeo del cursor */
 
         /* Redibujar solo si algo cambió desde el último frame. */
         if (e->needs_redraw) {
@@ -875,4 +807,65 @@ void editor_run(Editor *e) {
             e->needs_redraw = 0;
         }
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * FONDO PERSONALIZADO
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/**
+ * @brief Carga una imagen como textura de fondo del editor.
+ *
+ * Usa SDL_image para soportar PNG, JPG, BMP, GIF (primer frame), TIFF, WebP,
+ * etc. La textura se sube a GPU una sola vez y se reutiliza en cada frame,
+ * sin coste de CPU adicional.
+ *
+ * Si @p path es NULL o vacío, libera la textura actual (queda sin fondo).
+ *
+ * @param e    Editor destino (debe tener e->renderer ya inicializado).
+ * @param path Ruta a la imagen. "" o NULL = limpiar el fondo actual.
+ * @return 1 si se cargó (o limpió) correctamente; 0 si falló la carga.
+ */
+int editor_load_background(Editor *e, const char *path) {
+    /* Si no hay ruta o está vacía, limpiar el fondo actual */
+    if (!path || !path[0]) {
+        if (e->background_texture) {
+            SDL_DestroyTexture(e->background_texture);
+            e->background_texture = NULL;
+            e->background_w = 0;
+            e->background_h = 0;
+        }
+        return 1;
+    }
+
+    /* Cargar la imagen con SDL_image */
+    SDL_Surface *surf = IMG_Load(path);
+    if (!surf) {
+        fprintf(stderr, "[CoffeeCode] No se pudo cargar la imagen de fondo: %s\n"
+                        "             Razón: %s\n", path, SDL_GetError());
+        return 0;
+    }
+
+    /* Destruir la textura anterior si existía */
+    if (e->background_texture) {
+        SDL_DestroyTexture(e->background_texture);
+        e->background_texture = NULL;
+    }
+
+    /* Convertir la superficie (CPU) a textura (GPU) */
+    e->background_texture = SDL_CreateTextureFromSurface(e->renderer, surf);
+    e->background_w = surf->w;
+    e->background_h = surf->h;
+    SDL_DestroySurface(surf);
+
+    if (!e->background_texture) {
+        fprintf(stderr, "[CoffeeCode] Error creando textura de fondo: %s\n",
+                SDL_GetError());
+        return 0;
+    }
+
+    fprintf(stdout, "[CoffeeCode] Fondo cargado: %s (%dx%d)\n",
+            path, e->background_w, e->background_h);
+    return 1;
 }

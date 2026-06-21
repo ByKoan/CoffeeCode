@@ -95,8 +95,11 @@ static int entry_cmp(const void *a, const void *b) {
  */
 static int scan_dir(FileTree *ft, const char *dirpath, int depth,
                     int insert_at) {
-    /* recoger primero en un buffer temporal */
-    FEntry tmp[1024];
+    /* recoger primero en un buffer temporal en el heap.
+     * FEntry pesa ~784 bytes, así que 1024 en pila serían ~803 KB —
+     * suficiente para provocar stack overflow en carpetas anidadas. */
+    FEntry *tmp = (FEntry *)malloc(1024 * sizeof(FEntry));
+    if (!tmp) return 0;
     int tmp_count = 0;
 
 #ifdef _WIN32
@@ -106,7 +109,7 @@ static int scan_dir(FileTree *ft, const char *dirpath, int depth,
     WIN32_FIND_DATAA fd;
     HANDLE h =
         FindFirstFileA(pattern, &fd); /* abre la enumeración del directorio */
-    if (h == INVALID_HANDLE_VALUE) return 0; /* directorio inaccesible */
+    if (h == INVALID_HANDLE_VALUE) { free(tmp); return 0; } /* directorio inaccesible */
     do {
         /* saltar las entradas especiales "." (actual) y ".." (padre) */
         if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
@@ -127,7 +130,7 @@ static int scan_dir(FileTree *ft, const char *dirpath, int depth,
     FindClose(h); /* cerrar el handle de enumeración */
 #else
     DIR *dir = opendir(dirpath);
-    if (!dir) return 0; /* directorio inaccesible */
+    if (!dir) { free(tmp); return 0; } /* directorio inaccesible */
     struct dirent *de;
     while ((de = readdir(dir)) != NULL) {
         if (de->d_name[0] == '.') continue; /* ocultar archivos ocultos */
@@ -160,7 +163,7 @@ static int scan_dir(FileTree *ft, const char *dirpath, int depth,
     qsort(tmp, (size_t)tmp_count, sizeof(FEntry), entry_cmp);
 
     int to_insert = tmp_count;
-    if (to_insert <= 0) return 0; /* directorio vacío: nada que insertar */
+    if (to_insert <= 0) { free(tmp); return 0; } /* directorio vacío */
 
     int count = FTN(ft);
     int existing_after =
@@ -168,7 +171,10 @@ static int scan_dir(FileTree *ft, const char *dirpath, int depth,
     if (existing_after < 0) existing_after = 0;
 
     /* crecer (sin límite fijo) y abrir hueco en insert_at */
-    if (!vec_reserve(&ft->entries, (size_t)(count + to_insert))) return 0;
+    if (!vec_reserve(&ft->entries, (size_t)(count + to_insert))) {
+        free(tmp);
+        return 0;
+    }
     /* desplazar a la derecha lo que había tras insert_at, dejando el hueco */
     if (existing_after > 0)
         memmove(&FT(ft)[insert_at + to_insert], &FT(ft)[insert_at],
@@ -177,6 +183,7 @@ static int scan_dir(FileTree *ft, const char *dirpath, int depth,
     memcpy(&FT(ft)[insert_at], tmp, (size_t)to_insert * sizeof(FEntry));
     ft->entries.len = (size_t)(count + to_insert);
 
+    free(tmp);
     return to_insert;
 }
 

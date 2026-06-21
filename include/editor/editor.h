@@ -11,8 +11,6 @@
 #include "filetree/filetree.h"
 #include "fonts/fonts.h"
 #include "lexer/lexer.h"
-#include "lsp/lsp.h"
-#include "lsp/lsp_install.h"
 #include "panel/panel.h"
 #include "render/theme.h"
 #include "render/ui_hit.h"
@@ -67,10 +65,6 @@ typedef struct {
     LexerCache lex;        /* cache de tokens por línea (resaltado)          */
     UndoStack undo;        /* pila de undo/redo de esta pestaña              */
     const Highlighter *hl; /* resaltador según el lenguaje del archivo */
-    LspClient lsp;  /* cliente LSP para este archivo (puede estar inactivo) */
-    int lsp_active; /* 1 si el cliente LSP está iniciado y en uso */
-    LspInstallJob
-        lsp_install;    /* trabajo de instalación automática (si procede) */
     char filepath[512]; /* ruta del archivo, o "" si es nuevo sin guardar */
     int modified;       /* 1 si hay cambios sin guardar                   */
     long loaded_mtime;  /* mtime del fichero en la última carga desde disco */
@@ -399,6 +393,11 @@ typedef struct Editor {
      * group_id de una ventana desprendida = esa ventana tiene el foco.  Con
      * detached_count==0 no se usa: el teclado va siempre a la principal. */
     int detached_focus_group;
+
+    /* fondo personalizado del editor */
+    SDL_Texture *background_texture; /**< Textura de imagen de fondo (NULL si no hay). */
+    int background_w;                /**< Ancho original de la imagen de fondo.         */
+    int background_h;                /**< Alto original de la imagen de fondo.          */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -417,8 +416,8 @@ void editor_free(Editor *e);
 void editor_run(Editor *e);
 
 /* Tareas periodicas de un Editor que se ejecutan una vez por iteracion del bucle
- * (independientes de eventos): autoguardado, sondeo de instalaciones LSP en
- * curso y parpadeo del cursor.  La extrae el bucle multi-ventana (app_run) para
+ * (independientes de eventos): autoguardado y parpadeo del cursor.  La extrae
+ * el bucle multi-ventana (app_run) para
  * correrlas por CADA ventana; editor_run la usa para la suya. */
 void editor_frame_tasks(Editor *e);
 
@@ -434,7 +433,7 @@ int editor_init_secondary(Editor *e, Editor *primary, int w, int h);
 
 /* Mueve TODAS las pestanas (structs ::EditorTab) del grupo @p src_group del
  * editor @p src al editor @p dst (a su hoja de dock con foco), preservando su
- * almacenamiento (buf/lex/undo/lsp): es una copia superficial del struct + limpieza
+ * almacenamiento (buf/lex/undo): es una copia superficial del struct + limpieza
  * del slot origen, sin re-cargar del disco.  Repara en @p src los indices
  * guardados (active_tab + group_active_tab[]) y colapsa su hoja origen si queda
  * vacia; en @p dst enfoca la hoja destino con la pestana activa del grupo origen
@@ -442,7 +441,7 @@ int editor_init_secondary(Editor *e, Editor *primary, int w, int h);
  * grupo origen esta vacio o no hay hoja destino en @p dst. */
 void editor_transfer_group(Editor *src, int src_group, Editor *dst);
 
-/* Mueve UNA pestana (struct ::EditorTab, con su buf/lex/undo/lsp) de indice
+/* Mueve UNA pestana (struct ::EditorTab, con su buf/lex/undo) de indice
  * GLOBAL @p tab del editor @p src al editor @p dst, decidiendo la hoja y la zona
  * de drop a partir de las coordenadas LOCALES (@p dst_mx,@p dst_my) en la ventana
  * receptora (igual que editor_tab_drop pero entre ventanas distintas).  Es una
@@ -663,3 +662,16 @@ void editor_detached_handle_event(Editor *e, int di, void *ev);
  * renderer+window.  No deja pestanas huerfanas ni grupos colgantes.  No hace nada
  * si @p di es invalido. */
 void editor_detached_close(Editor *e, int di);
+
+/* -- Fondo personalizado --------------------------------------------------- */
+/**
+ * @brief Carga una imagen como textura de fondo del editor.
+ *
+ * Si @p path está vacío o es NULL, libera el fondo actual. La imagen se carga
+ * con SDL_image y se sube a GPU como textura para un renderizado eficiente.
+ *
+ * @param e    Editor destino.
+ * @param path Ruta a la imagen (PNG, JPG, BMP, etc.). "" o NULL limpia el fondo.
+ * @return 1 si se cargó (o limpió) exitosamente; 0 en caso de error.
+ */
+int editor_load_background(Editor *e, const char *path);

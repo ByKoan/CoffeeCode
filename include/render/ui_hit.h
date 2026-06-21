@@ -45,6 +45,7 @@ typedef enum {
     UI_SCROLLBAR, /**< Pulgar de la barra de scroll vertical.      */
     /* Pantalla de preferencias */
     UI_PREF_BACK,       /**< Botón "← Volver" de preferencias.        */
+    UI_PREF_RESET,      /**< Botón "Restablecer valores por defecto". */
     UI_PREF_AUTOSAVE,   /**< Toggle de autoguardado.                  */
     UI_PREF_LINENUM,    /**< Toggle de números de línea.              */
     UI_PREF_HLLINE,     /**< Toggle de resaltar la línea activa.      */
@@ -56,6 +57,8 @@ typedef enum {
     UI_PREF_FONTSZ_DEC, /**< Stepper tamaño de fuente: −.             */
     UI_PREF_FONTSZ_INC, /**< Stepper tamaño de fuente: +.             */
     UI_PREF_FONT_LIST,  /**< Área de la lista de fuentes (para la rueda). */
+    UI_PREF_BG_ENABLED, /**< Toggle para habilitar/deshabilitar fondo personalizado. */
+    UI_PREF_BG_LOAD,    /**< Botón para cargar imagen de fondo.           */
     UI_STATUS_ENC,      /**< Codificación en la barra de estado (clic).  */
     UI_ENC_MODE_REOPEN, /**< Botón "Reabrir con" del popup.             */
     UI_ENC_MODE_SAVE,   /**< Botón "Guardar como" del popup.            */

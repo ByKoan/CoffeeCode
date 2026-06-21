@@ -57,7 +57,7 @@ void app_init(App *a, Editor *primary);
 
 /**
  * @brief Bucle principal multi-ventana: espera eventos, los enruta por ventana,
- *        autoguarda, sondea LSP/parpadeo y redibuja cada ventana que lo pida.
+ *        autoguarda, parpadeo del cursor y redibuja cada ventana que lo pida.
  *
  * Con una sola ventana es equivalente a @c editor_run sobre la principal.  Con
  * varias, cada evento se entrega a la ventana cuyo @c SDL_WindowID coincide; el
