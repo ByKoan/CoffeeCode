@@ -104,6 +104,14 @@ add_coffee_test(test_tab_reorder editor/test_tab_reorder.c
 add_coffee_test(test_tabmove app/test_tabmove.c
     "${CMAKE_SOURCE_DIR}/src/app/tabmove.c")
 
+# --- winhit (puro: que ventana del escritorio contiene un punto, sin SDL) ----
+# Verifica la geometria de "punto dentro del rect de una ventana" y la busqueda
+# de la ventana bajo el cursor global (multi-ventana): la misma aritmetica que
+# app_window_at_global aplica sobre los SDL_Window reales para decidir el destino
+# de una pestana arrastrada fuera de su ventana (mover a otra o tear-off).
+add_coffee_test(test_winhit app/test_winhit.c
+    "${CMAKE_SOURCE_DIR}/src/app/winhit.c")
+
 # --- layout_persist (puro: (de)serializacion de la disposicion, sin SDL) ----
 # Verifica el round-trip de la struct POD LayoutData (pestanas, arbol de dock,
 # flotantes y tamanos de la UI) a/desde texto, y la robustez ante texto

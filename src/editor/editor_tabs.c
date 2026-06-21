@@ -1406,6 +1406,81 @@ void editor_transfer_group(Editor *src, int src_group, Editor *dst) {
     editor_focus_dst_group(dst, dst_group);
 }
 
+/* Tras mover UNA pestana al grupo @p dst_group de @p dst, la recoloca segun la
+ * zona de drop @p zone dentro de @p dst: CENTER la deja en ese grupo; las zonas
+ * de borde dividen la hoja destino y mueven la pestana a la hoja nueva.  @p tab
+ * es el indice GLOBAL en dst de la pestana recien movida.  Devuelve el group_id
+ * final donde quedo la pestana (puede diferir de @p dst_group si hubo division),
+ * o @p dst_group si no se pudo dividir (cae a CENTER).  Misma logica de borde que
+ * editor_tab_drop, pero la pestana YA esta en @p dst. */
+static int editor_place_tab_zone(Editor *dst, int tab, int dst_group, int zone) {
+    if (zone == DOCK_DZ_NONE || zone == DOCK_DZ_CENTER) return dst_group;
+
+    int target_leaf = dock_leaf_by_group(&dst->dock, dst_group);
+    if (target_leaf == DOCK_NONE) return dst_group;
+    if (dst->dock.leaf_count >= DOCK_MAX_LEAVES) return dst_group; /* tope */
+    int new_group = dock_alloc_group_id(&dst->dock);
+    if (new_group == DOCK_NONE) return dst_group; /* sin ids libres */
+
+    DockOrient orient = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_RIGHT)
+                            ? DOCK_VERTICAL
+                            : DOCK_HORIZONTAL;
+    int new_first = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_TOP);
+    int new_leaf = dock_split_leaf_side(&dst->dock, target_leaf, orient,
+                                        new_group, new_first);
+    if (new_leaf == DOCK_NONE) return dst_group; /* no se pudo dividir */
+
+    dst->tabs[tab].group = new_group;             /* mover a la hoja nueva */
+    dst->group_active_tab[new_group] = tab;
+    return new_group;
+}
+
+void editor_transfer_tab(Editor *src, int tab, Editor *dst, int dst_mx,
+                         int dst_my) {
+    if (!src || !dst || src == dst) return;
+    if (tab < 0 || tab >= src->tab_count) return;
+
+    /* hoja + zona destino bajo el cursor en la ventana receptora.  Si el cursor
+     * no cae sobre ninguna hoja (raro: borde de la ventana), usar la hoja con
+     * foco de dst y zona CENTER. */
+    int dst_group = -1, zone = DOCK_DZ_NONE;
+    if (!editor_drag_target(dst, dst_mx, dst_my, &dst_group, &zone, NULL) ||
+        dst_group < 0 || zone == DOCK_DZ_NONE) {
+        dst_group = editor_dst_focus_group(dst);
+        zone = DOCK_DZ_CENTER;
+    }
+    if (dst_group < 0) return; /* dst sin hojas (no deberia pasar) */
+
+    if (src->tab_count > 0) editor_tab_save_state(src);
+    if (dst->tab_count > 0) editor_tab_save_state(dst);
+
+    int src_group = src->tabs[tab].group; /* hoja origen de la pestana */
+
+    /* mover la pestana (copia superficial del struct + limpieza del slot src). */
+    int di = editor_move_tab_between(src, tab, dst, dst_group);
+    if (di < 0) {                /* destino lleno: deshacer (nada movido) y salir */
+        editor_src_refocus_after_loss(src); /* re-enlazar la vista de src */
+        return;
+    }
+    dst->group_active_tab[dst_group] = di;
+
+    /* aplicar la zona de drop en dst (CENTER deja en dst_group; borde divide). */
+    int final_group = editor_place_tab_zone(dst, di, dst_group, zone);
+
+    /* reparar el origen: colapsar su hoja si quedo vacia (y src estaba dividido)
+     * y re-enfocar sobre una pestana viva (o el estado de bienvenida). */
+    if (src->dock.leaf_count > 1 &&
+        editor_group_tab_count(src, src_group) == 0 &&
+        dock_leaf_by_group(&src->dock, src_group) != DOCK_NONE) {
+        editor_unsplit(src, src_group);
+    }
+    editor_src_refocus_after_loss(src);
+    src->needs_redraw = 1;
+
+    /* enfocar dst sobre la hoja final con la pestana movida como activa. */
+    editor_focus_dst_group(dst, final_group);
+}
+
 void editor_merge_all(Editor *src, Editor *dst) {
     if (!src || !dst || src->tab_count == 0) return;
 

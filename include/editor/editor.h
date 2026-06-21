@@ -428,6 +428,20 @@ int editor_init_secondary(Editor *e, Editor *primary, int w, int h);
  * grupo origen esta vacio o no hay hoja destino en @p dst. */
 void editor_transfer_group(Editor *src, int src_group, Editor *dst);
 
+/* Mueve UNA pestana (struct ::EditorTab, con su buf/lex/undo/lsp) de indice
+ * GLOBAL @p tab del editor @p src al editor @p dst, decidiendo la hoja y la zona
+ * de drop a partir de las coordenadas LOCALES (@p dst_mx,@p dst_my) en la ventana
+ * receptora (igual que editor_tab_drop pero entre ventanas distintas).  Es una
+ * copia superficial del struct + limpieza del slot origen (sin recargar del
+ * disco).  Zona CENTER: la inserta en esa hoja; zona de borde: divide la hoja
+ * destino y la coloca en la hoja nueva.  Repara @p src (colapsa su hoja si quedo
+ * vacia y re-enfoca, o deja la bienvenida si se quedo sin pestanas) y enfoca
+ * @p dst sobre la pestana movida.  No hace nada si @p src==@p dst, el indice es
+ * invalido o @p dst no tiene sitio (MAX_TABS).  Lo usa el arrastre de una pestana
+ * a OTRA ventana. */
+void editor_transfer_tab(Editor *src, int tab, Editor *dst, int dst_mx,
+                         int dst_my);
+
 /* Mueve TODAS las pestanas de @p src (de cualquiera de sus grupos) a la hoja de
  * dock con foco de @p dst, aplanandolas en ese grupo.  Es la fusion de una
  * ventana secundaria de vuelta a la principal al cerrarla: tras esto @p src queda

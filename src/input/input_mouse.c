@@ -750,8 +750,13 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         if (!e->dragging_tab) {
             int dx = mouse_x - e->drag_start_x;
             int dy = mouse_y - e->drag_start_y;
-            if (dx * dx + dy * dy > TAB_DRAG_THRESHOLD * TAB_DRAG_THRESHOLD)
+            if (dx * dx + dy * dy > TAB_DRAG_THRESHOLD * TAB_DRAG_THRESHOLD) {
                 e->dragging_tab = 1; /* umbral superado: arrastre real */
+                /* capturar el raton para seguir recibiendo motion/up aunque el
+                 * cursor salga de esta ventana (a otra ventana o al escritorio):
+                 * permite mover la pestana entre ventanas y el tear-off. */
+                SDL_CaptureMouse(true);
+            }
         }
         if (e->dragging_tab) {
             /* Sin Ctrl: comprobar si el cursor esta sobre una barra de pestanas
@@ -1012,12 +1017,24 @@ int on_tab_drag_release(Editor *e, int mx, int my) {
     e->drag_tab = -1;
     e->dragging_tab = 0;
     e->tab_reorder_group = -1; /* limpiar el objetivo de reordenado siempre */
+    /* fin del arrastre: soltar la captura global del raton (la pidio el motion al
+     * superar el umbral).  Se hace siempre que hubo arrastre, gane quien gane. */
+    if (was_dragging) SDL_CaptureMouse(false);
     if (!was_dragging) return 0; /* fue un clic normal: ya lo gestiono el down */
 
     /* validar el indice por si tab_count cambio entre tanto */
     if (tab < 0 || tab >= e->tab_count) {
         e->needs_redraw = 1;
         return 1;
+    }
+
+    /* MULTI-VENTANA: si el cursor (global) cae sobre OTRA ventana o fuera de toda
+     * ventana, la App mueve la pestana ahi / crea una ventana nueva (tear-off) y
+     * devuelve 1.  Si el drop es en ESTA misma ventana devuelve 0 y seguimos con
+     * la logica local de abajo (cero regresion con una sola ventana). */
+    {
+        App *app = app_current();
+        if (app && app_drop_tab_cross_window(app, e, tab)) return 1;
     }
 
     /* Con Ctrl pulsado al soltar: DESPRENDER la pestana a un panel flotante nuevo

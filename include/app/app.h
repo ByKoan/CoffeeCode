@@ -38,6 +38,7 @@ typedef struct App {
     Editor *windows[APP_MAX_WINDOWS]; /**< instancias de Editor (una por ventana) */
     int window_count;                 /**< numero de ventanas vivas (>= 1)        */
     int focused;                      /**< indice de la ventana con foco teclado   */
+    int prev_focused;                 /**< ventana enfocada ANTES de la actual     */
 } App;
 
 /* -- Ciclo de vida -------------------------------------------------------- */
@@ -95,6 +96,45 @@ void app_free(App *a);
  * @param fi Indice del flotante a desprender.
  */
 void app_detach_float_to_window(App *a, Editor *e, int fi);
+
+/**
+ * @brief Indice de la ventana de la App cuyo rect de PANTALLA contiene el punto
+ *        global (@p gx,@p gy), o -1 si el punto no cae sobre ninguna ventana
+ *        (escritorio).
+ *
+ * Calcula el rect de cada ventana con @c SDL_GetWindowPosition + win_w/h y
+ * delega la geometria pura en @c win_at_point (probada en headless).  La ventana
+ * ENFOCADA se prueba primero para que, en caso de solape, gane la que esta al
+ * frente.
+ *
+ * @param a  App con las ventanas vivas.
+ * @param gx X global del cursor (px de pantalla).
+ * @param gy Y global del cursor (px de pantalla).
+ * @return Indice de ventana en @c windows[], o -1 si ninguna.
+ */
+int app_window_at_global(App *a, int gx, int gy);
+
+/**
+ * @brief Resuelve el SOLTAR de una pestana arrastrada teniendo en cuenta TODAS
+ *        las ventanas: la mueve a otra ventana o crea una nueva (tear-off).
+ *
+ * Toma la posicion GLOBAL del cursor y pregunta @c app_window_at_global:
+ *  - misma ventana origen @p src  -> devuelve 0 (el llamante hace el drop local).
+ *  - otra ventana existente       -> mueve la pestana @p tab de @p src a esa
+ *                                    ventana (en la hoja/zona bajo el cursor),
+ *                                    cierra @p src si era secundaria y quedo
+ *                                    vacia, y devuelve 1.
+ *  - fuera de toda ventana         -> crea una ventana NUEVA en la posicion del
+ *                                    cursor con la pestana movida (tear-off),
+ *                                    cierra @p src si procede, y devuelve 1.
+ *
+ * @param a   App en ejecucion (no NULL).
+ * @param src Editor origen de la pestana (una de las ventanas de @p a).
+ * @param tab Indice GLOBAL de la pestana arrastrada en @p src.
+ * @return 1 si el drop fue cross-window/tear-off (ya gestionado); 0 si es en la
+ *         misma ventana origen (el llamante debe aplicar el drop local).
+ */
+int app_drop_tab_cross_window(App *a, Editor *src, int tab);
 
 /**
  * @brief Devuelve la App global activa (la que esta corriendo @c app_run), o
