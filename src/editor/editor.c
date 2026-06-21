@@ -870,6 +870,14 @@ int editor_load_background(Editor *e, const char *path) {
     e->background_h = surf->h;
     SDL_DestroySurface(surf);
 
+    /* Forzar el modo de mezcla alpha: SDL_CreateTextureFromSurface deja la
+     * textura en BLENDMODE_NONE cuando la imagen es RGB opaca (sin canal
+     * alpha), y en ese estado SDL_SetTextureAlphaMod NO surte efecto (la imagen
+     * se dibuja siempre opaca).  Con BLEND, la opacidad configurada por el
+     * usuario se aplica al pintar el fondo. */
+    if (e->background_texture)
+        SDL_SetTextureBlendMode(e->background_texture, SDL_BLENDMODE_BLEND);
+
     if (!e->background_texture) {
         fprintf(stderr, "[CoffeeCode] Error creando textura de fondo: %s\n",
                 SDL_GetError());
