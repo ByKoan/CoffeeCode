@@ -566,26 +566,26 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param mx Coordenada X del clic en píxeles.
  * @param my Coordenada Y del clic en píxeles.
  */
-static void click_tabbar(Editor *e, int mx, int my) {
+static int click_tabbar(Editor *e, int mx, int my) {
     /* Botón "+" del editor dividido (por hoja): crea una pestaña en esa hoja. */
     if (e->dock.leaf_count > 1) {
         int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
         if (gnew >= 0) {
             editor_focus_group(e, gnew); /* enfocar ese grupo */
             editor_tab_new(e);           /* nueva pestaña en él */
-            return;
+            return 1;
         }
     }
     if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
         editor_tab_new(e); /* botón "+": pestaña nueva */
-        return;
+        return 1;
     }
     /* La geometría de cada pestaña y de su "x" la registró el render por
      * índice; el botón de cerrar está dentro de la pestaña, así que se
      * comprueba antes. */
     int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
     int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
-    if (close_i < 0 && tab_i < 0) return; /* no se pulsó ninguna pestaña */
+    if (close_i < 0 && tab_i < 0) return 0; /* no se pulsó ninguna pestaña */
 
     if (close_i >= 0) {           /* "x": cerrar esa pestaña */
         editor_tab_save_state(e); /* guardar estado de la pestaña actual */
@@ -605,6 +605,7 @@ static void click_tabbar(Editor *e, int mx, int my) {
                            ? e->tabs[e->active_tab].filepath
                            : "CoffeeCode - Sin título";
     SDL_SetWindowTitle(e->window, path);
+    return 1;
 }
 
 /**
@@ -1066,11 +1067,12 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* Barra de pestañas */
-    if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
-        click_tabbar(e, mx, my);
-        return;
-    }
+    /* Barra de pestañas: global en modo simple, por-hoja en modo dividido.  Sus
+     * controles (pestañas, "x", "+") se registran en su rect real, asi que basta
+     * preguntar si el clic cae en alguno; click_tabbar devuelve 0 si no.  Esto
+     * cubre la barra de pestañas de CADA panel este donde este (p.ej. la del
+     * panel inferior de un split horizontal, fuera del rango de la barra global). */
+    if (click_tabbar(e, mx, my)) return;
 
     /* Botón "Archivo" en la navbar (geometría registrada por render) */
     if (ui_hit(&e->ui, UI_BTN_FILE, mx, my)) {
