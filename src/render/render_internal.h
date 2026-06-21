@@ -48,11 +48,13 @@ void render_menu(Editor *e);     /* desplegable "Archivo"        */
 void render_filetree(Editor *e); /* panel lateral abierto        */
 void render_filetree_toggle_closed(Editor *e); /* botón para abrir el panel */
 void render_tabbar(Editor *e);    /* barra de pestañas + botón "+"*/
-/* Barra de pestañas de UN grupo del editor dividido: dibuja solo las pestañas
- * cuyo tab.group == @p group dentro de la franja [pane_left, pane_right) y
- * registra su geometría (UI_LIST_TAB / UI_LIST_TAB_CLOSE por índice global, y
- * UI_LIST_SPLIT_NEW por número de grupo para el botón "+"). */
-void render_tabbar_group(Editor *e, int group, int pane_left, int pane_right);
+/* Barra de pestañas de UNA hoja del editor dividido: dibuja solo las pestañas
+ * cuyo tab.group == @p group dentro de la franja [pane_left, pane_right) y a la
+ * altura @p bar_y (borde superior del rect de la hoja), y registra su geometría
+ * (UI_LIST_TAB / UI_LIST_TAB_CLOSE por índice global, y UI_LIST_SPLIT_NEW por
+ * número de grupo para el botón "+"). */
+void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
+                         int pane_right);
 void render_find_bar(Editor *e);  /* barra de búsqueda (Ctrl+F)   */
 void render_shortcuts(Editor *e); /* banda de atajos (badges)     */
 void render_scrollbar(Editor *e, int left_offset); /* scroll vertical */

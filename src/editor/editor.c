@@ -495,12 +495,13 @@ int editor_init(Editor *e, const char *filepath) {
      * buf/lex/undo a NULL: apuntarán al almacenamiento de la pestaña activa. */
     e->tab_count = 0;
     e->active_tab = 0;
-    /* Editor sin dividir por defecto: un único grupo a pantalla completa. */
-    e->group_count = 1;
+    /* Editor sin dividir por defecto: una única hoja a pantalla completa
+     * (group_id 0).  El árbol de dock arranca con esa hoja como raíz. */
+    dock_init_single(&e->dock, 0);
     e->active_group = 0;
-    e->group_active_tab[0] = e->group_active_tab[1] = 0;
-    e->split_x = 0;
     e->pane_active = 0;
+    e->dock_drag_split = DOCK_NONE; /* sin divisor de dock en arrastre */
+    e->dock_drag_orient = DOCK_VERTICAL;
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;

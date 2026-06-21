@@ -15,9 +15,9 @@
 #include "editor_internal.h"
 #include "ext/ext_host.h"
 
-/* Colapsa la división del editor a un solo grupo (definida más abajo); la usa
- * editor_tab_close al quedarse un grupo sin pestañas. */
-static void editor_unsplit(Editor *e);
+/* Colapsa una hoja vacía del árbol de dock (definida más abajo); la usa
+ * editor_tab_close al quedarse una hoja sin pestañas. */
+static void editor_unsplit(Editor *e, int group);
 
 /* Notifica al extension host (si existe) que la pestana activa cambio: fija el
  * buffer activo y emite COFFEE_EVENT_FILE_OPEN con la ruta del archivo. */
@@ -430,39 +430,46 @@ void editor_tab_close(Editor *e) {
         e->cursor_line = e->cursor_col = 0;
         e->scroll_line = e->scroll_col = 0;
         editor_sel_clear(e);
-        /* sin pestañas no hay división posible: volver a un solo grupo */
-        e->group_count = 1;
+        /* sin pestañas no hay división posible: volver a una sola hoja */
+        dock_init_single(&e->dock, 0);
         e->active_group = 0;
-        e->split_x = 0;
         e->pane_active = 0;
-        e->group_active_tab[0] = e->group_active_tab[1] = 0;
+        for (int g = 0; g < MAX_GROUPS; g++) e->group_active_tab[g] = 0;
         e->needs_redraw = 1;
         return;
     }
 
-    /* Si el editor está dividido, comprobar si el grupo de la pestaña cerrada se
-     * quedó sin pestañas; en ese caso colapsar la división. */
-    if (e->group_count == 2) {
+    /* Si el editor está dividido, comprobar si la hoja de la pestaña cerrada se
+     * quedó sin pestañas; en ese caso colapsar esa hoja (el hermano hereda). */
+    if (e->dock.leaf_count > 1) {
         int remaining = 0;
         for (int i = 0; i < e->tab_count; i++)
             if (e->tabs[i].group == closed_group) remaining++;
         if (remaining == 0) {
-            /* ese grupo desaparece: todo vuelve a un solo grupo a pantalla
-             * completa, enfocando una pestaña válida del que sobrevive */
-            editor_unsplit(e);
-            if (e->active_tab >= e->tab_count) e->active_tab = e->tab_count - 1;
-            e->group_active_tab[0] = e->active_tab;
+            /* esa hoja desaparece: su hermano ocupa el espacio.  Enfocar una
+             * pestaña válida de las que sobreviven (la que el árbol dejó con el
+             * foco tras colapsar). */
+            editor_unsplit(e, closed_group);
+            int focus_group = e->dock.nodes[e->dock.focused_leaf].group_id;
+            e->active_group = focus_group;
+            int next = -1;
+            for (int i = 0; i < e->tab_count; i++)
+                if (e->tabs[i].group == focus_group) { next = i; break; }
+            if (next < 0) next = e->tab_count - 1; /* defensivo */
+            e->active_tab = next;
+            e->group_active_tab[focus_group] = next;
             editor_tab_load_state(e);
             editor_update_lexer(e, 0);
             editor_sync_cursor(e);
             e->needs_redraw = 1;
             return;
         }
-        /* el grupo sobrevive: elegir otra de SUS pestañas como activa */
+        /* la hoja sobrevive: elegir otra de SUS pestañas como activa */
         int next = -1;
         for (int i = 0; i < e->tab_count; i++)
             if (e->tabs[i].group == closed_group) { next = i; break; }
         e->active_group = closed_group;
+        e->dock.focused_leaf = dock_leaf_by_group(&e->dock, closed_group);
         e->active_tab = next;
         e->group_active_tab[closed_group] = next;
         editor_tab_load_state(e);
@@ -472,9 +479,9 @@ void editor_tab_close(Editor *e) {
         return;
     }
 
-    /* Caso sin división (un solo grupo): comportamiento de siempre. */
+    /* Caso sin división (una sola hoja): comportamiento de siempre. */
     if (e->active_tab >= e->tab_count) e->active_tab = e->tab_count - 1;
-    e->group_active_tab[0] = e->active_tab;
+    e->group_active_tab[e->active_group] = e->active_tab;
     editor_tab_load_state(e);
     editor_update_lexer(e, 0);
     editor_sync_cursor(e);
@@ -504,7 +511,27 @@ void editor_tab_switch(Editor *e, int i) {
     e->needs_redraw = 1;
 }
 
-/* -- División del editor (split panes) ------------------------------------- */
+/* -- División del editor (árbol de dock) ----------------------------------- */
+
+DockRect editor_dock_area(Editor *e) {
+    /* horizontal: tras el explorador (o su botón) y antes del panel de ext. */
+    int left = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    int right = e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
+    /* vertical: bajo la navbar y sobre el panel inferior / status / atajos.
+     * El borde superior incluye la franja de la barra de pestañas de cada
+     * hoja (cada hoja dibuja la suya en su propio borde superior). */
+    int top = NAVBAR_HEIGHT;
+    int bottom_h = (e->bottom_panel_open ? e->bottom_panel_h : 0);
+    int bottom = e->win_h - STATUS_HEIGHT - editor_shortcut_h(e) - bottom_h;
+    DockRect r;
+    r.x = left;
+    r.y = top;
+    r.w = right - left;
+    r.h = bottom - top;
+    if (r.w < 0) r.w = 0;
+    if (r.h < 0) r.h = 0;
+    return r;
+}
 
 void editor_render_bind_tab(Editor *e, int idx) {
     if (idx < 0 || idx >= e->tab_count) return;
@@ -528,12 +555,14 @@ void editor_render_bind_tab(Editor *e, int idx) {
 }
 
 void editor_focus_group(Editor *e, int g) {
-    if (g < 0 || g >= e->group_count) return; /* grupo fuera de rango */
+    int leaf = dock_leaf_by_group(&e->dock, g);
+    if (leaf == DOCK_NONE) return; /* no hay hoja con ese group_id */
     if (g == e->active_group) return;         /* ya enfocado */
     if (e->tab_count == 0) return;            /* sin pestañas: nada que enfocar */
 
     editor_tab_save_state(e); /* preservar la vista del grupo actual */
     e->active_group = g;
+    e->dock.focused_leaf = leaf; /* el árbol también recuerda la hoja con foco */
     /* la pestaña activa pasa a ser la registrada para ese grupo */
     int idx = e->group_active_tab[g];
     if (idx < 0 || idx >= e->tab_count) idx = 0; /* defensivo */
@@ -544,77 +573,85 @@ void editor_focus_group(Editor *e, int g) {
     e->needs_redraw = 1;
 }
 
-void editor_split(Editor *e) {
-    if (e->group_count == 2) return; /* ya dividido */
+void editor_split_dir(Editor *e, DockOrient orient) {
     if (e->tab_count == 0) return;   /* sin nada que dividir */
+    if (e->dock.leaf_count >= DOCK_MAX_LEAVES) return; /* tope de hojas */
+
+    int src_group = e->active_group;                     /* grupo enfocado */
+    int src_leaf = dock_leaf_by_group(&e->dock, src_group);
+    if (src_leaf == DOCK_NONE) return; /* defensivo: foco sin hoja */
+
+    int new_group = dock_alloc_group_id(&e->dock); /* group_id libre */
+    if (new_group == DOCK_NONE) return;            /* no quedan ids */
 
     editor_tab_save_state(e); /* preservar el estado de la pestaña actual */
 
-    /* El grupo 0 conserva todas sus pestañas; el nuevo grupo 1 arranca con una
-     * pestaña.  Si hay más de una pestaña, MOVEMOS la activa al grupo 1; si solo
-     * hay una, creamos una nueva vacía para no dejar el grupo 0 sin contenido. */
+    /* La hoja origen conserva sus pestañas; la hoja nueva arranca con una.  Si
+     * la hoja origen tiene más de una pestaña, MOVEMOS la activa a la nueva; si
+     * solo tiene esa, creamos una pestaña vacía para no dejar la origen sin
+     * contenido. */
+    int src_tab_count = 0;
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == src_group) src_tab_count++;
+
+    /* dividir el árbol: la hoja origen se vuelve un split con la hoja nueva */
+    int new_leaf = dock_split_leaf(&e->dock, src_leaf, orient, new_group);
+    if (new_leaf == DOCK_NONE) return; /* no se pudo dividir (sin pool) */
+
     int moved_tab;
-    if (e->tab_count > 1) {
-        /* mover la pestaña activa actual al grupo 1 */
+    if (src_tab_count > 1) {
+        /* mover la pestaña activa actual a la hoja nueva */
         moved_tab = e->active_tab;
-        e->tabs[moved_tab].group = 1;
-        /* el grupo 0 se queda con otra de sus pestañas como activa */
-        int g0_tab = -1;
+        e->tabs[moved_tab].group = new_group;
+        /* la hoja origen se queda con otra de SUS pestañas como activa */
+        int src_tab = -1;
         for (int i = 0; i < e->tab_count; i++)
-            if (e->tabs[i].group == 0) { g0_tab = i; break; }
-        if (g0_tab < 0) {
-            /* todas habían quedado en el grupo 1 (no debería pasar): devolver
-             * la movida al grupo 0 y abortar la división */
-            e->tabs[moved_tab].group = 0;
+            if (e->tabs[i].group == src_group) { src_tab = i; break; }
+        e->group_active_tab[src_group] = src_tab; /* >=0: quedaba al menos una */
+    } else {
+        /* una sola pestaña en la hoja origen: dejarla ahí y crear una vacía en
+         * la hoja nueva. */
+        int orig_tab = e->active_tab;
+        if (e->tab_count >= MAX_TABS) {
+            /* sin sitio para otra pestaña: revertir la división del árbol */
+            dock_remove_leaf(&e->dock, new_leaf);
             return;
         }
-        e->group_active_tab[0] = g0_tab;
-    } else {
-        /* una sola pestaña: dejarla en el grupo 0 y crear una nueva en el 1 */
-        int orig_tab = e->active_tab; /* la única pestaña existente (grupo 0) */
-        e->tabs[orig_tab].group = 0;
-        if (e->tab_count >= MAX_TABS) return; /* sin sitio para otra pestaña */
-        /* editor_tab_new activa la nueva y fija group_active_tab[0] = nueva;
-         * hay que reasignarla al grupo 1 y restaurar la activa del grupo 0. */
+        /* editor_tab_new crea la pestaña en el grupo enfocado (src_group) y la
+         * activa; hay que reasignarla a la hoja nueva y restaurar la activa de
+         * la origen. */
         editor_tab_new(e);          /* crea y activa una pestaña vacía */
         moved_tab = e->active_tab;  /* la recién creada */
-        e->tabs[moved_tab].group = 1;
-        e->group_active_tab[0] = orig_tab; /* el grupo 0 conserva la original */
+        e->tabs[moved_tab].group = new_group;
+        e->group_active_tab[src_group] = orig_tab; /* origen conserva la suya */
     }
 
-    e->group_count = 2;
-    e->group_active_tab[1] = moved_tab;
-    e->split_x = 0; /* 0 = sin colocar: el render lo inicializa a 50/50 */
-    e->active_group = 0;
-    e->active_tab = e->group_active_tab[0];
+    e->group_active_tab[new_group] = moved_tab;
+    /* enfocar la hoja nueva para que reciba el teclado */
+    e->active_group = src_group;       /* base coherente antes de re-enfocar */
+    e->active_tab = e->group_active_tab[src_group];
     editor_tab_load_state(e);
     editor_update_lexer(e, 0);
     editor_sync_cursor(e);
-    /* enfocar el grupo nuevo (el de la derecha) para que reciba el teclado */
-    editor_focus_group(e, 1);
+    editor_focus_group(e, new_group);
     e->needs_redraw = 1;
 }
 
+void editor_split(Editor *e) { editor_split_dir(e, DOCK_VERTICAL); }
+
 /**
- * @brief Colapsa la división del editor a un solo grupo (todas las pestañas al
- *        grupo 0 a pantalla completa).
+ * @brief Colapsa una hoja del árbol cuando se queda sin pestañas: la elimina y
+ *        su hermano ocupa el sitio.  Si quedaba una sola hoja, no hace nada.
  *
- * Se llama cuando un grupo se queda sin pestañas tras cerrar la última.  Mueve
- * cualquier pestaña restante al grupo 0, restaura group_count=1 y enfoca el
- * grupo 0.  Tras esto el editor vuelve a comportarse como sin dividir.
+ * Se llama desde editor_tab_close al cerrar la última pestaña de una hoja.  El
+ * estado de pane queda inactivo si tras esto solo queda una hoja.
  *
- * @param e Editor.
+ * @param e     Editor.
+ * @param group group_id de la hoja que se quedó vacía.
  */
-static void editor_unsplit(Editor *e) {
-    for (int i = 0; i < e->tab_count; i++) e->tabs[i].group = 0;
-    e->group_count = 1;
-    e->active_group = 0;
-    e->split_x = 0;
-    e->pane_active = 0;
-    e->group_active_tab[1] = 0;
-    if (e->tab_count > 0) {
-        if (e->active_tab < 0 || e->active_tab >= e->tab_count)
-            e->active_tab = e->tab_count - 1;
-        e->group_active_tab[0] = e->active_tab;
-    }
+static void editor_unsplit(Editor *e, int group) {
+    int leaf = dock_leaf_by_group(&e->dock, group);
+    if (leaf == DOCK_NONE) return;
+    dock_remove_leaf(&e->dock, leaf); /* el hermano hereda el espacio */
+    if (e->dock.leaf_count <= 1) e->pane_active = 0; /* sin división: limpiar */
 }

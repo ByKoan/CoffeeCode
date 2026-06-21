@@ -56,45 +56,50 @@ int get_left_offset(Editor *e) {
  */
 
 /**
- * @brief Banda horizontal [left, right) del área del editor (entre el explorador
- *        y el panel de extensiones).  Igual que la del panel inferior.
+ * @brief Grupo (hoja) del editor dividido bajo el punto (@p mx,@p my), o -1 si
+ *        el editor no está dividido o el punto cae fuera de toda hoja.
+ *
+ * Recorre los rects de las hojas del árbol de dock (la misma geometría que el
+ * render) y devuelve el group_id de la que contiene el punto.
  */
-static void editor_area_h(Editor *e, int *left, int *right) {
-    *left = get_left_offset(e);
-    *right = e->win_w - (e->ext_panel_open ? e->ext_panel_w : 0);
+static int editor_leaf_at_point(Editor *e, int mx, int my) {
+    if (e->dock.leaf_count <= 1) return -1;
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    for (int i = 0; i < n; i++) {
+        DockRect r = leaves[i].rect;
+        if (mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h)
+            return leaves[i].group_id;
+    }
+    return -1;
 }
 
 /**
- * @brief Grupo del editor dividido bajo la X del cursor (0 = izquierda, 1 =
- *        derecha), o -1 si el editor no está dividido.
+ * @brief Fija el override de área (e->pane_*) al sub-rect de contenido de la
+ *        hoja con group_id @p g.
  *
- * Usa split_x como frontera.  No comprueba la Y (el llamante ya sabe que el clic
- * cae en el área del editor).
- */
-static int editor_group_at_x(Editor *e, int mx) {
-    if (e->group_count != 2) return -1;
-    return (mx < e->split_x) ? 0 : 1;
-}
-
-/**
- * @brief Fija el override de área (e->pane_*) al sub-rect del grupo @p g.
- *
- * Lo usa el input para que get_left_offset/point_to_line_col operen sobre el
- * panel correcto al mapear un clic.  El llamante debe limpiar pane_active tras
- * usarlo (clear_pane_override).
+ * Lo usa el input para que get_left_offset/point_to_line_col operen sobre la
+ * hoja correcta al mapear un clic.  El override apunta al área de CONTENIDO (ya
+ * bajo la barra de pestañas de la hoja).  El llamante debe limpiar pane_active
+ * tras usarlo (clear_pane_override).
  */
 static void set_pane_override(Editor *e, int g) {
-    int left, right;
-    /* pane_active=0 aquí para que editor_area_h use el origen global */
-    e->pane_active = 0;
-    editor_area_h(e, &left, &right);
-    int px = (g == 0) ? left : e->split_x;
-    int pr = (g == 0) ? e->split_x : right;
-    e->pane_active = 1;
-    e->pane_left = px;
-    e->pane_top = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
-    e->pane_width = pr - px;
-    e->pane_height = 0; /* el input no necesita el alto */
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    for (int i = 0; i < n; i++) {
+        if (leaves[i].group_id != g) continue;
+        DockRect r = leaves[i].rect;
+        e->pane_active = 1;
+        e->pane_left = r.x;
+        e->pane_top = r.y + TAB_BAR_HEIGHT; /* contenido bajo la barra de pestañas */
+        e->pane_width = r.w;
+        e->pane_height = r.h - TAB_BAR_HEIGHT;
+        if (e->pane_height < 0) e->pane_height = 0;
+        return;
+    }
+    e->pane_active = 0; /* group_id sin hoja: sin override */
 }
 
 /** Limpia el override de área tras un mapeo de clic. */
@@ -113,7 +118,7 @@ static void clear_pane_override(Editor *e) { e->pane_active = 0; }
  *
  * @param want_resize 1 para mostrar el cursor de redimension, 0 para el normal.
  */
-static void set_divider_cursor(int which) {
+static void set_divider_cursor(int which, int dock_orient) {
     static SDL_Cursor *cur_ew = NULL;    /* cursor de redimension horizontal */
     static SDL_Cursor *cur_ns = NULL;    /* cursor de redimension vertical   */
     static SDL_Cursor *cur_arrow = NULL; /* cursor normal (flecha)           */
@@ -126,11 +131,14 @@ static void set_divider_cursor(int which) {
         cur_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     }
 
-    /* El divisor inferior es horizontal -> cursor NS; los demas son verticales
-     * -> cursor EW; DIVIDER_NONE -> flecha normal. */
+    /* El divisor inferior es horizontal -> cursor NS; un divisor de dock toma su
+     * orientacion (split horizontal = borde horizontal -> NS; vertical -> EW);
+     * los demas son verticales -> cursor EW; DIVIDER_NONE -> flecha normal. */
     SDL_Cursor *target = cur_arrow;
     if (which == DIVIDER_BOTTOM_TOP)
         target = cur_ns;
+    else if (which == DIVIDER_DOCK)
+        target = (dock_orient == DOCK_HORIZONTAL) ? cur_ns : cur_ew;
     else if (which != DIVIDER_NONE)
         target = cur_ew;
     if (target) SDL_SetCursor(target); /* solo si SDL pudo crearlo */
@@ -151,7 +159,7 @@ static void update_divider_hover(Editor *e, int mx, int my) {
     int hit = layout_hit_divider(e, mx, my);
     if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
         e->hovered_divider = hit;
-        set_divider_cursor(hit);
+        set_divider_cursor(hit, e->dock_drag_orient);
         e->needs_redraw = 1;
     }
 }
@@ -168,7 +176,7 @@ static int try_start_divider_drag(Editor *e, int mx, int my) {
     int hit = layout_hit_divider(e, mx, my);
     if (hit == DIVIDER_NONE) return 0;
     e->dragging_divider = hit; /* entrar en modo arrastre */
-    set_divider_cursor(hit);   /* mantener el cursor de redimension adecuado */
+    set_divider_cursor(hit, e->dock_drag_orient); /* cursor de redimension */
     return 1;
 }
 
@@ -206,10 +214,12 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
      */
     int char_px = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
 
-    /* fila en pantalla: quitar navbar + pestañas y dividir por el alto de línea
-     */
-    int visual_line =
-        (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / e->line_height;
+    /* fila en pantalla: quitar la franja superior y dividir por el alto de
+     * línea.  Con el editor dividido, el origen vertical del texto es el de la
+     * hoja (pane_top, fijado por set_pane_override); sin dividir, es la posición
+     * global de siempre (navbar + barra de pestañas). */
+    int text_y = e->pane_active ? e->pane_top : (NAVBAR_HEIGHT + TAB_BAR_HEIGHT);
+    int visual_line = (mouse_y - text_y) / e->line_height;
     if (visual_line < 0) visual_line = 0;  /* clic sobre las barras → fila 0 */
     int ln = e->scroll_line + visual_line; /* fila visible → línea real      */
     int total = buf_line_count(e->buf);
@@ -333,8 +343,8 @@ void handle_scroll(Editor *e, float wheel_dy) {
  * @param my Coordenada Y del clic en píxeles.
  */
 void handle_text_click(Editor *e, int mx, int my) {
-    if (e->group_count == 2) {
-        int g = editor_group_at_x(e, mx);
+    if (e->dock.leaf_count > 1) {
+        int g = editor_leaf_at_point(e, mx, my);
         if (g >= 0) editor_focus_group(e, g);
         set_pane_override(e, e->active_group);
     }
@@ -526,8 +536,8 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
 
     /* arrastre para seleccionar texto (el ancla se fijó en BUTTON_DOWN) */
     if (e->mouse_selecting && e->tab_count > 0) {
-        /* la selección sigue en el panel del grupo enfocado */
-        if (e->group_count == 2) set_pane_override(e, e->active_group);
+        /* la selección sigue en la hoja enfocada */
+        if (e->dock.leaf_count > 1) set_pane_override(e, e->active_group);
         int line, col;
         /* punto bajo el ratón */
         point_to_line_col(e, mouse_x, mouse_y, &line, &col);
@@ -557,8 +567,8 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param my Coordenada Y del clic en píxeles.
  */
 static void click_tabbar(Editor *e, int mx, int my) {
-    /* Botón "+" del editor dividido (por grupo): crea una pestaña en ese grupo. */
-    if (e->group_count == 2) {
+    /* Botón "+" del editor dividido (por hoja): crea una pestaña en esa hoja. */
+    if (e->dock.leaf_count > 1) {
         int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
         if (gnew >= 0) {
             editor_focus_group(e, gnew); /* enfocar ese grupo */
@@ -579,14 +589,14 @@ static void click_tabbar(Editor *e, int mx, int my) {
 
     if (close_i >= 0) {           /* "x": cerrar esa pestaña */
         editor_tab_save_state(e); /* guardar estado de la pestaña actual */
-        /* enfocar el grupo de la pestaña que se cierra (split-aware) */
-        if (e->group_count == 2) e->active_group = e->tabs[close_i].group;
+        /* enfocar la hoja de la pestaña que se cierra (split-aware) */
+        if (e->dock.leaf_count > 1) editor_focus_group(e, e->tabs[close_i].group);
         e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
         editor_tab_close(e);
     } else {
-        /* enfocar primero el grupo de la pestaña pulsada para no robarla al
-         * otro panel (editor_tab_switch la asigna al grupo enfocado) */
-        if (e->group_count == 2) editor_focus_group(e, e->tabs[tab_i].group);
+        /* enfocar primero la hoja de la pestaña pulsada para no robarla a otra
+         * (editor_tab_switch la asigna a la hoja enfocada) */
+        if (e->dock.leaf_count > 1) editor_focus_group(e, e->tabs[tab_i].group);
         editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
     }
     /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
@@ -671,10 +681,10 @@ static int click_find_bar(Editor *e, int mx, int my) {
  */
 static void start_text_selection(Editor *e, int mx, int my) {
     if (e->tab_count == 0) return;
-    /* Con el editor dividido, enfocar el grupo del panel pulsado y mapear el
-     * clic con la geometría de ese panel. */
-    if (e->group_count == 2) {
-        int g = editor_group_at_x(e, mx);
+    /* Con el editor dividido, enfocar la hoja pulsada y mapear el clic con la
+     * geometría de esa hoja. */
+    if (e->dock.leaf_count > 1) {
+        int g = editor_leaf_at_point(e, mx, my);
         if (g >= 0) editor_focus_group(e, g);
         set_pane_override(e, e->active_group);
     }

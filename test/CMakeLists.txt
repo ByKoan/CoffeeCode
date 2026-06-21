@@ -54,6 +54,12 @@ add_coffee_test(test_encoding encoding/test_encoding.c
 add_coffee_test(test_layout layout/test_layout.c
     "${CMAKE_SOURCE_DIR}/src/layout/layout_core.c")
 
+# --- dock (puro: arbol de paneles del editor, sin SDL) ---------------------
+# Solo enlaza dock.c (construccion + mutacion + layout + hit del arbol); el
+# wireado al Editor (render/input) vive aparte y necesita SDL.
+add_coffee_test(test_dock dock/test_dock.c
+    "${CMAKE_SOURCE_DIR}/src/dock/dock.c")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.

@@ -318,8 +318,10 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
         if (e->tab_count > 0)
             editor_tab_switch(e, (e->active_tab + 1) % e->tab_count);
         break;
-    case SDLK_BACKSLASH: /* Ctrl+\: dividir el editor en dos paneles */
-        editor_split(e);
+    case SDLK_BACKSLASH:
+        /* Ctrl+\: dividir la hoja enfocada en vertical (lado a lado).
+         * Ctrl+Shift+\: dividirla en horizontal (arriba/abajo). */
+        editor_split_dir(e, shift ? DOCK_HORIZONTAL : DOCK_VERTICAL);
         break;
     case SDLK_C:
         /* Ctrl+C con el panel inferior enfocado: copiar su canal (funciona
@@ -497,6 +499,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             /* soltar el botón izquierdo termina cualquier arrastre en curso */
             e->ftree.dragging_border = 0;
             e->dragging_divider = DIVIDER_NONE; /* fin del arrastre de divisor */
+            e->dock_drag_split = DOCK_NONE;     /* fin del arrastre de dock     */
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
             e->bottom_selecting = 0; /* fin de la seleccion del panel inferior */

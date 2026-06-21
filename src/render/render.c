@@ -727,80 +727,95 @@ static void render_content_layers(Editor *e, int left_offset, int content_right,
     render_cursor(e, left_offset, text_top, visible_lines);
 }
 
+/** Dibuja los divisores internos del árbol (líneas entre hojas hermanas). */
+static void render_dock_dividers(Editor *e, int node, DockRect area) {
+    if (node < 0 || node >= e->dock.node_count) return;
+    DockNode *n = &e->dock.nodes[node];
+    if (n->kind != DOCK_SPLIT) return;
+
+    /* repartir el área con la MISMA matemática que el layout (sin duplicarla) */
+    DockRect ra, rb;
+    dock_child_areas(&e->dock, node, area, &ra, &rb);
+
+    set_color_c(e->renderer, e->theme.col_tabbar_sep);
+    if (n->orient == DOCK_VERTICAL)
+        fill_rect(e->renderer, rb.x - 1, area.y, 2, area.h); /* línea vertical */
+    else
+        fill_rect(e->renderer, area.x, rb.y - 1, area.w, 2); /* línea horizontal */
+
+    render_dock_dividers(e, n->child_a, ra);
+    render_dock_dividers(e, n->child_b, rb);
+}
+
 /**
- * @brief Dibuja los dos paneles del editor dividido (split panes).
+ * @brief Dibuja las hojas del editor dividido recorriendo el árbol de dock.
  *
- * Parte el área del editor en dos sub-rects por el divisor (split_x) y, para
- * cada grupo, enlaza su pestaña activa "en vivo" (sin recargar del disco),
- * activa el override de área (e->pane_*), dibuja su barra de pestañas (solo las
- * suyas) y su contenido recortado a su sub-rect, y resalta con un acento el
- * panel enfocado.  Al final vuelve a enlazar la pestaña del grupo con foco para
- * que e-> termine reflejando el grupo activo.  Asume que el llamante ya guardó
- * el estado del grupo enfocado con editor_tab_save_state.
+ * Computa el rect de cada hoja con dock_compute_leaf_rects y, para cada una,
+ * enlaza su pestaña activa "en vivo" (sin recargar del disco), activa el
+ * override de área (e->pane_*) con el sub-rect de contenido de la hoja (bajo su
+ * propia barra de pestañas), dibuja su barra de pestañas y su contenido
+ * recortado, y resalta con un acento la hoja enfocada.  Al final vuelve a
+ * enlazar la pestaña de la hoja con foco para que e-> termine reflejándola.
+ * Asume que el llamante ya guardó el estado de la hoja enfocada con
+ * editor_tab_save_state.
  *
- * @param e             Editor (group_count==2).
- * @param area_left     Borde izquierdo del área del editor (px).
- * @param area_right    Borde derecho del área del editor (exclusivo, px).
- * @param text_top      Y de la primera fila de texto (px).
- * @param text_height   Alto del área de texto (px).
- * @param visible_lines Filas que caben.
+ * @param e    Editor (dock.leaf_count > 1).
+ * @param area Área total del editor a repartir (px).
  */
-static void render_split_panes(Editor *e, int area_left, int area_right,
-                               int text_top, int text_height,
-                               int visible_lines) {
+static void render_split_panes(Editor *e, DockRect area) {
     SDL_Renderer *r = e->renderer;
 
-    /* Inicializar el divisor a 50/50 la primera vez (split_x==0). */
-    if (e->split_x <= 0)
-        e->split_x = layout_clamp_split_x((area_left + area_right) / 2,
-                                          area_left, area_right);
-    else
-        e->split_x = layout_clamp_split_x(e->split_x, area_left, area_right);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int nleaves = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
 
-    /* sub-rects horizontales de cada panel (top/height son comunes) */
-    int pane_x[MAX_GROUPS] = {area_left, e->split_x};
-    int pane_r[MAX_GROUPS] = {e->split_x, area_right};
-
-    for (int g = 0; g < e->group_count; g++) {
+    for (int li = 0; li < nleaves; li++) {
+        int g = leaves[li].group_id;
+        DockRect lr = leaves[li].rect; /* rect total de la hoja (incluye tabbar) */
         int idx = e->group_active_tab[g];
-        if (idx < 0 || idx >= e->tab_count) continue;
-        editor_render_bind_tab(e, idx); /* e->buf/escalares -> pestaña del grupo */
 
-        /* override del área de contenido de este panel */
-        e->pane_active = 1;
-        e->pane_left = pane_x[g];
-        e->pane_top = text_top;
-        e->pane_width = pane_r[g] - pane_x[g];
-        e->pane_height = text_height;
+        /* geometría del contenido de la hoja: bajo su barra de pestañas */
+        int text_top = lr.y + TAB_BAR_HEIGHT;
+        int text_height = lr.h - TAB_BAR_HEIGHT;
+        if (text_height < 0) text_height = 0;
+        int pane_left = lr.x;
+        int pane_right = lr.x + lr.w;
+        int visible_lines = (e->line_height > 0) ? text_height / e->line_height : 0;
 
-        /* re-tokenizar las líneas sucias de ESTE grupo antes de dibujarlo (cada
-         * pestaña tiene su propia cache; el update previo solo cubrió la del
-         * grupo enfocado) */
-        update_lexer_cache(e);
+        if (idx >= 0 && idx < e->tab_count) {
+            editor_render_bind_tab(e, idx); /* e->buf -> pestaña de la hoja */
 
-        int total_lines = buf_line_count(e->buf);
-        render_content_layers(e, pane_x[g], pane_r[g], text_top, text_height,
-                              visible_lines, total_lines);
+            /* override del área de contenido de esta hoja */
+            e->pane_active = 1;
+            e->pane_left = pane_left;
+            e->pane_top = text_top;
+            e->pane_width = pane_right - pane_left;
+            e->pane_height = text_height;
 
-        /* barra de pestañas propia del panel (solo las pestañas de este grupo) */
-        render_tabbar_group(e, g, pane_x[g], pane_r[g]);
+            /* re-tokenizar las líneas sucias de ESTA hoja (cada pestaña tiene su
+             * propia cache; el update previo solo cubrió la de la hoja enfocada) */
+            update_lexer_cache(e);
+
+            int total_lines = buf_line_count(e->buf);
+            render_content_layers(e, pane_left, pane_right, text_top, text_height,
+                                  visible_lines, total_lines);
+        }
+
+        /* barra de pestañas propia de la hoja (solo las pestañas de este grupo) */
+        render_tabbar_group(e, g, lr.y, pane_left, pane_right);
+
+        /* acento en la hoja enfocada: una línea fina sobre su contenido */
+        if (g == e->active_group) {
+            set_color_c(r, e->theme.col_tab_accent);
+            fill_rect(r, pane_left, text_top, pane_right - pane_left, 2);
+        }
     }
 
     e->pane_active = 0; /* fin del override */
 
-    /* divisor central */
-    set_color_c(r, e->theme.col_tabbar_sep);
-    fill_rect(r, e->split_x - 1, text_top, 2, text_height);
+    /* divisores internos entre hojas hermanas */
+    render_dock_dividers(e, e->dock.root, area);
 
-    /* acento en el panel enfocado: una línea fina arriba de su contenido */
-    {
-        int fx = pane_x[e->active_group];
-        int fw = pane_r[e->active_group] - fx;
-        set_color_c(r, e->theme.col_tab_accent);
-        fill_rect(r, fx, text_top, fw, 2);
-    }
-
-    /* dejar e-> reflejando el grupo con foco (su estado ya estaba guardado) */
+    /* dejar e-> reflejando la hoja con foco (su estado ya estaba guardado) */
     editor_render_bind_tab(e, e->group_active_tab[e->active_group]);
 }
 
@@ -856,15 +871,12 @@ void render_frame(Editor *e) {
     /* re-tokenizar líneas sucias antes de dibujar texto */
     update_lexer_cache(e);
 
-    if (e->group_count == 2) {
-        /* Editor dividido: cada panel dibuja sus pestañas y su contenido en su
-         * sub-rect.  Se guarda el estado del grupo enfocado antes de barajar las
-         * vistas y render_split_panes lo restaura al final. */
-        int area_left = left_offset;
-        int area_right = e->win_w - render_ext_panel_width(e);
+    if (e->dock.leaf_count > 1) {
+        /* Editor dividido: cada hoja dibuja sus pestañas y su contenido en su
+         * sub-rect.  Se guarda el estado de la hoja enfocada antes de barajar
+         * las vistas y render_split_panes lo restaura al final. */
         editor_tab_save_state(e);
-        render_split_panes(e, area_left, area_right, text_top, text_height,
-                           visible_lines);
+        render_split_panes(e, editor_dock_area(e));
     } else {
         /* Editor sin dividir: comportamiento de siempre (pane_active==0). */
         /* resaltado de la línea activa (banda completa; solo si está activado en
@@ -906,7 +918,7 @@ void render_frame(Editor *e) {
      * pestañas y la scrollbar globales se omiten: cada panel ya dibujó su propia
      * tira de pestañas en render_split_panes, y una scrollbar global a todo lo
      * alto no representaría a un único panel. */
-    if (e->group_count != 2) render_scrollbar(e, left_offset);
+    if (e->dock.leaf_count <= 1) render_scrollbar(e, left_offset);
     if (e->ftree.open)
         render_filetree(e); /* panel lateral abierto */
     else
@@ -914,7 +926,7 @@ void render_frame(Editor *e) {
     render_bottom_panel(e); /* panel inferior (Salida/Logs/Terminal) */
     render_ext_panel(e); /* panel de extensiones, bajo la navbar */
     render_navbar(e);
-    if (e->group_count != 2) render_tabbar(e);
+    if (e->dock.leaf_count <= 1) render_tabbar(e);
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */

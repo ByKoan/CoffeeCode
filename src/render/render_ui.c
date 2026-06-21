@@ -388,9 +388,9 @@ void render_tabbar(Editor *e) {
     ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
 }
 
-void render_tabbar_group(Editor *e, int group, int pane_left, int pane_right) {
+void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
+                         int pane_right) {
     SDL_Renderer *r = e->renderer;
-    int bar_y = NAVBAR_HEIGHT;
     int bar_h = TAB_BAR_HEIGHT;
 
     /* fondo + separador inferior de la franja de este panel */

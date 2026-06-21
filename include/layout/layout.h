@@ -35,8 +35,11 @@ typedef enum {
     DIVIDER_FILETREE_RIGHT,  /**< borde derecho del explorador (vertical)   */
     DIVIDER_EXT_PANEL_LEFT,  /**< borde izquierdo del panel de extensiones  */
     DIVIDER_BOTTOM_TOP,      /**< borde superior del panel inferior (horiz.) */
-    DIVIDER_EDITOR_SPLIT,    /**< divisor vertical entre los dos paneles del
-                                editor dividido (split panes)              */
+    DIVIDER_EDITOR_SPLIT,    /**< (legado) divisor vertical entre dos paneles;
+                                conservado para los tests del clampeo puro   */
+    DIVIDER_DOCK,            /**< divisor interno del arbol de dock (entre dos
+                                hojas hermanas); el nodo concreto se guarda en
+                                Editor::dock_drag_split                     */
 } LayoutDivider;
 
 /* -- Geometria de los divisores ------------------------------------------- */

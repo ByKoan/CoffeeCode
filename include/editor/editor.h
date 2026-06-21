@@ -88,10 +88,14 @@ typedef struct {
                   el grupo 0 (izquierda) y el grupo 1 (derecha). */
 } EditorTab;
 
-/* -- División del editor (split panes) -----------------------------------
- * Máximo de grupos lado a lado.  Hoy 2 (izquierda/derecha); la
- * infraestructura usa el contador group_count para no asumir el número. */
-#define MAX_GROUPS 2
+/* -- División del editor (árbol de dock) ----------------------------------
+ * El área del editor se modela como un árbol de paneles (ver dock/dock.h): N
+ * hojas (grupos de pestañas) anidadas en divisiones horizontales y verticales.
+ * Cada pestaña pertenece a una hoja por su `group` (== group_id de la hoja).
+ * MAX_GROUPS es el tope de hojas simultáneas y debe coincidir con
+ * DOCK_MAX_LEAVES. */
+#include "dock/dock.h"
+#define MAX_GROUPS DOCK_MAX_LEAVES
 
 /* -- Barra de búsqueda ---------------------------------------------------- */
 #define FIND_BAR_MAX 256
@@ -136,21 +140,20 @@ typedef struct Editor {
     int tab_count;            /* nº de pestañas abiertas                */
     int active_tab;           /* índice de la pestaña activa            */
 
-    /* -- división del editor (split panes) ----------------------------------
-     * Con group_count==1 (estado por defecto) el editor se comporta EXACTAMENTE
-     * como antes: un único grupo a pantalla completa.  Con group_count==2 el
-     * área del editor se parte en dos paneles lado a lado; cada uno muestra solo
-     * SUS pestañas (las que tienen tab.group == g) y su pestaña activa.  El
-     * grupo enfocado (active_group) recibe el teclado y la edición: e->buf y los
-     * escalares de vista reflejan SIEMPRE la pestaña activa del grupo con foco,
-     * así todo el código existente sigue operando sobre el grupo enfocado. */
-    int group_count;                /* 1 (sin dividir) o 2 (dividido)        */
-    int active_group;               /* grupo con el foco (0 o 1)             */
+    /* -- división del editor (árbol de dock) --------------------------------
+     * Con dock.leaf_count==1 (estado por defecto) el editor se comporta
+     * EXACTAMENTE como antes: una única hoja a pantalla completa.  Con varias
+     * hojas, el área del editor se reparte según el árbol (divisiones H/V
+     * anidadas); cada hoja muestra solo SUS pestañas (las que tienen
+     * tab.group == group_id de la hoja) y su pestaña activa.  La hoja enfocada
+     * (active_group == group_id de la hoja con foco) recibe el teclado y la
+     * edición: e->buf y los escalares de vista reflejan SIEMPRE la pestaña
+     * activa de la hoja con foco, así todo el código existente sigue operando
+     * sobre ella.  El árbol vive en `dock`. */
+    DockTree dock;                  /* árbol de paneles del editor           */
+    int active_group;               /* group_id de la hoja con el foco       */
     int group_active_tab[MAX_GROUPS]; /* índice GLOBAL en tabs[] de la pestaña
-                                         activa de cada grupo                */
-    int split_x;                    /* X (px) del divisor entre los dos paneles
-                                       del editor; 0 = aún sin colocar (se
-                                       inicializa a 50/50 al dividir)        */
+                                         activa de cada grupo (por group_id)  */
 
     /* Punteros al tab activo — NUNCA copias por valor.
      * Apuntan directamente a tabs[active_tab].buf/lex/undo;
@@ -275,16 +278,21 @@ typedef struct Editor {
      * Estado del arrastre del borde de un panel para redimensionarlo. */
     int dragging_divider; /* LayoutDivider en curso, o DIVIDER_NONE (-1) */
     int hovered_divider;  /* LayoutDivider bajo el cursor, o DIVIDER_NONE  */
+    /* Nodo SPLIT del árbol de dock que se está arrastrando (DIVIDER_DOCK), o
+     * DOCK_NONE.  Su orientación decide el cursor de redimensión. */
+    int dock_drag_split;  /* índice del SPLIT en arrastre, o DOCK_NONE      */
+    int dock_drag_orient; /* DockOrient del SPLIT en arrastre (cursor EW/NS) */
 
     /* -- Override transitorio del área de contenido del editor --------------
-     * Cuando el editor está dividido, el render dibuja CADA panel haciendo su
+     * Cuando el editor está dividido, el render dibuja CADA hoja haciendo su
      * pestaña activa la activa temporalmente y fijando aquí el sub-rectángulo
-     * del panel; el dibujante de contenido (y el mapeo píxel->columna del
+     * de la hoja; el dibujante de contenido (y el mapeo píxel->columna del
      * input) leen este override en vez del área global de la ventana.  Con
-     * pane_active==0 (caso de 1 grupo) NADIE consulta estos campos y la
+     * pane_active==0 (caso de 1 hoja) NADIE consulta estos campos y la
      * geometría es la de siempre: cero regresión.  El left/top/width/height
-     * acotan el área ÚTIL del editor de ese panel (entre su barra de pestañas y
-     * el panel inferior/status). */
+     * acotan el área ÚTIL del editor de esa hoja (su contenido, ya bajo su
+     * propia barra de pestañas).  pane_top es relevante con divisiones
+     * horizontales (hojas apiladas a distinta Y). */
     int pane_active;                       /* 1 = usar el override de abajo   */
     int pane_left, pane_top;               /* origen del área del panel (px)  */
     int pane_width, pane_height;           /* tamaño del área del panel (px)  */
@@ -342,17 +350,29 @@ void editor_tab_close(Editor *e);
 void editor_tab_switch(Editor *e, int i);
 void editor_tab_save_state(Editor *e);
 
-/* -- División del editor (split panes) ------------------------------------- */
-/* Enfoca el grupo @p g: guarda la vista actual en su pestaña, fija
+/* -- División del editor (árbol de dock) ----------------------------------- */
+/* Enfoca el grupo (hoja) @p g: guarda la vista actual en su pestaña, fija
  * active_group=g y carga el estado de la pestaña activa de ese grupo (de modo
- * que e->buf y los escalares de vista pasen a reflejar el grupo enfocado). No
- * hace nada si @p g está fuera de rango o ya es el grupo activo. */
+ * que e->buf y los escalares de vista pasen a reflejar la hoja enfocada). No
+ * hace nada si @p g no corresponde a ninguna hoja o ya es el grupo activo. */
 void editor_focus_group(Editor *e, int g);
-/* Divide el editor en dos grupos lado a lado (si aún no lo estaba): mueve la
- * pestaña activa al grupo 1 y enfoca ese grupo. Si solo hay una pestaña, crea
- * una nueva vacía para no dejar el grupo 0 sin contenido. No hace nada si ya
- * está dividido. */
+/* Divide la hoja enfocada en la orientación @p orient (DOCK_VERTICAL = lado a
+ * lado, DOCK_HORIZONTAL = arriba/abajo), creando una hoja nueva como hermana.
+ * Mueve la pestaña activa a la hoja nueva y la enfoca; si solo hay una pestaña,
+ * crea una nueva vacía para no dejar la hoja original sin contenido.  No hace
+ * nada si no hay pestañas o se alcanzó el tope de hojas. */
+void editor_split_dir(Editor *e, DockOrient orient);
+/* Atajo: divide la hoja enfocada en vertical (compatibilidad con el binding
+ * Ctrl+\ original). */
 void editor_split(Editor *e);
+
+/* Devuelve el área del editor (px) que el árbol de dock reparte entre las
+ * hojas: entre el explorador (izquierda) y el panel de extensiones (derecha),
+ * y entre la navbar (arriba) y el panel inferior / barra de estado / atajos
+ * (abajo).  Incluye la franja de la barra de pestañas de cada hoja (la barra
+ * vive en el borde superior del rect de la hoja).  Es la MISMA geometría que
+ * usa render e input, para que el dibujado y el enrutado de clics coincidan. */
+DockRect editor_dock_area(Editor *e);
 
 /* Enlaza SOLO los punteros y escalares "en vivo" del editor a la pestaña de
  * índice global @p idx, SIN recargar del disco ni tocar la cache del lexer. Es
