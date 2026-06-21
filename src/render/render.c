@@ -287,8 +287,17 @@ int draw_text_font(Editor *e, TTF_Font *font, const char *text, int x, int y,
     /* texto -> píxeles (RAM) */
     SDL_Surface *surf = TTF_RenderText_Blended(font, text, 0, col);
     if (!surf) return 0; /* fallo de rasterizado */
+    /* Premultiplicar el alfa del glifo (RGB *= A) y dibujarlo en modo de mezcla
+     * premultiplicado.  En una ventana transparente, el compositor del SO usa
+     * alfa premultiplicado; con el alfa recto de TTF_RenderText_Blended los
+     * bordes antialias de las letras salen con halo y se ven borrosos.  Sobre un
+     * fondo OPACO el resultado visible es identico al alfa recto, asi que esto no
+     * cambia nada en los modos no transparentes. */
+    SDL_PremultiplySurfaceAlpha(surf, false);
     /* subir a la GPU */
     SDL_Texture *tex = SDL_CreateTextureFromSurface(e->renderer, surf);
+    if (tex)
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
     /* destino = tam. glifo */
     SDL_FRect dst = {(float)x, (float)y, (float)surf->w, (float)surf->h};
     SDL_RenderTexture(e->renderer, tex, NULL, &dst); /* dibujar la textura */
@@ -1170,7 +1179,15 @@ void render_frame(Editor *e) {
         if (op < 0) op = 0;
         if (op > 255) op = 255;
         Color bg = e->theme.col_bg;
-        SDL_SetRenderDrawColor(r, bg.r, bg.g, bg.b, (Uint8)op);
+        /* El compositor de Windows (DWM/DirectComposition) espera alfa
+         * PREMULTIPLICADO en una ventana transparente: el color debe venir ya
+         * multiplicado por su propio alfa.  Si se limpiara con el RGB recto, el
+         * escritorio se mezclaria de mas y los bordes saldrian lavados.  Por eso
+         * premultiplicamos el color del clear por la opacidad. */
+        Uint8 pr = (Uint8)(bg.r * op / 255);
+        Uint8 pg = (Uint8)(bg.g * op / 255);
+        Uint8 pb = (Uint8)(bg.b * op / 255);
+        SDL_SetRenderDrawColor(r, pr, pg, pb, (Uint8)op);
         SDL_RenderClear(r);
         /* restaurar el color de dibujo a opaco para todo lo que viene */
         set_color_c(r, e->theme.col_bg);
