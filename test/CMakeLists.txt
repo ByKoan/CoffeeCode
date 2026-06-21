@@ -60,6 +60,12 @@ add_coffee_test(test_layout layout/test_layout.c
 add_coffee_test(test_dock dock/test_dock.c
     "${CMAKE_SOURCE_DIR}/src/dock/dock.c")
 
+# --- float (puro: geometria + hit-test de los paneles flotantes, sin SDL) ---
+# Solo enlaza float.c (sub-rects + hit-test + clamp del marco flotante).  El
+# wireado al Editor (render/input) vive aparte y necesita SDL.
+add_coffee_test(test_float dock/test_float.c
+    "${CMAKE_SOURCE_DIR}/src/dock/float.c")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.

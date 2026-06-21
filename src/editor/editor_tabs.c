@@ -786,3 +786,248 @@ static void editor_unsplit(Editor *e, int group) {
     dock_remove_leaf(&e->dock, leaf); /* el hermano hereda el espacio */
     if (e->dock.leaf_count <= 1) e->pane_active = 0; /* sin división: limpiar */
 }
+
+/* -- Paneles flotantes ----------------------------------------------------- */
+
+/**
+ * @brief Indica si algun panel flotante usa el group_id @p g.
+ */
+static int editor_group_in_floats(Editor *e, int g) {
+    for (int i = 0; i < e->float_count; i++)
+        if (e->floats[i].group_id == g) return 1;
+    return 0;
+}
+
+/**
+ * @brief Asigna el primer group_id libre en [0, MAX_GROUPS) que no use NI una
+ *        hoja del dock NI un flotante.
+ *
+ * dock_alloc_group_id solo evita las hojas del dock (rango [0,DOCK_MAX_LEAVES));
+ * los flotantes comparten el mismo espacio de ids (group_active_tab[] se indexa
+ * por group_id), asi que aqui se escanea el rango completo evitando ambos.
+ *
+ * @return Un group_id sin usar, o -1 si todos estan ocupados.
+ */
+static int editor_alloc_group_id(Editor *e) {
+    for (int g = 0; g < MAX_GROUPS; g++) {
+        if (dock_leaf_by_group(&e->dock, g) != DOCK_NONE) continue; /* hoja */
+        if (editor_group_in_floats(e, g)) continue;                 /* flotante */
+        return g;
+    }
+    return -1;
+}
+
+/** Indice del flotante cuyo group_id es @p g, o -1 si ninguno. */
+static int editor_float_by_group(Editor *e, int g) {
+    for (int i = 0; i < e->float_count; i++)
+        if (e->floats[i].group_id == g) return i;
+    return -1;
+}
+
+Rect editor_float_bounds(Editor *e) {
+    /* toda la ventana bajo la navbar y sobre la barra de estado: asi la barra de
+     * titulo de un flotante nunca tapa la navbar ni desaparece bajo el status. */
+    Rect b;
+    b.x = 0;
+    b.y = NAVBAR_HEIGHT;
+    b.w = e->win_w;
+    b.h = e->win_h - NAVBAR_HEIGHT - STATUS_HEIGHT - editor_shortcut_h(e);
+    if (b.w < 0) b.w = 0;
+    if (b.h < 0) b.h = 0;
+    return b;
+}
+
+void editor_float_focus(Editor *e, int fi) {
+    if (fi < 0 || fi >= e->float_count) return;
+    /* traer al frente: rotar el array para que el flotante quede el ultimo */
+    FloatPanel fp = e->floats[fi];
+    for (int i = fi; i < e->float_count - 1; i++) e->floats[i] = e->floats[i + 1];
+    e->floats[e->float_count - 1] = fp;
+    /* enfocar su grupo (carga su pestana activa como la activa del editor) */
+    editor_tab_save_state(e);
+    e->active_group = fp.group_id;
+    int idx = e->group_active_tab[fp.group_id];
+    if (idx < 0 || idx >= e->tab_count) idx = editor_group_first_tab(e, fp.group_id);
+    if (idx < 0) idx = 0; /* defensivo */
+    e->active_tab = idx;
+    e->group_active_tab[fp.group_id] = idx;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
+void editor_float_detach_tab(Editor *e, int tab, int cx, int cy) {
+    if (e->tab_count == 0) return;
+    if (tab < 0 || tab >= e->tab_count) return;
+    if (e->float_count >= FLOAT_MAX_PANELS) return; /* sin sitio para mas flotantes */
+
+    int new_group = editor_alloc_group_id(e);
+    if (new_group < 0) return; /* sin ids libres */
+
+    int src_group = e->tabs[tab].group; /* hoja/flotante origen */
+    int src_is_float = (editor_float_by_group(e, src_group) >= 0);
+
+    editor_tab_save_state(e);
+
+    /* mover la pestana al grupo nuevo */
+    e->tabs[tab].group = new_group;
+    e->group_active_tab[new_group] = tab;
+
+    /* construir el flotante centrado en (cx,cy), recortado a los limites */
+    FloatPanel fp;
+    fp.group_id = new_group;
+    fp.rect.w = FLOAT_DEFAULT_W;
+    fp.rect.h = FLOAT_DEFAULT_H;
+    Rect bounds = editor_float_bounds(e);
+    fp.rect = float_clamp_move(fp.rect, cx - FLOAT_DEFAULT_W / 2,
+                               cy - FLOAT_TITLEBAR_H / 2, bounds);
+    e->floats[e->float_count++] = fp;
+
+    /* si la hoja de dock origen se quedo vacia, colapsarla; si el origen era otro
+     * flotante que se quedo sin pestanas, cerrarlo. */
+    if (!src_is_float) {
+        if (e->dock.leaf_count > 1 && editor_group_tab_count(e, src_group) == 0)
+            editor_unsplit(e, src_group);
+    } else {
+        if (editor_group_tab_count(e, src_group) == 0) {
+            int sf = editor_float_by_group(e, src_group);
+            if (sf >= 0) {
+                for (int i = sf; i < e->float_count - 1; i++)
+                    e->floats[i] = e->floats[i + 1];
+                e->float_count--;
+            }
+        }
+    }
+
+    /* reparar la pestana activa de la hoja/flotante origen si perdio la suya */
+    if (dock_leaf_by_group(&e->dock, src_group) != DOCK_NONE ||
+        editor_float_by_group(e, src_group) >= 0) {
+        int sa = e->group_active_tab[src_group];
+        if (sa < 0 || sa >= e->tab_count || e->tabs[sa].group != src_group) {
+            int first = editor_group_first_tab(e, src_group);
+            if (first >= 0) e->group_active_tab[src_group] = first;
+        }
+    }
+
+    /* enfocar el flotante recien creado (queda al frente) */
+    int fi = editor_float_by_group(e, new_group);
+    editor_float_focus(e, fi);
+    e->needs_redraw = 1;
+}
+
+void editor_float_close(Editor *e, int fi) {
+    if (fi < 0 || fi >= e->float_count) return;
+    int group = e->floats[fi].group_id;
+
+    /* cerrar todas las pestanas de ese grupo.  editor_tab_close compacta el array
+     * de pestanas, asi que se reescanea desde el principio en cada vuelta. */
+    int guard = 0;
+    for (;;) {
+        int found = -1;
+        for (int i = 0; i < e->tab_count; i++)
+            if (e->tabs[i].group == group) { found = i; break; }
+        if (found < 0) break;
+        e->active_tab = found;
+        e->active_group = group; /* base coherente para editor_tab_close */
+        editor_tab_close(e);
+        if (++guard > MAX_TABS + 1) break; /* defensivo anti-bucle */
+    }
+
+    /* quitar el flotante del array (su indice puede haber cambiado si
+     * editor_tab_close toco floats, asi que se busca por group_id). */
+    int idx = editor_float_by_group(e, group);
+    if (idx >= 0) {
+        for (int i = idx; i < e->float_count - 1; i++)
+            e->floats[i] = e->floats[i + 1];
+        e->float_count--;
+    }
+
+    /* el foco puede haber quedado en este grupo muerto: reubicarlo */
+    if (e->active_group == group || dock_leaf_by_group(&e->dock, e->active_group) ==
+                                        DOCK_NONE) {
+        int g = e->dock.nodes[e->dock.focused_leaf].group_id;
+        e->active_group = g;
+        if (e->tab_count > 0) {
+            int idx2 = e->group_active_tab[g];
+            if (idx2 < 0 || idx2 >= e->tab_count || e->tabs[idx2].group != g)
+                idx2 = editor_group_first_tab(e, g);
+            if (idx2 >= 0) {
+                e->active_tab = idx2;
+                e->group_active_tab[g] = idx2;
+                editor_tab_load_state(e);
+                editor_update_lexer(e, 0);
+                editor_sync_cursor(e);
+            }
+        }
+    }
+    e->needs_redraw = 1;
+}
+
+void editor_float_gc_empty(Editor *e) {
+    for (int i = 0; i < e->float_count;) {
+        if (editor_group_tab_count(e, e->floats[i].group_id) == 0) {
+            for (int j = i; j < e->float_count - 1; j++)
+                e->floats[j] = e->floats[j + 1];
+            e->float_count--; /* no avanzar i: el siguiente ocupo este hueco */
+        } else {
+            i++;
+        }
+    }
+}
+
+void editor_float_dock(Editor *e, int fi) {
+    if (fi < 0 || fi >= e->float_count) return;
+    int group = e->floats[fi].group_id;
+    int active = e->group_active_tab[group]; /* pestana activa del flotante */
+
+    /* hoja de dock destino = la enfocada del arbol */
+    int dst_group = e->dock.nodes[e->dock.focused_leaf].group_id;
+    if (dst_group == group) {
+        /* el foco esta en el propio flotante: elegir cualquier hoja del dock */
+        dst_group = e->dock.nodes[e->dock.root].kind == DOCK_LEAF
+                        ? e->dock.nodes[e->dock.root].group_id
+                        : -1;
+        if (dst_group < 0) {
+            /* buscar la primera hoja del arbol */
+            DockRect area = editor_dock_area(e);
+            DockLeafRect leaves[DOCK_MAX_LEAVES];
+            int n = dock_compute_leaf_rects(&e->dock, area, leaves,
+                                            DOCK_MAX_LEAVES);
+            if (n > 0) dst_group = leaves[0].group_id;
+        }
+    }
+    if (dst_group < 0 || dock_leaf_by_group(&e->dock, dst_group) == DOCK_NONE)
+        return; /* sin destino valido */
+
+    editor_tab_save_state(e);
+
+    /* mover TODAS las pestanas del flotante a la hoja destino */
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == group) e->tabs[i].group = dst_group;
+    if (active >= 0 && active < e->tab_count && e->tabs[active].group == dst_group)
+        e->group_active_tab[dst_group] = active; /* su activa sigue siendo activa */
+
+    /* quitar el flotante del array */
+    int idx = editor_float_by_group(e, group);
+    if (idx >= 0) {
+        for (int i = idx; i < e->float_count - 1; i++)
+            e->floats[i] = e->floats[i + 1];
+        e->float_count--;
+    }
+
+    /* enfocar la hoja destino con la pestana movida */
+    e->active_group = dst_group;
+    e->dock.focused_leaf = dock_leaf_by_group(&e->dock, dst_group);
+    int idx2 = e->group_active_tab[dst_group];
+    if (idx2 < 0 || idx2 >= e->tab_count || e->tabs[idx2].group != dst_group)
+        idx2 = editor_group_first_tab(e, dst_group);
+    if (idx2 >= 0) {
+        e->active_tab = idx2;
+        e->group_active_tab[dst_group] = idx2;
+    }
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}

@@ -819,6 +819,110 @@ static void render_split_panes(Editor *e, DockRect area) {
     editor_render_bind_tab(e, e->group_active_tab[e->active_group]);
 }
 
+/** Ultimo componente de una ruta (nombre de archivo), o la ruta entera si no
+ *  tiene separadores.  Local a render.c (render_ui.c tiene su propia copia). */
+static const char *float_basename(const char *path) {
+    if (!path || !path[0]) return "Sin título";
+    const char *base = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    return base[0] ? base : path;
+}
+
+void render_floats(Editor *e) {
+    if (e->float_count <= 0) return; /* sin flotantes: nada que dibujar */
+    SDL_Renderer *r = e->renderer;
+
+    /* z-order ascendente: floats[0] al fondo, el ultimo al frente */
+    for (int fi = 0; fi < e->float_count; fi++) {
+        FloatPanel *fp = &e->floats[fi];
+        int focused = (e->float_count - 1 == fi); /* el del frente = enfocado */
+        DockRect frame = {fp->rect.x, fp->rect.y, fp->rect.w, fp->rect.h};
+
+        /* sombra suave detras del marco (desplazada) */
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color(r, 0, 0, 0, 0x60);
+        fill_rect(r, frame.x + 4, frame.y + 4, frame.w, frame.h);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+
+        /* fondo del marco */
+        set_color_c(r, e->theme.col_bg);
+        fill_rect(r, frame.x, frame.y, frame.w, frame.h);
+
+        /* barra de titulo */
+        Rect tb = float_titlebar_rect(fp);
+        set_color_c(r, focused ? e->theme.col_tab_active : e->theme.col_tabbar_bg);
+        fill_rect(r, tb.x, tb.y, tb.w, tb.h);
+        if (focused) { /* acento superior en el flotante enfocado */
+            set_color_c(r, e->theme.col_tab_accent);
+            fill_rect(r, tb.x, tb.y, tb.w, 2);
+        }
+
+        /* titulo = nombre de la pestana activa del flotante */
+        int idx = e->group_active_tab[fp->group_id];
+        const char *name = "Sin título";
+        if (idx >= 0 && idx < e->tab_count)
+            name = float_basename(e->tabs[idx].filepath);
+        {
+            SDL_Rect clip = {tb.x + 6, tb.y, tb.w - FLOAT_BTN_SZ * 2 - 16, tb.h};
+            SDL_SetRenderClipRect(r, &clip);
+            draw_text(e, name, tb.x + 6, tb.y + (tb.h - e->font_size) / 2, 0xCC,
+                      0xCC, 0xDD);
+            SDL_SetRenderClipRect(r, NULL);
+        }
+
+        /* boton acoplar (recuadro con flecha hacia abajo "v") y boton cerrar */
+        Rect dock_b = float_dock_rect(fp);
+        set_color_c(r, e->theme.col_tabbar_sep);
+        stroke_rect(r, dock_b.x, dock_b.y, dock_b.w, dock_b.h);
+        draw_text(e, "v", dock_b.x + 5, dock_b.y + (dock_b.h - e->font_size) / 2,
+                  0xAA, 0xAA, 0xBB);
+        Rect close_b = float_close_rect(fp);
+        draw_text(e, "×", close_b.x + 4,
+                  close_b.y + (close_b.h - e->font_size) / 2, 0xAA, 0xAA, 0xBB);
+
+        /* tira de pestanas del flotante (solo las de su grupo) */
+        Rect tabbar = float_tabbar_rect(fp);
+        render_tabbar_group(e, fp->group_id, tabbar.y, tabbar.x,
+                            tabbar.x + tabbar.w);
+
+        /* contenido: enlazar su pestana activa y dibujar con override de area */
+        Rect content = float_content_rect(fp);
+        if (idx >= 0 && idx < e->tab_count && content.h > 0) {
+            editor_render_bind_tab(e, idx);
+            e->pane_active = 1;
+            e->pane_left = content.x;
+            e->pane_top = content.y;
+            e->pane_width = content.w;
+            e->pane_height = content.h;
+            update_lexer_cache(e); /* re-tokenizar las lineas sucias de esta hoja */
+            int visible_lines =
+                (e->line_height > 0) ? content.h / e->line_height : 0;
+            int total_lines = buf_line_count(e->buf);
+            render_content_layers(e, content.x, content.x + content.w, content.y,
+                                  content.h, visible_lines, total_lines);
+            e->pane_active = 0;
+        }
+
+        /* marco/borde exterior (acento si enfocado) */
+        set_color_c(r, focused ? e->theme.col_tab_accent : e->theme.col_tabbar_sep);
+        stroke_rect(r, frame.x, frame.y, frame.w, frame.h);
+
+        /* esquina de redimension (un par de lineas en diagonal) */
+        Rect rz = float_resize_rect(fp);
+        set_color_c(r, e->theme.col_tabbar_sep);
+        for (int g = 4; g < FLOAT_RESIZE_SZ; g += 4) {
+            fill_rect(r, rz.x + FLOAT_RESIZE_SZ - g, rz.y + FLOAT_RESIZE_SZ - 2, g,
+                      1);
+        }
+    }
+
+    /* dejar e-> reflejando la pestana del grupo con foco (su estado ya guardado
+     * por el llamante antes de render_floats) */
+    int fg = e->group_active_tab[e->active_group];
+    if (fg >= 0 && fg < e->tab_count) editor_render_bind_tab(e, fg);
+}
+
 /**
  * @brief Orquesta el dibujado de un frame completo del editor.
  *
@@ -871,14 +975,39 @@ void render_frame(Editor *e) {
     /* re-tokenizar líneas sucias antes de dibujar texto */
     update_lexer_cache(e);
 
+    /* Guardar el estado de la pestana enfocada antes de barajar vistas para los
+     * sub-paneles (split y/o flotantes).  Se restaura al final del frame.  Con
+     * cero flotantes y sin division esto es inocuo (vuelca y recarga la misma). */
+    int have_floats = (e->float_count > 0);
+    if (e->dock.leaf_count > 1 || have_floats) editor_tab_save_state(e);
+
+    /* Si el foco esta en un flotante (su group_id no es ninguna hoja del dock),
+     * el area del dock debe dibujar la pestana de la hoja del dock con foco, no
+     * la del flotante.  Se enlaza temporalmente esa pestana para el dibujo del
+     * dock; render_floats y el cierre del frame rebindan despues. */
+    int focus_in_dock = (dock_leaf_by_group(&e->dock, e->active_group) != DOCK_NONE);
+    int dock_draw_tab = e->active_tab; /* por defecto, la enfocada */
+    if (!focus_in_dock) {
+        int dg = e->dock.nodes[e->dock.focused_leaf].group_id;
+        int di = e->group_active_tab[dg];
+        if (di >= 0 && di < e->tab_count) dock_draw_tab = di;
+    }
+
     if (e->dock.leaf_count > 1) {
         /* Editor dividido: cada hoja dibuja sus pestañas y su contenido en su
-         * sub-rect.  Se guarda el estado de la hoja enfocada antes de barajar
-         * las vistas y render_split_panes lo restaura al final. */
-        editor_tab_save_state(e);
+         * sub-rect.  render_split_panes recorre solo las hojas del dock (ignora
+         * los grupos flotantes) y restaura la pestana del grupo con foco. */
         render_split_panes(e, editor_dock_area(e));
     } else {
-        /* Editor sin dividir: comportamiento de siempre (pane_active==0). */
+        /* Editor sin dividir: comportamiento de siempre (pane_active==0).  Si el
+         * foco esta en un flotante, dibujar el contenido del dock con su hoja
+         * (recalculando total_lines para ESA pestana, no la del flotante). */
+        int dl = total_lines;
+        if (!focus_in_dock) {
+            editor_render_bind_tab(e, dock_draw_tab);
+            update_lexer_cache(e); /* tokens de la pestana del dock */
+            dl = buf_line_count(e->buf);
+        }
         /* resaltado de la línea activa (banda completa; solo si está activado en
          * preferencias y no hay selección) */
         if (e->settings.highlight_current_line && !e->sel_active) {
@@ -894,11 +1023,18 @@ void render_frame(Editor *e) {
         render_selection(e, left_offset, text_top,
                          visible_lines); /* fondo selección */
         render_text_area(e, left_offset, text_top, visible_lines,
-                         total_lines); /* texto resaltado */
+                         dl); /* texto resaltado */
         render_gutter(e, left_offset, text_top, text_height, visible_lines,
-                      total_lines); /* números */
+                      dl); /* numeros de linea */
         render_cursor(e, left_offset, text_top,
                       visible_lines); /* barra del cursor */
+
+        /* si se dibujo el dock con la pestana de su hoja (foco en flotante),
+         * rebindar la pestana enfocada para que el status bar la refleje. */
+        if (!focus_in_dock) {
+            editor_render_bind_tab(e, e->group_active_tab[e->active_group]);
+            update_lexer_cache(e);
+        }
     }
 
     /* barra de estado: nombre + posición del cursor (1-based) + '*' si
@@ -927,6 +1063,7 @@ void render_frame(Editor *e) {
     render_ext_panel(e); /* panel de extensiones, bajo la navbar */
     render_navbar(e);
     if (e->dock.leaf_count <= 1) render_tabbar(e);
+    render_floats(e);   /* paneles flotantes: overlay ENCIMA del dock */
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */

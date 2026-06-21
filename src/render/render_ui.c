@@ -389,8 +389,17 @@ void render_tabbar(Editor *e) {
 
     /* empezar tras el panel lateral (o su botón si está cerrado) */
     int tx = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
-    for (int i = 0; i < e->tab_count; i++)
+    /* la barra global solo se dibuja sin division; muestra las pestanas de la
+     * unica hoja del dock.  Si hay flotantes, sus pestanas viven en otro grupo y
+     * NO deben aparecer aqui (las dibuja su propio flotante). */
+    int dock_group = (e->dock.node_count > 0 && e->dock.root >= 0)
+                         ? e->dock.nodes[e->dock.root].group_id
+                         : 0;
+    for (int i = 0; i < e->tab_count; i++) {
+        if (e->float_count > 0 && e->tabs[i].group != dock_group)
+            continue; /* pestana de un flotante: no en la barra global */
         tx += draw_tab(e, i, tx, bar_y, bar_h); /* cada pestaña avanza tx */
+    }
 
     /* Botón + (nueva pestaña), justo después de la última */
     set_color_c(r, e->theme.col_tabbar_bg);
@@ -645,11 +654,32 @@ void render_tab_drag(Editor *e) {
     if (!e->dragging_tab || e->drag_tab < 0) return; /* sin arrastre real */
     SDL_Renderer *r = e->renderer;
 
+    /* Modo flotante: con Ctrl pulsado, soltar DESPRENDE la pestana a un panel
+     * flotante en vez de acoplarla; la guia lo indica con un marco fantasma del
+     * tamano por defecto del flotante centrado en el cursor, sin overlay de zona. */
+    int float_mode = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+    if (float_mode) {
+        Rect b = editor_float_bounds(e);
+        FloatPanel ghost;
+        ghost.group_id = -1;
+        ghost.rect.w = FLOAT_DEFAULT_W;
+        ghost.rect.h = FLOAT_DEFAULT_H;
+        ghost.rect = float_clamp_move(ghost.rect, e->drag_mx - FLOAT_DEFAULT_W / 2,
+                                      e->drag_my - FLOAT_TITLEBAR_H / 2, b);
+        Color acc = e->theme.col_tab_accent;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color(r, acc.r, acc.g, acc.b, 0x30);
+        fill_rect(r, ghost.rect.x, ghost.rect.y, ghost.rect.w, ghost.rect.h);
+        set_color(r, acc.r, acc.g, acc.b, 0xC0);
+        stroke_rect(r, ghost.rect.x, ghost.rect.y, ghost.rect.w, ghost.rect.h);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    }
+
     /* zona destino bajo el cursor */
     int group = -1, zone = DOCK_DZ_NONE;
     DockRect leaf_rect;
-    int over = editor_drag_target(e, e->drag_mx, e->drag_my, &group, &zone,
-                                  &leaf_rect);
+    int over = !float_mode && editor_drag_target(e, e->drag_mx, e->drag_my, &group,
+                                                 &zone, &leaf_rect);
 
     /* overlay translucido de la zona destino (si el cursor esta sobre una hoja
      * y la zona no es nula). */
@@ -688,5 +718,10 @@ void render_tab_drag(Editor *e) {
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
         int ty = gy + (gh - e->font_size) / 2;
         draw_text(e, name, gx + TAB_PAD, ty, 0xCC, 0xCC, 0xDD);
+
+        /* en modo flotante, una etiqueta bajo el fantasma lo deja claro */
+        if (float_mode)
+            draw_text_c(e, "flotante", gx + TAB_PAD, gy + gh + 2,
+                        e->theme.col_tab_accent);
     }
 }

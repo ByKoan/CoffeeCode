@@ -95,7 +95,13 @@ typedef struct {
  * MAX_GROUPS es el tope de hojas simultáneas y debe coincidir con
  * DOCK_MAX_LEAVES. */
 #include "dock/dock.h"
-#define MAX_GROUPS DOCK_MAX_LEAVES
+#include "dock/float.h"
+/* Tope de grupos (hojas del dock + flotantes simultaneos).  Los flotantes
+ * tambien reclaman group_id via dock_alloc_group_id (que escanea SOLO las hojas
+ * del arbol), asi que el espacio de ids debe cubrir hojas + flotantes a la vez:
+ * DOCK_MAX_LEAVES + FLOAT_MAX_PANELS.  group_active_tab[] se indexa por group_id,
+ * por lo que su tamano (MAX_GROUPS) debe ser ese total. */
+#define MAX_GROUPS (DOCK_MAX_LEAVES + FLOAT_MAX_PANELS)
 
 /* -- Barra de búsqueda ---------------------------------------------------- */
 #define FIND_BAR_MAX 256
@@ -309,6 +315,25 @@ typedef struct Editor {
     int pane_active;                       /* 1 = usar el override de abajo   */
     int pane_left, pane_top;               /* origen del área del panel (px)  */
     int pane_width, pane_height;           /* tamaño del área del panel (px)  */
+
+    /* -- Paneles flotantes (overlay dentro de la ventana) -------------------
+     * Cada flotante es un grupo de pestanas libre dibujado ENCIMA del arbol de
+     * dock (ver dock/float.h).  El z-order es el orden del array: floats[0] es
+     * el de mas atras, floats[float_count-1] el de mas al frente.  Con
+     * float_count==0 (estado por defecto) NADIE consulta estos campos y todo se
+     * comporta EXACTAMENTE como antes: cero regresion. */
+    FloatPanel floats[FLOAT_MAX_PANELS]; /* paneles flotantes (z-order ascendente) */
+    int float_count;                     /* numero de flotantes vivos             */
+
+    /* -- Arrastre de un flotante (mover / redimensionar) --------------------
+     * float_drag >= 0 indica el indice del flotante en arrastre; el modo (mover
+     * por la barra de titulo o redimensionar por la esquina) lo distingue
+     * float_resizing.  drag_off_x/y guardan el desfase cursor->esquina al iniciar
+     * el movimiento para que el flotante no "salte" bajo el cursor. */
+    int float_drag;        /* indice del flotante en arrastre, o -1            */
+    int float_resizing;    /* 1 = redimensionando; 0 = moviendo                */
+    int float_drag_off_x;  /* desfase X cursor -> esquina del marco al mover   */
+    int float_drag_off_y;  /* desfase Y cursor -> esquina del marco al mover   */
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -410,3 +435,35 @@ DockRect editor_dock_area(Editor *e);
  * no enfocado: tras dibujarlo, el render vuelve a enlazar la pestaña del grupo
  * con foco. No usar para cambiar el foco real (eso es editor_focus_group). */
 void editor_render_bind_tab(Editor *e, int idx);
+
+/* -- Paneles flotantes (ver dock/float.h) --------------------------------- */
+/* Limites validos (px) en los que un flotante puede moverse/redimensionarse:
+ * toda la ventana bajo la navbar (para que la barra de titulo no tape la navbar)
+ * y sobre la barra de estado.  La MISMA geometria la usan render e input. */
+Rect editor_float_bounds(Editor *e);
+
+/* Desprende la pestana de indice GLOBAL @p tab a un panel flotante nuevo cuyo
+ * marco se centra en (@p cx,@p cy) (recortado a editor_float_bounds).  La pestana
+ * se mueve a un group_id nuevo; si su hoja de dock origen queda vacia, se
+ * colapsa.  El flotante queda al frente y enfocado.  No hace nada si no hay sitio
+ * para mas flotantes/ids o el indice es invalido. */
+void editor_float_detach_tab(Editor *e, int tab, int cx, int cy);
+
+/* Trae el flotante de indice @p fi al frente del z-order (lo dibuja/consulta el
+ * ultimo) y enfoca su grupo.  No hace nada si @p fi es invalido. */
+void editor_float_focus(Editor *e, int fi);
+
+/* Cierra el flotante de indice @p fi: cierra todas SUS pestanas.  Tras esto el
+ * flotante desaparece del array (z-order compactado).  Si eran las ultimas
+ * pestanas del editor, queda la pantalla de bienvenida. */
+void editor_float_close(Editor *e, int fi);
+
+/* Acopla el flotante de indice @p fi de vuelta al arbol de dock: mueve TODAS sus
+ * pestanas a la hoja enfocada del dock (zona centro) y elimina el flotante.  La
+ * pestana activa del flotante queda como activa en el destino.  No hace nada si
+ * @p fi es invalido. */
+void editor_float_dock(Editor *e, int fi);
+
+/* Retira del array cualquier panel flotante que se haya quedado sin pestanas
+ * (p.ej. tras arrastrar su ultima pestana al dock).  Compacta el z-order. */
+void editor_float_gc_empty(Editor *e);

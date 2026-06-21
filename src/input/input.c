@@ -506,6 +506,8 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
             e->bottom_selecting = 0; /* fin de la seleccion del panel inferior */
+            e->float_drag = -1;      /* fin del arrastre de un flotante         */
+            e->float_resizing = 0;
         }
         break;
     case SDL_EVENT_MOUSE_MOTION: on_mouse_motion(e, ev); break;

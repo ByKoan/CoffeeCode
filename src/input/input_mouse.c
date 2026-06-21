@@ -34,6 +34,12 @@
  * definicion, que vive junto al resto de helpers del panel inferior. */
 static int bottom_offset_at(Editor *e, int mx, int my);
 
+/* Adelantos: handle_float_click los usa antes de sus definiciones (mapeo de
+ * pixel->linea/columna y clic en la barra de pestanas, mas abajo). */
+static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
+                              int *col);
+static int click_tabbar(Editor *e, int mx, int my);
+
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
  *
@@ -107,6 +113,122 @@ static void set_pane_override(Editor *e, int g) {
 
 /** Limpia el override de área tras un mapeo de clic. */
 static void clear_pane_override(Editor *e) { e->pane_active = 0; }
+
+/* -- Paneles flotantes: hit-test e interaccion ----------------------------- */
+
+/**
+ * @brief Indice del flotante bajo (@p mx,@p my) en z-order de DELANTE hacia
+ *        atras (el del frente gana), o -1 si ninguno lo contiene.
+ */
+static int float_at_point(Editor *e, int mx, int my) {
+    for (int i = e->float_count - 1; i >= 0; i--)
+        if (rect_has(e->floats[i].rect, mx, my)) return i;
+    return -1;
+}
+
+/**
+ * @brief Fija el override de area (e->pane_*) al rect de CONTENIDO del flotante
+ *        @p fi, para que point_to_line_col mapee el clic dentro de el.
+ */
+static void set_float_pane_override(Editor *e, int fi) {
+    if (fi < 0 || fi >= e->float_count) { e->pane_active = 0; return; }
+    Rect c = float_content_rect(&e->floats[fi]);
+    e->pane_active = 1;
+    e->pane_left = c.x;
+    e->pane_top = c.y;
+    e->pane_width = c.w;
+    e->pane_height = c.h;
+    if (e->pane_height < 0) e->pane_height = 0;
+}
+
+/**
+ * @brief Procesa un clic sobre los paneles flotantes (consultados antes que el
+ *        dock por estar encima).
+ *
+ * Resuelve, en z-order de delante hacia atras: botones de la barra de titulo
+ * (cerrar/acoplar), arrastre por la barra de titulo (mover + traer al frente),
+ * la tira de pestanas (reusa click_tabbar via la geometria registrada por el
+ * render), la esquina de redimension, y el cuerpo (enfocar + colocar cursor).
+ *
+ * @return 1 si el clic fue consumido por algun flotante, 0 si no.
+ */
+static int handle_float_click(Editor *e, int mx, int my) {
+    int fi = float_at_point(e, mx, my);
+    if (fi < 0) return 0; /* el clic no cae sobre ningun flotante */
+
+    FloatHit hit = float_hit_test(&e->floats[fi], mx, my);
+
+    /* cualquier interaccion trae el flotante al frente y enfoca su grupo.  Tras
+     * editor_float_focus el flotante queda como el ultimo del array. */
+    editor_float_focus(e, fi);
+    fi = e->float_count - 1; /* su nuevo indice tras subir al frente */
+
+    switch (hit) {
+    case FLOAT_HIT_CLOSE:
+        editor_float_close(e, fi);
+        return 1;
+    case FLOAT_HIT_DOCK:
+        editor_float_dock(e, fi);
+        return 1;
+    case FLOAT_HIT_TITLEBAR: {
+        /* iniciar arrastre de movimiento: guardar el desfase cursor->esquina */
+        e->float_drag = fi;
+        e->float_resizing = 0;
+        e->float_drag_off_x = mx - e->floats[fi].rect.x;
+        e->float_drag_off_y = my - e->floats[fi].rect.y;
+        return 1;
+    }
+    case FLOAT_HIT_RESIZE:
+        e->float_drag = fi;
+        e->float_resizing = 1;
+        return 1;
+    case FLOAT_HIT_TABBAR: {
+        /* la geometria de las pestanas del flotante la registro render_tabbar_group
+         * (UI_LIST_TAB / _CLOSE / UI_LIST_SPLIT_NEW); click_tabbar la resuelve
+         * (cambiar/cerrar/nueva pestana, mas el candidato a arrastre). */
+        int group = e->floats[fi].group_id;
+        click_tabbar(e, mx, my);
+        /* si al cerrar la ultima pestana el flotante quedo vacio, retirarlo */
+        int still = 0;
+        for (int i = 0; i < e->tab_count; i++)
+            if (e->tabs[i].group == group) { still = 1; break; }
+        if (!still) {
+            int gi = -1;
+            for (int i = 0; i < e->float_count; i++)
+                if (e->floats[i].group_id == group) { gi = i; break; }
+            if (gi >= 0) {
+                for (int i = gi; i < e->float_count - 1; i++)
+                    e->floats[i] = e->floats[i + 1];
+                e->float_count--;
+            }
+        }
+        return 1;
+    }
+    case FLOAT_HIT_CONTENT: {
+        /* enfocar + colocar el cursor mapeando con el area del flotante */
+        set_float_pane_override(e, fi);
+        if (e->tab_count > 0 && e->buf) {
+            int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
+            if (mx >= text_x) {
+                int line, col;
+                point_to_line_col(e, mx, my, &line, &col);
+                editor_sel_clear(e);
+                e->sel_anchor_line = line;
+                e->sel_anchor_col = col;
+                e->mouse_selecting = 1; /* permitir arrastrar para seleccionar */
+                buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+            }
+        }
+        clear_pane_override(e);
+        e->needs_redraw = 1;
+        return 1;
+    }
+    default:
+        return 1; /* dentro del marco pero sin accion: consumir igualmente */
+    }
+}
 
 /* ── Divisores arrastrables (redimension de paneles) ────────────────────────
  */
@@ -489,6 +611,24 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
     int mouse_x = (int)ev->motion.x;
     int mouse_y = (int)ev->motion.y;
 
+    /* Arrastrando un flotante (mover por la barra de titulo o redimensionar por
+     * la esquina): tiene prioridad sobre el resto del hit-testing. */
+    if (e->float_drag >= 0 && e->float_drag < e->float_count) {
+        FloatPanel *fp = &e->floats[e->float_drag];
+        Rect bounds = editor_float_bounds(e);
+        if (e->float_resizing) {
+            int nw = mouse_x - fp->rect.x;
+            int nh = mouse_y - fp->rect.y;
+            fp->rect = float_clamp_resize(fp->rect, nw, nh, bounds);
+        } else {
+            int nx = mouse_x - e->float_drag_off_x;
+            int ny = mouse_y - e->float_drag_off_y;
+            fp->rect = float_clamp_move(fp->rect, nx, ny, bounds);
+        }
+        e->needs_redraw = 1;
+        return;
+    }
+
     /* Arrastrando un divisor: redimensiona el panel y nada mas (prioridad
      * sobre todo el resto del hit-testing). */
     if (e->dragging_divider != DIVIDER_NONE) {
@@ -657,10 +797,21 @@ int on_tab_drag_release(Editor *e, int mx, int my) {
         return 1;
     }
 
+    /* Con Ctrl pulsado al soltar: DESPRENDER la pestana a un panel flotante nuevo
+     * centrado en el cursor, en vez de acoplarla al arbol de dock. */
+    if (SDL_GetModState() & SDL_KMOD_CTRL) {
+        editor_float_detach_tab(e, tab, mx, my);
+        e->needs_redraw = 1;
+        return 1;
+    }
+
     int group = -1, zone = DOCK_DZ_NONE;
     if (editor_drag_target(e, mx, my, &group, &zone, NULL) &&
         zone != DOCK_DZ_NONE)
         editor_tab_drop(e, tab, group, zone);
+
+    /* si la pestana arrastrada salio de un flotante y lo dejo vacio, retirarlo */
+    editor_float_gc_empty(e);
 
     e->needs_redraw = 1; /* repintar sin la guia de arrastre */
     return 1;            /* arrastre consumido */
@@ -1099,6 +1250,12 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         e->needs_redraw = 1;
         return;
     }
+
+    /* Paneles flotantes: estan dibujados ENCIMA del dock y de los paneles
+     * inferior/extensiones, asi que se consultan antes que ellos (pero despues
+     * de los botones de la navbar y de los popups modales).  Si el clic cae sobre
+     * un flotante, lo consume. */
+    if (e->float_count > 0 && handle_float_click(e, mx, my)) return;
 
     /* Clic dentro del panel inferior: foco + pestanas + seleccion. */
     if (e->bottom_panel_open && handle_bottom_panel_click(e, mx, my)) return;
