@@ -120,6 +120,17 @@ add_coffee_test(test_winhit app/test_winhit.c
 add_coffee_test(test_layout_persist session/test_layout_persist.c
     "${CMAKE_SOURCE_DIR}/src/session/layout_persist.c")
 
+# --- image load (carga de imagenes de fondo via SDL_image) ------------------
+# Verifica HEADLESS que IMG_Load decodifica PNG, JPG y BMP a una superficie en
+# CPU (no necesita ventana ni renderer).  Asi se detecta cualquier regresion en
+# la configuracion de SDL_image (p. ej. que el backend stb deje de incluir el
+# decodificador de PNG/JPG).  Es el unico test que enlaza SDL3 + SDL3_image; los
+# fixtures se leen del arbol de fuentes via COFFEE_IMG_FIXTURE_DIR.
+add_coffee_test(test_image_load render/test_image_load.c)
+target_link_libraries(test_image_load PRIVATE SDL3::SDL3-static SDL3_image::SDL3_image)
+target_compile_definitions(test_image_load PRIVATE
+    "COFFEE_IMG_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/render/fixtures\"")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.
