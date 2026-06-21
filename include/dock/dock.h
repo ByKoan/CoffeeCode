@@ -46,6 +46,27 @@ typedef enum {
     DOCK_SPLIT     /**< division: orientacion + ratio + dos hijos          */
 } DockNodeKind;
 
+/**
+ * @brief Zona de "drop" dentro del rectangulo de una hoja al arrastrar.
+ *
+ * Al arrastrar una pestana sobre una hoja, la posicion del cursor dentro de su
+ * rect decide la accion: el centro mueve la pestana a ESE grupo; las bandas de
+ * los bordes dividen la hoja creando una hoja nueva a ese lado (LEFT/RIGHT en
+ * vertical, TOP/BOTTOM en horizontal).
+ */
+typedef enum {
+    DOCK_DZ_NONE = 0, /**< fuera del rect: ninguna accion              */
+    DOCK_DZ_CENTER,   /**< centro: mover la pestana a este grupo        */
+    DOCK_DZ_LEFT,     /**< banda izquierda: dividir V, hoja nueva a la izquierda */
+    DOCK_DZ_RIGHT,    /**< banda derecha: dividir V, hoja nueva a la derecha    */
+    DOCK_DZ_TOP,      /**< banda superior: dividir H, hoja nueva arriba         */
+    DOCK_DZ_BOTTOM    /**< banda inferior: dividir H, hoja nueva abajo          */
+} DockDropZone;
+
+/* Fraccion del ancho/alto del rect que ocupa cada banda de borde al calcular la
+ * zona de drop; el resto (centro) es DOCK_DZ_CENTER. */
+#define DOCK_DROP_BAND 0.25f
+
 /** Orientacion de una division. */
 typedef enum {
     DOCK_VERTICAL = 0,  /**< divisor vertical: hijos lado a lado (reparte ancho) */
@@ -128,6 +149,25 @@ void dock_init_single(DockTree *t, int group_id);
  *         (nodo no es hoja, sin sitio en el pool, o tope de hojas alcanzado).
  */
 int dock_split_leaf(DockTree *t, int leaf, DockOrient orient, int new_group_id);
+
+/**
+ * @brief Como ::dock_split_leaf pero eligiendo en que lado queda la hoja nueva.
+ *
+ * ::dock_split_leaf siempre coloca la hoja nueva como child_b (derecha en V,
+ * abajo en H).  Esta variante permite colocarla como child_a (izquierda/arriba)
+ * cuando @p new_first es 1, util al soltar una pestana sobre la banda
+ * izquierda/superior de una hoja.  Con @p new_first==0 el comportamiento es
+ * identico a ::dock_split_leaf.
+ *
+ * @param t            Arbol.
+ * @param leaf         Indice del nodo hoja a dividir.
+ * @param orient       Orientacion del nuevo split (V o H).
+ * @param new_group_id Id del grupo de la hoja nueva.
+ * @param new_first    1 = la hoja nueva es child_a (izquierda/arriba); 0 = child_b.
+ * @return El indice del nodo hoja NUEVO, o DOCK_NONE si no se pudo dividir.
+ */
+int dock_split_leaf_side(DockTree *t, int leaf, DockOrient orient,
+                         int new_group_id, int new_first);
 
 /**
  * @brief Elimina la hoja @p leaf y colapsa su split: el hermano ocupa el sitio.
@@ -232,3 +272,21 @@ int dock_hit_divider(const DockTree *t, DockRect area, int mx, int my,
  * @param my    Y del raton (px).
  */
 void dock_apply_divider(DockTree *t, DockRect area, int split, int mx, int my);
+
+/**
+ * @brief Clasifica el punto (@p mx,@p my) dentro del rect @p leaf_rect en una
+ *        ::DockDropZone (centro o banda de borde) para el arrastre de pestanas.
+ *
+ * Las bandas de cada borde ocupan ::DOCK_DROP_BAND del ancho (LEFT/RIGHT) o del
+ * alto (TOP/BOTTOM) del rect; el resto interior es ::DOCK_DZ_CENTER.  Cuando el
+ * punto se acerca a una esquina gana la banda mas cercana a su borde (la de
+ * menor profundidad relativa).  Un punto fuera del rect devuelve ::DOCK_DZ_NONE.
+ *
+ * Funcion PURA: no toca el arbol, solo geometria.  Se prueba en headless.
+ *
+ * @param leaf_rect Rectangulo de la hoja destino (px).
+ * @param mx        X del cursor (px).
+ * @param my        Y del cursor (px).
+ * @return La zona de drop bajo el cursor.
+ */
+DockDropZone dock_drop_zone(DockRect leaf_rect, int mx, int my);

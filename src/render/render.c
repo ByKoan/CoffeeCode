@@ -930,6 +930,7 @@ void render_frame(Editor *e) {
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */
+    render_tab_drag(e);  /* guia del arrastre de pestañas, sobre todo lo demás */
 
     SDL_RenderPresent(r); /* mostrar el frame ya compuesto (doble búfer) */
 }

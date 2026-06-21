@@ -55,6 +55,11 @@ void render_tabbar(Editor *e);    /* barra de pestañas + botón "+"*/
  * número de grupo para el botón "+"). */
 void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
                          int pane_right);
+/* Guia visual del arrastre de una pestana (drag-to-dock): superpone un overlay
+ * translucido sobre la zona destino (hoja completa para CENTER, mitad/banda para
+ * los bordes) y un "fantasma" del titulo junto al cursor.  No dibuja nada si no
+ * hay un arrastre en curso (e->dragging_tab == 0). */
+void render_tab_drag(Editor *e);
 void render_find_bar(Editor *e);  /* barra de búsqueda (Ctrl+F)   */
 void render_shortcuts(Editor *e); /* banda de atajos (badges)     */
 void render_scrollbar(Editor *e, int left_offset); /* scroll vertical */

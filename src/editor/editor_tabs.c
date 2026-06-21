@@ -647,6 +647,129 @@ void editor_split_dir(Editor *e, DockOrient orient) {
 
 void editor_split(Editor *e) { editor_split_dir(e, DOCK_VERTICAL); }
 
+int editor_drag_target(Editor *e, int mx, int my, int *out_group, int *out_zone,
+                       DockRect *out_rect) {
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    for (int i = 0; i < n; i++) {
+        DockRect r = leaves[i].rect;
+        if (mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h) {
+            if (out_group) *out_group = leaves[i].group_id;
+            if (out_zone) *out_zone = (int)dock_drop_zone(r, mx, my);
+            if (out_rect) *out_rect = r;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Cuenta cuantas pestanas pertenecen al grupo @p group. */
+static int editor_group_tab_count(Editor *e, int group) {
+    int n = 0;
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == group) n++;
+    return n;
+}
+
+/** Primer indice global de pestana del grupo @p group, o -1 si ninguna. */
+static int editor_group_first_tab(Editor *e, int group) {
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == group) return i;
+    return -1;
+}
+
+void editor_tab_drop(Editor *e, int tab, int target_group, int zone) {
+    if (e->tab_count == 0) return;
+    if (tab < 0 || tab >= e->tab_count) return;
+    if (zone == DOCK_DZ_NONE) return;
+
+    int src_group = e->tabs[tab].group; /* hoja origen de la pestana */
+
+    /* la hoja destino debe existir en el arbol */
+    int target_leaf = dock_leaf_by_group(&e->dock, target_group);
+    if (target_leaf == DOCK_NONE) return;
+
+    editor_tab_save_state(e); /* preservar la vista actual antes de barajar */
+
+    if (zone == DOCK_DZ_CENTER) {
+        /* CENTER: mover la pestana al grupo destino.  No-op si ya esta ahi. */
+        if (src_group == target_group) return;
+        e->tabs[tab].group = target_group;
+        e->group_active_tab[target_group] = tab; /* queda activa en destino */
+
+        /* si la hoja origen se quedo sin pestanas, colapsarla (hermano hereda) */
+        if (e->dock.leaf_count > 1 && editor_group_tab_count(e, src_group) == 0)
+            editor_unsplit(e, src_group);
+    } else {
+        /* zonas de borde: dividir la hoja destino y mover la pestana a la nueva.
+         * No tiene sentido dividir si la pestana arrastrada es la UNICA de su
+         * propia hoja y ademas la hoja destino es esa misma (se dividiria una
+         * hoja para moverle su unica pestana: termina igual).  En ese caso
+         * tratarlo como no-op. */
+        if (src_group == target_group &&
+            editor_group_tab_count(e, src_group) <= 1)
+            return;
+
+        if (e->dock.leaf_count >= DOCK_MAX_LEAVES) return; /* tope de hojas */
+        int new_group = dock_alloc_group_id(&e->dock);
+        if (new_group == DOCK_NONE) return; /* sin ids libres */
+
+        /* orientacion + lado segun la zona */
+        DockOrient orient = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_RIGHT)
+                                ? DOCK_VERTICAL
+                                : DOCK_HORIZONTAL;
+        int new_first = (zone == DOCK_DZ_LEFT || zone == DOCK_DZ_TOP);
+
+        int new_leaf = dock_split_leaf_side(&e->dock, target_leaf, orient,
+                                            new_group, new_first);
+        if (new_leaf == DOCK_NONE) return; /* no se pudo dividir */
+
+        /* mover la pestana arrastrada a la hoja nueva */
+        e->tabs[tab].group = new_group;
+        e->group_active_tab[new_group] = tab;
+
+        /* el dock_split clono el group_id original de la hoja destino en la otra
+         * mitad; su pestana activa registrada sigue siendo valida.  Si la hoja
+         * origen (distinta de la destino) se quedo vacia, colapsarla. */
+        if (src_group != target_group &&
+            editor_group_tab_count(e, src_group) == 0)
+            editor_unsplit(e, src_group);
+
+        target_group = new_group; /* enfocar la hoja nueva con la pestana movida */
+    }
+
+    /* reparar pestana activa de la hoja origen si sigue viva y perdio la suya */
+    int sleaf = dock_leaf_by_group(&e->dock, src_group);
+    if (sleaf != DOCK_NONE) {
+        int sa = e->group_active_tab[src_group];
+        if (sa < 0 || sa >= e->tab_count || e->tabs[sa].group != src_group) {
+            int first = editor_group_first_tab(e, src_group);
+            if (first >= 0) e->group_active_tab[src_group] = first;
+        }
+    }
+
+    /* enfocar la hoja destino con la pestana recien movida como activa */
+    int focus_group = target_group;
+    if (dock_leaf_by_group(&e->dock, focus_group) == DOCK_NONE) {
+        /* defensivo: si por algun motivo no existe, caer a la hoja con foco */
+        focus_group = e->dock.nodes[e->dock.focused_leaf].group_id;
+    }
+    e->active_group = focus_group;
+    e->dock.focused_leaf = dock_leaf_by_group(&e->dock, focus_group);
+    e->active_tab = e->group_active_tab[focus_group];
+    if (e->active_tab < 0 || e->active_tab >= e->tab_count) {
+        int first = editor_group_first_tab(e, focus_group);
+        e->active_tab = (first >= 0) ? first : 0;
+        e->group_active_tab[focus_group] = e->active_tab;
+    }
+    if (e->dock.leaf_count <= 1) e->pane_active = 0;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
 /**
  * @brief Colapsa una hoja del árbol cuando se queda sin pestañas: la elimina y
  *        su hermano ocupa el sitio.  Si quedaba una sola hoja, no hace nada.

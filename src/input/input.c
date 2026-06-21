@@ -496,6 +496,9 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
     case SDL_EVENT_MOUSE_WHEEL: on_mouse_wheel(e, ev); break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (ev->button.button == SDL_BUTTON_LEFT) {
+            /* soltar tras arrastrar una pestana: aplicar el drop (mover/dividir)
+             * antes de limpiar el resto de estados de arrastre */
+            on_tab_drag_release(e, (int)ev->button.x, (int)ev->button.y);
             /* soltar el botón izquierdo termina cualquier arrastre en curso */
             e->ftree.dragging_border = 0;
             e->dragging_divider = DIVIDER_NONE; /* fin del arrastre de divisor */

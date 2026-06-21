@@ -130,3 +130,19 @@ int ui_hit(const UiRegistry *u, UiId id, int mx, int my);
  * @return El índice registrado, o -1 si el punto no cae sobre ninguno.
  */
 int ui_hit_idx(const UiRegistry *u, UiList list, int mx, int my);
+
+/**
+ * @brief Recupera el rectángulo registrado del control de lista @p list con
+ *        índice @p idx en el frame actual.
+ *
+ * Lo usa el render del arrastre de pestañas para situar el "fantasma" del título
+ * sobre la pestaña agarrada.  Si no hay tal entrada este frame, devuelve 0 y no
+ * toca @p out.
+ *
+ * @param u    Registro de hit-test.
+ * @param list Familia de la lista.
+ * @param idx  Índice buscado.
+ * @param[out] out Rectángulo encontrado.
+ * @return 1 si se encontró, 0 si no.
+ */
+int ui_get_idx(const UiRegistry *u, UiList list, int idx, Rect *out);

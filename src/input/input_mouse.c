@@ -21,6 +21,9 @@
 #define FALLBACK_CHAR_W 8 /* ancho de carácter por defecto              */
 /* líneas desplazadas por "muesca" de rueda */
 #define SCROLL_LINES_PER_NOTCH 3
+/* desplazamiento (px) que debe superar el cursor con el boton pulsado sobre el
+ * titulo de una pestana para que un clic se convierta en arrastre */
+#define TAB_DRAG_THRESHOLD 5
 
 /* Única medida fija que aún necesita el input para el hit-test (el resto de la
  * geometría de controles ya viene del registro e->ui). */
@@ -494,6 +497,25 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* Candidato a arrastre de pestana: si el cursor se aleja mas que el umbral
+     * con el boton pulsado, entrar en modo arrastre.  Mientras dura, solo se
+     * actualiza la posicion (el render dibuja la guia) y se consume el motion
+     * para no caer en hover/seleccion. */
+    if (e->drag_tab >= 0) {
+        e->drag_mx = mouse_x;
+        e->drag_my = mouse_y;
+        if (!e->dragging_tab) {
+            int dx = mouse_x - e->drag_start_x;
+            int dy = mouse_y - e->drag_start_y;
+            if (dx * dx + dy * dy > TAB_DRAG_THRESHOLD * TAB_DRAG_THRESHOLD)
+                e->dragging_tab = 1; /* umbral superado: arrastre real */
+        }
+        if (e->dragging_tab) {
+            e->needs_redraw = 1; /* repintar la guia de la zona destino */
+            return;              /* arrastre en curso: consume el motion */
+        }
+    }
+
     /* Hover sobre divisores: cambia el cursor a redimension cuando procede. */
     update_divider_hover(e, mouse_x, mouse_y);
 
@@ -598,6 +620,17 @@ static int click_tabbar(Editor *e, int mx, int my) {
          * (editor_tab_switch la asigna a la hoja enfocada) */
         if (e->dock.leaf_count > 1) editor_focus_group(e, e->tabs[tab_i].group);
         editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
+
+        /* Registrar un CANDIDATO a arrastre sobre el TITULO de la pestaña: el
+         * arrastre real solo empieza si el cursor se mueve mas que el umbral
+         * (on_mouse_motion).  Hasta entonces esto no altera el clic normal. */
+        e->drag_tab = tab_i;
+        e->drag_from_group = e->tabs[tab_i].group;
+        e->dragging_tab = 0;
+        e->drag_start_x = mx;
+        e->drag_start_y = my;
+        e->drag_mx = mx;
+        e->drag_my = my;
     }
     /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
      * nombre */
@@ -606,6 +639,31 @@ static int click_tabbar(Editor *e, int mx, int my) {
                            : "CoffeeCode - Sin título";
     SDL_SetWindowTitle(e->window, path);
     return 1;
+}
+
+int on_tab_drag_release(Editor *e, int mx, int my) {
+    if (e->drag_tab < 0) return 0; /* no habia candidato */
+    int was_dragging = e->dragging_tab;
+    int tab = e->drag_tab;
+    /* limpiar el estado de arrastre ANTES de cualquier reorganizacion para no
+     * arrastrar indices viejos si tab[] cambia (drop puede recolocar pestanas) */
+    e->drag_tab = -1;
+    e->dragging_tab = 0;
+    if (!was_dragging) return 0; /* fue un clic normal: ya lo gestiono el down */
+
+    /* validar el indice por si tab_count cambio entre tanto */
+    if (tab < 0 || tab >= e->tab_count) {
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    int group = -1, zone = DOCK_DZ_NONE;
+    if (editor_drag_target(e, mx, my, &group, &zone, NULL) &&
+        zone != DOCK_DZ_NONE)
+        editor_tab_drop(e, tab, group, zone);
+
+    e->needs_redraw = 1; /* repintar sin la guia de arrastre */
+    return 1;            /* arrastre consumido */
 }
 
 /**

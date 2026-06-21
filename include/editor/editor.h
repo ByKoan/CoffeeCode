@@ -283,6 +283,19 @@ typedef struct Editor {
     int dock_drag_split;  /* índice del SPLIT en arrastre, o DOCK_NONE      */
     int dock_drag_orient; /* DockOrient del SPLIT en arrastre (cursor EW/NS) */
 
+    /* -- Arrastre de una pestana para reorganizar el editor (drag-to-dock) --
+     * Al pulsar sobre el titulo de una pestana se registra un CANDIDATO a
+     * arrastre (drag_tab >= 0) sin empezar aun: si el cursor se mueve mas que
+     * el umbral con el boton pulsado, dragging_tab pasa a 1.  Soltar mueve la
+     * pestana al grupo bajo el cursor (zona centro) o divide la hoja destino
+     * (zonas de borde).  Soltar sin superar el umbral = click normal. */
+    int drag_tab;         /* indice GLOBAL en tabs[] del candidato, o -1     */
+    int drag_from_group;  /* group_id de la hoja origen de la pestana         */
+    int dragging_tab;     /* 1 = arrastre en curso (umbral superado)          */
+    int drag_start_x;     /* X del raton al pulsar (para el umbral)           */
+    int drag_start_y;     /* Y del raton al pulsar                            */
+    int drag_mx, drag_my; /* posicion actual del raton durante el arrastre   */
+
     /* -- Override transitorio del área de contenido del editor --------------
      * Cuando el editor está dividido, el render dibuja CADA hoja haciendo su
      * pestaña activa la activa temporalmente y fijando aquí el sub-rectángulo
@@ -365,6 +378,23 @@ void editor_split_dir(Editor *e, DockOrient orient);
 /* Atajo: divide la hoja enfocada en vertical (compatibilidad con el binding
  * Ctrl+\ original). */
 void editor_split(Editor *e);
+
+/* Suelta la pestana de indice GLOBAL @p tab en la hoja @p target_group segun la
+ * zona @p zone (ver DockDropZone): DOCK_DZ_CENTER la mueve a ese grupo;
+ * DOCK_DZ_LEFT/RIGHT/TOP/BOTTOM dividen esa hoja creando una hoja nueva a ese
+ * lado y mueven la pestana ahi.  Si la hoja origen se queda sin pestanas, se
+ * colapsa (el hermano hereda el espacio).  Repara foco, pestana activa y estado.
+ * No hace nada en zonas/objetivos invalidos o si el movimiento es un no-op. */
+void editor_tab_drop(Editor *e, int tab, int target_group, int zone);
+
+/* Calcula la hoja y la zona de drop bajo el cursor (@p mx,@p my) para el
+ * arrastre de pestanas.  Recorre las hojas del arbol (vale tambien con una sola
+ * hoja, para poder dividir arrastrando sobre un borde).  Devuelve 1 si el cursor
+ * cae sobre alguna hoja: rellena @p out_group (group_id), @p out_zone
+ * (DockDropZone) y @p out_rect (rect de la hoja, opcional, puede ser NULL).
+ * Devuelve 0 si el cursor no cae sobre ninguna hoja. */
+int editor_drag_target(Editor *e, int mx, int my, int *out_group, int *out_zone,
+                       DockRect *out_rect);
 
 /* Devuelve el área del editor (px) que el árbol de dock reparte entre las
  * hojas: entre el explorador (izquierda) y el panel de extensiones (derecha),

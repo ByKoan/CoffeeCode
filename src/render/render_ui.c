@@ -624,3 +624,69 @@ void render_enc_popup(Editor *e) {
     ui_list(e, lb, UI_ENC_LIST, UI_LIST_ENC, ENC_COUNT, row_h,
             &e->enc_popup_scroll, (int)e->encoding, enc_row, NULL);
 }
+
+/**
+ * @brief Reduce el rect @p r de una hoja a la sub-zona que ocupara la pestana
+ *        segun la zona de drop @p zone (mitad/banda de borde, o el rect entero
+ *        para CENTER).  Sirve para dibujar la guia visual del destino.
+ */
+static DockRect drag_zone_rect(DockRect r, int zone) {
+    switch (zone) {
+    case DOCK_DZ_LEFT:   r.w = r.w / 2; break;
+    case DOCK_DZ_RIGHT:  r.x += r.w - r.w / 2; r.w = r.w / 2; break;
+    case DOCK_DZ_TOP:    r.h = r.h / 2; break;
+    case DOCK_DZ_BOTTOM: r.y += r.h - r.h / 2; r.h = r.h / 2; break;
+    default: break; /* CENTER: el rect completo de la hoja */
+    }
+    return r;
+}
+
+void render_tab_drag(Editor *e) {
+    if (!e->dragging_tab || e->drag_tab < 0) return; /* sin arrastre real */
+    SDL_Renderer *r = e->renderer;
+
+    /* zona destino bajo el cursor */
+    int group = -1, zone = DOCK_DZ_NONE;
+    DockRect leaf_rect;
+    int over = editor_drag_target(e, e->drag_mx, e->drag_my, &group, &zone,
+                                  &leaf_rect);
+
+    /* overlay translucido de la zona destino (si el cursor esta sobre una hoja
+     * y la zona no es nula). */
+    if (over && zone != DOCK_DZ_NONE) {
+        DockRect z = drag_zone_rect(leaf_rect, zone);
+        Color acc = e->theme.col_tab_accent;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color(r, acc.r, acc.g, acc.b, 0x40); /* relleno translucido */
+        fill_rect(r, z.x, z.y, z.w, z.h);
+        set_color(r, acc.r, acc.g, acc.b, 0xC0); /* borde mas opaco */
+        stroke_rect(r, z.x, z.y, z.w, z.h);
+        stroke_rect(r, z.x + 1, z.y + 1, z.w - 2, z.h - 2);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    }
+
+    /* "fantasma" del titulo de la pestana junto al cursor */
+    if (e->drag_tab < e->tab_count) {
+        const char *name = last_path_component(
+            e->tabs[e->drag_tab].filepath[0] ? e->tabs[e->drag_tab].filepath
+                                             : "Sin título");
+        int tw = 0, th = 0;
+        TTF_GetStringSize(e->font, name, 0, &tw, &th);
+        int gw = tw + TAB_PAD * 2;
+        int gh = TAB_BAR_HEIGHT;
+        int gx = e->drag_mx + 12; /* ligeramente a la derecha del cursor */
+        int gy = e->drag_my - gh / 2;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color_c(r, e->theme.col_tab_active);
+        SDL_SetRenderDrawColor(r, e->theme.col_tab_active.r,
+                               e->theme.col_tab_active.g,
+                               e->theme.col_tab_active.b, 0xE0);
+        fill_rect(r, gx, gy, gw, gh);
+        Color acc = e->theme.col_tab_accent;
+        set_color(r, acc.r, acc.g, acc.b, 0xFF);
+        fill_rect(r, gx, gy, gw, TAB_ACCENT_H); /* acento superior */
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        int ty = gy + (gh - e->font_size) / 2;
+        draw_text(e, name, gx + TAB_PAD, ty, 0xCC, 0xCC, 0xDD);
+    }
+}

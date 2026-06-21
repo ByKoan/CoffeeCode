@@ -502,6 +502,8 @@ int editor_init(Editor *e, const char *filepath) {
     e->pane_active = 0;
     e->dock_drag_split = DOCK_NONE; /* sin divisor de dock en arrastre */
     e->dock_drag_orient = DOCK_VERTICAL;
+    e->drag_tab = -1;      /* sin pestana en arrastre/candidata */
+    e->dragging_tab = 0;
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;

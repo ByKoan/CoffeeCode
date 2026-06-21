@@ -116,3 +116,7 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev); /* rueda del ratón → scroll */
 void on_mouse_motion(Editor *e, SDL_Event *ev);
 /* botón pulsado → clic/foco/selección */
 void on_mouse_button_down(Editor *e, SDL_Event *ev);
+/* botón soltado tras arrastrar una pestaña: si hay arrastre en curso, aplica el
+ * drop (mover/dividir) y limpia el estado.  Devuelve 1 si consumio un arrastre
+ * (el llamante no debe tratarlo como clic), 0 si no habia arrastre real. */
+int on_tab_drag_release(Editor *e, int mx, int my);

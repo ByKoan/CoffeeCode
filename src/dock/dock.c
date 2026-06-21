@@ -49,51 +49,64 @@ void dock_init_single(DockTree *t, int group_id) {
     t->leaf_count = 1;
 }
 
-int dock_split_leaf(DockTree *t, int leaf, DockOrient orient, int new_group_id) {
+int dock_split_leaf_side(DockTree *t, int leaf, DockOrient orient,
+                         int new_group_id, int new_first) {
     if (!dock_node_valid(t, leaf)) return DOCK_NONE;
     if (t->nodes[leaf].kind != DOCK_LEAF) return DOCK_NONE; /* solo hojas */
     if (t->leaf_count >= DOCK_MAX_LEAVES) return DOCK_NONE;  /* tope de hojas */
     /* Hacen falta dos nodos nuevos: la hoja-original-clonada y la hoja nueva.
      * El nodo @p leaf se reconvierte en SPLIT en su sitio (conserva su indice y
      * su padre, asi no hay que reenganchar al abuelo). */
-    int a = dock_alloc_node(t); /* hoja con el group_id original */
-    if (a == DOCK_NONE) return DOCK_NONE;
-    int b = dock_alloc_node(t); /* hoja nueva */
-    if (b == DOCK_NONE) {
-        t->node_count--; /* deshacer la reserva de 'a' */
+    int orig_idx = dock_alloc_node(t); /* hoja con el group_id original */
+    if (orig_idx == DOCK_NONE) return DOCK_NONE;
+    int new_idx = dock_alloc_node(t); /* hoja nueva */
+    if (new_idx == DOCK_NONE) {
+        t->node_count--; /* deshacer la reserva de 'orig_idx' */
         return DOCK_NONE;
     }
 
     int orig_group = t->nodes[leaf].group_id;
 
-    /* child_a: hoja con el contenido original */
-    t->nodes[a].kind = DOCK_LEAF;
-    t->nodes[a].group_id = orig_group;
-    t->nodes[a].child_a = DOCK_NONE;
-    t->nodes[a].child_b = DOCK_NONE;
-    t->nodes[a].parent = leaf;
+    /* hoja con el contenido original */
+    t->nodes[orig_idx].kind = DOCK_LEAF;
+    t->nodes[orig_idx].group_id = orig_group;
+    t->nodes[orig_idx].child_a = DOCK_NONE;
+    t->nodes[orig_idx].child_b = DOCK_NONE;
+    t->nodes[orig_idx].parent = leaf;
 
-    /* child_b: hoja nueva */
-    t->nodes[b].kind = DOCK_LEAF;
-    t->nodes[b].group_id = new_group_id;
-    t->nodes[b].child_a = DOCK_NONE;
-    t->nodes[b].child_b = DOCK_NONE;
-    t->nodes[b].parent = leaf;
+    /* hoja nueva */
+    t->nodes[new_idx].kind = DOCK_LEAF;
+    t->nodes[new_idx].group_id = new_group_id;
+    t->nodes[new_idx].child_a = DOCK_NONE;
+    t->nodes[new_idx].child_b = DOCK_NONE;
+    t->nodes[new_idx].parent = leaf;
 
-    /* el nodo original pasa a ser el SPLIT padre de ambas hojas */
+    /* el nodo original pasa a ser el SPLIT padre de ambas hojas.  El lado de la
+     * hoja nueva depende de new_first: como child_a (izquierda/arriba) o como
+     * child_b (derecha/abajo, el comportamiento por defecto). */
     t->nodes[leaf].kind = DOCK_SPLIT;
     t->nodes[leaf].orient = orient;
     t->nodes[leaf].ratio = 0.5f;
-    t->nodes[leaf].child_a = a;
-    t->nodes[leaf].child_b = b;
+    if (new_first) {
+        t->nodes[leaf].child_a = new_idx; /* hoja nueva delante */
+        t->nodes[leaf].child_b = orig_idx;
+    } else {
+        t->nodes[leaf].child_a = orig_idx;
+        t->nodes[leaf].child_b = new_idx; /* hoja nueva detras */
+    }
     /* parent del split = el que tenia la hoja original (sin cambios) */
 
     /* si la hoja dividida tenia el foco, pasa a la hoja con el contenido
-     * original (a); el llamante puede re-enfocar la nueva si lo desea */
-    if (t->focused_leaf == leaf) t->focused_leaf = a;
+     * original; el llamante puede re-enfocar la nueva si lo desea */
+    if (t->focused_leaf == leaf) t->focused_leaf = orig_idx;
 
     t->leaf_count++;
-    return b;
+    return new_idx;
+}
+
+int dock_split_leaf(DockTree *t, int leaf, DockOrient orient, int new_group_id) {
+    /* por defecto la hoja nueva queda detras (derecha/abajo) */
+    return dock_split_leaf_side(t, leaf, orient, new_group_id, 0);
 }
 
 /**
@@ -349,4 +362,60 @@ void dock_apply_divider(DockTree *t, DockRect area, int split, int mx, int my) {
         if (sa.h < 2 * DOCK_LEAF_MIN) a_h = sa.h / 2;
         t->nodes[split].ratio = (float)a_h / (float)sa.h;
     }
+}
+
+/* ===========================================================================
+ *  Zonas de "drop" para el arrastre de pestanas
+ * =========================================================================== */
+
+DockDropZone dock_drop_zone(DockRect leaf_rect, int mx, int my) {
+    DockRect r = leaf_rect;
+    /* fuera del rect (o rect degenerado): ninguna zona */
+    if (r.w <= 0 || r.h <= 0) return DOCK_DZ_NONE;
+    if (mx < r.x || mx >= r.x + r.w || my < r.y || my >= r.y + r.h)
+        return DOCK_DZ_NONE;
+
+    /* grosor de cada banda de borde (al menos 1 px para rects pequenos) */
+    int band_w = (int)(r.w * DOCK_DROP_BAND + 0.5f);
+    int band_h = (int)(r.h * DOCK_DROP_BAND + 0.5f);
+    if (band_w < 1) band_w = 1;
+    if (band_h < 1) band_h = 1;
+
+    /* distancia del cursor a cada borde dentro del rect */
+    int dl = mx - r.x;             /* al borde izquierdo */
+    int dr = (r.x + r.w - 1) - mx; /* al borde derecho   */
+    int dt = my - r.y;             /* al borde superior  */
+    int db = (r.y + r.h - 1) - my; /* al borde inferior  */
+
+    /* en banda de cada borde? */
+    int in_left = dl < band_w;
+    int in_right = dr < band_w;
+    int in_top = dt < band_h;
+    int in_bottom = db < band_h;
+
+    /* sin ninguna banda: el interior es CENTER */
+    if (!in_left && !in_right && !in_top && !in_bottom) return DOCK_DZ_CENTER;
+
+    /* cerca de una esquina (dos bandas a la vez): gana el borde mas proximo,
+     * comparando la profundidad RELATIVA respecto al grosor de su banda para no
+     * sesgar segun la forma del rect. */
+    float best = 2.0f; /* mayor que cualquier fraccion valida (<1) */
+    DockDropZone zone = DOCK_DZ_CENTER;
+    if (in_left) {
+        float f = (float)dl / (float)band_w;
+        if (f < best) { best = f; zone = DOCK_DZ_LEFT; }
+    }
+    if (in_right) {
+        float f = (float)dr / (float)band_w;
+        if (f < best) { best = f; zone = DOCK_DZ_RIGHT; }
+    }
+    if (in_top) {
+        float f = (float)dt / (float)band_h;
+        if (f < best) { best = f; zone = DOCK_DZ_TOP; }
+    }
+    if (in_bottom) {
+        float f = (float)db / (float)band_h;
+        if (f < best) { best = f; zone = DOCK_DZ_BOTTOM; }
+    }
+    return zone;
 }

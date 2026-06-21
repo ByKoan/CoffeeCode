@@ -45,6 +45,15 @@ int ui_hit_idx(const UiRegistry *u, UiList list, int mx, int my) {
     return -1;
 }
 
+int ui_get_idx(const UiRegistry *u, UiList list, int idx, Rect *out) {
+    for (int i = u->indexed_count - 1; i >= 0; i--)
+        if (u->indexed[i].list == list && u->indexed[i].idx == idx) {
+            if (out) *out = u->indexed[i].r;
+            return 1;
+        }
+    return 0;
+}
+
 /* ── Componentes de dibujo ──────────────────────────────────────────────────
  */
 

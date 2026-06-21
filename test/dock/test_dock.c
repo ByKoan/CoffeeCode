@@ -244,6 +244,89 @@ static void test_alloc_group_id(void) {
     EXPECT_EQ_INT(dock_alloc_group_id(&t), 2); /* 0 y 1 ocupados -> 2 */
 }
 
+/* -- Zona de drop: centro y bandas de borde -------------------------------- */
+
+static void test_drop_zone(void) {
+    DockRect r = {0, 0, 800, 600};
+
+    /* centro del rect -> CENTER */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 400, 300), (int)DOCK_DZ_CENTER);
+
+    /* banda izquierda (DOCK_DROP_BAND=0.25 -> 200px): un punto pegado al borde
+     * izquierdo cae en LEFT */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 5, 300), (int)DOCK_DZ_LEFT);
+    /* banda derecha */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 795, 300), (int)DOCK_DZ_RIGHT);
+    /* banda superior */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 400, 5), (int)DOCK_DZ_TOP);
+    /* banda inferior */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 400, 595), (int)DOCK_DZ_BOTTOM);
+
+    /* fuera del rect -> NONE */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, -1, 300), (int)DOCK_DZ_NONE);
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 800, 300), (int)DOCK_DZ_NONE);
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 400, 600), (int)DOCK_DZ_NONE);
+
+    /* esquina superior-izquierda: gana el borde de menor profundidad RELATIVA.
+     * band_w=200, band_h=150.  En (3,3): LEFT=3/200=0.015, TOP=3/150=0.02 ->
+     * gana LEFT (mas pegado a su borde en proporcion). */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 3, 3), (int)DOCK_DZ_LEFT);
+    /* en (100, 3): TOP=3/150=0.02 < LEFT=100/200=0.5 -> gana TOP */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 100, 3), (int)DOCK_DZ_TOP);
+    /* en (3, 100): LEFT=3/200=0.015 < TOP=100/150=0.67 -> gana LEFT */
+    EXPECT_EQ_INT((int)dock_drop_zone(r, 3, 100), (int)DOCK_DZ_LEFT);
+
+    /* rect con offset: respeta el origen */
+    DockRect off = {100, 50, 400, 400};
+    EXPECT_EQ_INT((int)dock_drop_zone(off, 300, 250), (int)DOCK_DZ_CENTER);
+    EXPECT_EQ_INT((int)dock_drop_zone(off, 90, 250), (int)DOCK_DZ_NONE);
+
+    /* rect degenerado -> NONE (sin crash) */
+    DockRect deg = {0, 0, 0, 0};
+    EXPECT_EQ_INT((int)dock_drop_zone(deg, 0, 0), (int)DOCK_DZ_NONE);
+}
+
+/* -- Split por lado: la hoja nueva queda en child_a o child_b -------------- */
+
+static void test_split_leaf_side(void) {
+    /* new_first=0 -> hoja nueva es child_b (derecha en V) */
+    {
+        DockTree t;
+        dock_init_single(&t, 0);
+        int split = t.root;
+        int nl = dock_split_leaf_side(&t, split, DOCK_VERTICAL, 1, 0);
+        EXPECT_TRUE(nl != DOCK_NONE);
+        EXPECT_EQ_INT(t.nodes[split].child_b, nl);          /* nueva detras */
+        EXPECT_EQ_INT(t.nodes[t.nodes[split].child_a].group_id, 0); /* orig delante */
+        EXPECT_EQ_INT(t.nodes[nl].group_id, 1);
+    }
+    /* new_first=1 -> hoja nueva es child_a (izquierda/arriba) */
+    {
+        DockTree t;
+        dock_init_single(&t, 0);
+        int split = t.root;
+        int nl = dock_split_leaf_side(&t, split, DOCK_HORIZONTAL, 1, 1);
+        EXPECT_TRUE(nl != DOCK_NONE);
+        EXPECT_EQ_INT(t.nodes[split].child_a, nl);          /* nueva delante */
+        EXPECT_EQ_INT(t.nodes[t.nodes[split].child_b].group_id, 0); /* orig detras */
+        EXPECT_EQ_INT(t.nodes[nl].group_id, 1);
+
+        /* y la hoja nueva (arriba) ocupa la mitad superior */
+        DockRect area = {0, 0, 800, 600};
+        DockLeafRect rects[DOCK_MAX_LEAVES];
+        int n = dock_compute_leaf_rects(&t, area, rects, DOCK_MAX_LEAVES);
+        EXPECT_EQ_INT(n, 2);
+        for (int i = 0; i < n; i++) {
+            if (rects[i].group_id == 1) { /* la nueva, arriba */
+                EXPECT_EQ_INT(rects[i].rect.y, 0);
+                EXPECT_EQ_INT(rects[i].rect.h, 300);
+            } else { /* la original, abajo */
+                EXPECT_EQ_INT(rects[i].rect.y, 300);
+            }
+        }
+    }
+}
+
 int main(void) {
     tt_suite("dock");
     tt_run("una hoja: area completa", test_single_leaf);
@@ -256,5 +339,7 @@ int main(void) {
     tt_run("eliminar hoja: colapso del split", test_remove_leaf_collapse);
     tt_run("eliminar hoja anidada: hermano hereda", test_remove_leaf_nested);
     tt_run("alloc group id: primer libre", test_alloc_group_id);
+    tt_run("zona de drop: centro y bandas", test_drop_zone);
+    tt_run("split por lado: hoja nueva en child_a/child_b", test_split_leaf_side);
     return tt_summary();
 }
