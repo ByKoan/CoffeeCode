@@ -188,16 +188,15 @@ static void app_close_src_if_empty(App *a, Editor *src) {
     if (si <= 0) return;             /* principal o desconocido: no cerrar */
     if (src->tab_count > 0) return;  /* aun tiene pestanas: conservarla */
 
-    /* liberar y compactar (sus pestanas ya se movieron: NADA que fusionar). */
-    editor_free(src);
-    free(src);
-    for (int i = si; i < a->window_count - 1; i++) a->windows[i] = a->windows[i + 1];
-    a->windows[a->window_count - 1] = NULL;
-    a->window_count--;
-    if (a->focused > si) a->focused--;
-    else if (a->focused == si) a->focused = 0;
-    if (a->prev_focused > si) a->prev_focused--;
-    else if (a->prev_focused == si) a->prev_focused = 0;
+    /* NO liberar aqui: `src` se esta procesando AHORA dentro de su propio
+     * input_handle_event (el caller del drop entre ventanas).  Al volver, ese
+     * handler sigue escribiendo en `src` (limpia los estados de arrastre en el
+     * MOUSE_BUTTON_UP), asi que liberarlo ya seria use-after-free.  Se marca para
+     * CIERRE DIFERIDO: el bucle de app_run cierra las secundarias con
+     * running==0 al terminar el lote de eventos, cuando ya nadie tiene un puntero
+     * vivo a este Editor.  Sus pestanas ya se movieron (tab_count==0), asi que el
+     * editor_merge_all de ese cierre no re-fusiona nada. */
+    src->running = 0;
 }
 
 int app_drop_tab_cross_window(App *a, Editor *src, int tab) {
@@ -336,11 +335,11 @@ static void app_dispatch(App *a, SDL_Event *ev) {
     /* Cierre de una ventana por la X del SO: la principal termina la app; una
      * secundaria se fusiona de vuelta a la principal. */
     if (ev->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-        if (wi == 0) {
-            a->windows[0]->running = 0;
-        } else {
-            app_close_secondary(a, wi);
-        }
+        /* Marcar para cierre DIFERIDO (running=0): el bucle de app_run cierra las
+         * secundarias al terminar el lote de eventos, nunca liberando un Editor
+         * mientras todavia puede haber eventos suyos en el mismo lote.  La
+         * principal termina la app igual. */
+        e->running = 0;
         return;
     }
 
