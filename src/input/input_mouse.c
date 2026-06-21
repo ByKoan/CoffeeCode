@@ -71,6 +71,11 @@ int get_left_offset(Editor *e) {
  * Recorre los rects de las hojas del árbol de dock (la misma geometría que el
  * render) y devuelve el group_id de la que contiene el punto.
  */
+/* group_id de la hoja del DOCK bajo el cursor.  Con varias hojas, la que
+ * contiene el punto; con una sola, la hoja raiz (editor_leaf_at_point devuelve
+ * -1 ahi).  Sirve para reclamar el foco al dock aunque lo tuviera un flotante. */
+static int editor_dock_group_at(Editor *e, int mx, int my);
+
 static int editor_leaf_at_point(Editor *e, int mx, int my) {
     if (e->dock.leaf_count <= 1) return -1;
     DockRect area = editor_dock_area(e);
@@ -82,6 +87,12 @@ static int editor_leaf_at_point(Editor *e, int mx, int my) {
             return leaves[i].group_id;
     }
     return -1;
+}
+
+static int editor_dock_group_at(Editor *e, int mx, int my) {
+    if (e->dock.leaf_count > 1) return editor_leaf_at_point(e, mx, my);
+    /* hoja unica: la raiz ES una hoja; su group_id es el del dock entero */
+    return e->dock.nodes[e->dock.root].group_id;
 }
 
 /**
@@ -748,7 +759,11 @@ static int click_tabbar(Editor *e, int mx, int my) {
         }
     }
     if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
-        editor_tab_new(e); /* botón "+": pestaña nueva */
+        /* el "+" de la barra global pertenece al DOCK: si el foco lo tenia un
+         * panel flotante, devolverlo a la hoja del dock antes de crear ahi. */
+        int dg = e->dock.nodes[e->dock.focused_leaf].group_id;
+        if (dg >= 0 && dg != e->active_group) editor_focus_group(e, dg);
+        editor_tab_new(e); /* botón "+": pestaña nueva en el dock */
         return 1;
     }
     /* La geometría de cada pestaña y de su "x" la registró el render por
@@ -760,14 +775,17 @@ static int click_tabbar(Editor *e, int mx, int my) {
 
     if (close_i >= 0) {           /* "x": cerrar esa pestaña */
         editor_tab_save_state(e); /* guardar estado de la pestaña actual */
-        /* enfocar la hoja de la pestaña que se cierra (split-aware) */
-        if (e->dock.leaf_count > 1) editor_focus_group(e, e->tabs[close_i].group);
+        /* enfocar la hoja/flotante de la pestaña que se cierra (reclama el foco
+         * si lo tenia otro grupo, p.ej. un flotante con el dock sin dividir) */
+        if (e->tabs[close_i].group != e->active_group)
+            editor_focus_group(e, e->tabs[close_i].group);
         e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
         editor_tab_close(e);
     } else {
-        /* enfocar primero la hoja de la pestaña pulsada para no robarla a otra
-         * (editor_tab_switch la asigna a la hoja enfocada) */
-        if (e->dock.leaf_count > 1) editor_focus_group(e, e->tabs[tab_i].group);
+        /* enfocar primero el grupo de la pestaña pulsada para no robarla a otro
+         * (editor_tab_switch la asigna al grupo enfocado) */
+        if (e->tabs[tab_i].group != e->active_group)
+            editor_focus_group(e, e->tabs[tab_i].group);
         editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
 
         /* Registrar un CANDIDATO a arrastre sobre el TITULO de la pestaña: el
@@ -900,13 +918,14 @@ static int click_find_bar(Editor *e, int mx, int my) {
  */
 static void start_text_selection(Editor *e, int mx, int my) {
     if (e->tab_count == 0) return;
-    /* Con el editor dividido, enfocar la hoja pulsada y mapear el clic con la
-     * geometría de esa hoja. */
-    if (e->dock.leaf_count > 1) {
-        int g = editor_leaf_at_point(e, mx, my);
-        if (g >= 0) editor_focus_group(e, g);
-        set_pane_override(e, e->active_group);
-    }
+    /* Reclamar el foco para la hoja del DOCK pulsada: si lo tenia un panel
+     * flotante, el teclado y la edicion vuelven al dock al clicar aqui. */
+    int g = editor_dock_group_at(e, mx, my);
+    if (g >= 0 && g != e->active_group) editor_focus_group(e, g);
+    if (e->dock.leaf_count > 1)
+        set_pane_override(e, e->active_group); /* mapear al sub-rect de la hoja */
+    else
+        e->pane_active = 0; /* hoja unica: area completa */
     int line, col;
     point_to_line_col(e, mx, my, &line, &col);
     editor_sel_clear(e);
