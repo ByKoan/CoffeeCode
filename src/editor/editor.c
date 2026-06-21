@@ -512,6 +512,8 @@ int editor_init(Editor *e, const char *filepath) {
     e->float_resize_edges = 0;
     e->float_dock_target_group = -1; /* sin destino de re-acople al arrancar */
     e->float_dock_zone = DOCK_DZ_NONE;
+    e->detached_count = 0;           /* sin ventanas desprendidas al arrancar */
+    e->detached_focus_group = -1;    /* el foco del teclado en la principal   */
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;
@@ -591,6 +593,18 @@ void editor_free(Editor *e) {
         ext_host_destroy((CoffeeHost *)e->ext_host);
         e->ext_host = NULL;
     }
+    /* Destruir las ventanas desprendidas (renderer + window de cada una) antes de
+     * liberar las pestanas: sus pestanas viven en tabs[] y se liberan abajo. */
+    for (int i = 0; i < e->detached_count; i++) {
+        if (e->detached[i].renderer)
+            SDL_DestroyRenderer((SDL_Renderer *)e->detached[i].renderer);
+        if (e->detached[i].window) {
+            SDL_StopTextInput((SDL_Window *)e->detached[i].window);
+            SDL_DestroyWindow((SDL_Window *)e->detached[i].window);
+        }
+    }
+    e->detached_count = 0;
+
     for (int i = 0; i < e->tab_count; i++)
         tab_free_resources(&e->tabs[i]); /* buffer/lexer/undo de cada pestaña */
     ftree_free(&e->ftree);
@@ -737,7 +751,9 @@ void editor_run(Editor *e) {
 
         /* Redibujar solo si algo cambió desde el último frame. */
         if (e->needs_redraw) {
-            render_frame(e);
+            render_frame(e);                /* ventana principal */
+            if (e->detached_count > 0)      /* ventanas desprendidas (si las hay) */
+                editor_render_detached(e);  /* cada una en su renderer propio */
             e->needs_redraw = 0;
         }
     }

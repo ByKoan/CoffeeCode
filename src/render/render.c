@@ -866,14 +866,21 @@ void render_floats(Editor *e) {
         if (idx >= 0 && idx < e->tab_count)
             name = float_basename(e->tabs[idx].filepath);
         {
-            SDL_Rect clip = {tb.x + 6, tb.y, tb.w - FLOAT_BTN_SZ * 2 - 16, tb.h};
+            /* el clip del titulo deja sitio a los tres botones de la derecha */
+            SDL_Rect clip = {tb.x + 6, tb.y, tb.w - FLOAT_BTN_SZ * 3 - 20, tb.h};
             SDL_SetRenderClipRect(r, &clip);
             draw_text(e, name, tb.x + 6, tb.y + (tb.h - e->font_size) / 2, 0xCC,
                       0xCC, 0xDD);
             SDL_SetRenderClipRect(r, NULL);
         }
 
-        /* boton acoplar (recuadro con flecha hacia abajo "v") y boton cerrar */
+        /* boton desprender (recuadro con flecha hacia arriba "^": a una ventana
+         * del SO), boton acoplar (flecha hacia abajo "v") y boton cerrar "x" */
+        Rect detach_b = float_detach_rect(fp);
+        set_color_c(r, e->theme.col_tabbar_sep);
+        stroke_rect(r, detach_b.x, detach_b.y, detach_b.w, detach_b.h);
+        draw_text(e, "^", detach_b.x + 5,
+                  detach_b.y + (detach_b.h - e->font_size) / 2, 0xAA, 0xAA, 0xBB);
         Rect dock_b = float_dock_rect(fp);
         set_color_c(r, e->theme.col_tabbar_sep);
         stroke_rect(r, dock_b.x, dock_b.y, dock_b.w, dock_b.h);
@@ -923,6 +930,79 @@ void render_floats(Editor *e) {
      * por el llamante antes de render_floats) */
     int fg = e->group_active_tab[e->active_group];
     if (fg >= 0 && fg < e->tab_count) editor_render_bind_tab(e, fg);
+}
+
+/**
+ * @brief Dibuja UNA ventana desprendida (su tira de pestanas + el contenido de
+ *        su pestana activa) en el renderer pasado, con sus propias dimensiones.
+ *
+ * Entra/sale con el estado del Editor INTACTO salvo lo que restaura el llamante
+ * (editor_render_detached salva renderer/tamano/bind y los repone tras cada
+ * ventana).  Aqui se conmuta temporalmente e->renderer/e->win_w/e->win_h a los de
+ * la ventana desprendida para que los helpers de dibujo (draw_text, fill_rect,
+ * render_tabbar_group, render_content_layers) operen sobre ELLA, y se fija el
+ * override de area (pane_*) al rect de contenido de la ventana.
+ *
+ * @param e Editor.
+ * @param dr Renderer de la ventana desprendida.
+ * @param group  group_id del grupo de pestanas que muestra la ventana.
+ * @param win_w  Ancho de la ventana (px).
+ * @param win_h  Alto de la ventana (px).
+ */
+void render_detached_window(Editor *e, SDL_Renderer *dr, int group, int win_w,
+                            int win_h) {
+    /* conmutar el renderer/tamano del Editor a los de la ventana desprendida */
+    SDL_Renderer *saved_r = e->renderer;
+    int saved_w = e->win_w, saved_h = e->win_h;
+    e->renderer = dr;
+    e->win_w = win_w;
+    e->win_h = win_h;
+
+    /* vaciar el hit-test: render_tabbar_group registra aqui la geometria de las
+     * pestanas de la ventana desprendida, que el input consulta para enrutar el
+     * clic en su tira. */
+    ui_reset(&e->ui);
+
+    /* fondo */
+    set_color_c(dr, e->theme.col_bg);
+    SDL_RenderClear(dr);
+
+    /* indice VALIDO de la pestana activa del grupo (nunca la de otro grupo) */
+    int idx = editor_group_valid_active_tab(e, group);
+
+    Rect content = detached_content_rect(win_w, win_h);
+
+    if (idx >= 0 && idx < e->tab_count && content.h > 0) {
+        editor_render_bind_tab(e, idx); /* e->buf -> pestana activa del grupo */
+
+        /* override del area de contenido: pane_left==0 (sin panel lateral en una
+         * ventana desprendida), pane_top bajo la tira de pestanas. */
+        e->pane_active = 1;
+        e->pane_left = content.x;
+        e->pane_top = content.y;
+        e->pane_width = content.w;
+        e->pane_height = content.h;
+
+        update_lexer_cache(e); /* re-tokenizar lineas sucias de esta pestana */
+
+        int visible_lines = (e->line_height > 0) ? content.h / e->line_height : 0;
+        int total_lines = buf_line_count(e->buf);
+        render_content_layers(e, content.x, content.x + content.w, content.y,
+                              content.h, visible_lines, total_lines);
+
+        e->pane_active = 0;
+    }
+
+    /* tira de pestanas del grupo en el borde superior (a todo el ancho) */
+    Rect tabbar = detached_tabbar_rect(win_w, win_h);
+    render_tabbar_group(e, group, tabbar.y, tabbar.x, tabbar.x + tabbar.w);
+
+    SDL_RenderPresent(dr);
+
+    /* restaurar el renderer/tamano del Editor (el bind lo restaura el llamante) */
+    e->renderer = saved_r;
+    e->win_w = saved_w;
+    e->win_h = saved_h;
 }
 
 /**
@@ -981,7 +1061,8 @@ void render_frame(Editor *e) {
      * sub-paneles (split y/o flotantes).  Se restaura al final del frame.  Con
      * cero flotantes y sin division esto es inocuo (vuelca y recarga la misma). */
     int have_floats = (e->float_count > 0);
-    if (e->dock.leaf_count > 1 || have_floats) editor_tab_save_state(e);
+    if (e->dock.leaf_count > 1 || have_floats || e->detached_count > 0)
+        editor_tab_save_state(e);
 
     /* Si el foco esta en un flotante (su group_id no es ninguna hoja del dock),
      * el area del dock debe dibujar la pestana de la hoja del dock con foco, no

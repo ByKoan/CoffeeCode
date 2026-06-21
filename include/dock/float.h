@@ -70,6 +70,7 @@ typedef enum {
     FLOAT_HIT_TITLEBAR, /**< barra de titulo: mover + traer al frente   */
     FLOAT_HIT_CLOSE,    /**< boton "x": cerrar el flotante              */
     FLOAT_HIT_DOCK,     /**< boton acoplar: devolver al arbol de dock   */
+    FLOAT_HIT_DETACH,   /**< boton desprender: a una ventana del SO     */
     FLOAT_HIT_TABBAR,   /**< tira de pestanas: cambiar/cerrar/+ pestana */
     FLOAT_HIT_RESIZE,   /**< esquina inferior-derecha: redimensionar    */
     FLOAT_HIT_CONTENT   /**< cuerpo: enfocar + editar                   */
@@ -97,6 +98,13 @@ Rect float_close_rect(const FloatPanel *p);
  * @param p Panel flotante. @return Rect del boton de acoplar (px).
  */
 Rect float_dock_rect(const FloatPanel *p);
+
+/**
+ * @brief Rectangulo del boton de desprender (a una ventana del SO), a la
+ *        izquierda del boton de acoplar.
+ * @param p Panel flotante. @return Rect del boton de desprender (px).
+ */
+Rect float_detach_rect(const FloatPanel *p);
 
 /**
  * @brief Rectangulo de la tira de pestanas (bajo la barra de titulo).

@@ -481,10 +481,82 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
  * @param e  Editor cuyo estado se actualiza.
  * @param ev Evento de SDL ya leído de la cola.
  */
+/**
+ * @brief SDL_WindowID al que pertenece un evento, o 0 si el evento no esta
+ *        ligado a una ventana concreta (p.ej. SDL_EVENT_QUIT).
+ *
+ * SDL_Event es una union: cada tipo guarda el windowID en un miembro distinto
+ * (window/key/text/button/motion/wheel).  Se centraliza aqui para el enrutado
+ * multi-ventana (ver editor_detached_by_window_id).
+ */
+static unsigned int event_window_id(const SDL_Event *ev) {
+    switch (ev->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        return ev->window.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        return ev->key.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+        return ev->text.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return ev->button.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+        return ev->motion.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return ev->wheel.windowID;
+    default:
+        return 0; /* evento sin ventana asociada */
+    }
+}
+
+/**
+ * @brief Maneja teclado/texto de una ventana desprendida reusando los
+ *        manejadores de la principal sobre la pestana activa del grupo.
+ *
+ * Enfoca el grupo desprendido (e->buf pasa a su pestana activa) y delega en
+ * on_text_input / on_key_down, que ya operan sobre e->buf y los escalares de
+ * vista.  El resto de eventos (raton, ventana) los lleva
+ * editor_detached_handle_event (input_mouse.c).
+ */
+static void input_detached_event(Editor *e, int di, SDL_Event *ev, int ctrl,
+                                 int shift) {
+    int group = e->detached[di].group_id;
+    switch (ev->type) {
+    case SDL_EVENT_TEXT_INPUT:
+        editor_focus_detached_group(e, group);
+        on_text_input(e, ev, ctrl);
+        return;
+    case SDL_EVENT_KEY_DOWN:
+        editor_focus_detached_group(e, group);
+        on_key_down(e, ev, ctrl, shift);
+        return;
+    default:
+        /* raton + eventos de ventana: al manejador de input_mouse.c */
+        editor_detached_handle_event(e, di, ev);
+        return;
+    }
+}
+
 void input_handle_event(Editor *e, SDL_Event *ev) {
     SDL_Keymod mods = SDL_GetModState(); /* máscara de modificadores actuales */
     int ctrl = (mods & SDL_KMOD_CTRL) != 0;   /* ¿algún Ctrl pulsado? */
     int shift = (mods & SDL_KMOD_SHIFT) != 0; /* ¿algún Shift pulsado? */
+
+    /* Enrutado multi-ventana: si hay ventanas desprendidas y el evento pertenece
+     * a una de ellas (por SDL_WindowID), lo maneja su camino aparte.  Con
+     * detached_count==0 esto es un unico chequeo barato y el camino de la ventana
+     * principal de abajo queda EXACTAMENTE como siempre: cero regresion. */
+    if (e->detached_count > 0) {
+        int di = editor_detached_by_window_id(e, event_window_id(ev));
+        if (di >= 0) {
+            input_detached_event(e, di, ev, ctrl, shift);
+            return;
+        }
+    }
 
     switch (ev->type) {
     case SDL_EVENT_QUIT: e->running = 0; break; /* cerrar la ventana → salir */

@@ -94,6 +94,7 @@ typedef struct {
  * Cada pestaña pertenece a una hoja por su `group` (== group_id de la hoja).
  * MAX_GROUPS es el tope de hojas simultáneas y debe coincidir con
  * DOCK_MAX_LEAVES. */
+#include "detached/detached.h"
 #include "dock/dock.h"
 #include "dock/float.h"
 /* Tope de grupos (hojas del dock + flotantes simultaneos).  Los flotantes
@@ -357,6 +358,21 @@ typedef struct Editor {
      * float_dock_target_group == -1 no hay destino: el flotante solo se mueve. */
     int float_dock_target_group; /* group_id de la hoja destino, o -1            */
     int float_dock_zone;         /* DockDropZone dentro de la hoja destino       */
+
+    /* -- Ventanas desprendidas (un grupo en una ventana REAL del SO) ---------
+     * Cada ventana desprendida (::DetachedWindow) saca un grupo de pestanas a su
+     * propia ventana del sistema, con su SDL_Window/SDL_Renderer propios.  Sus
+     * pestanas siguen en tabs[] (tab.group == group_id).  Con detached_count==0
+     * (estado por defecto) NADIE consulta estos campos: el bucle, el input y el
+     * render de la ventana principal son EXACTAMENTE los de siempre: cero
+     * regresion. */
+    DetachedWindow detached[MAX_DETACHED]; /* ventanas desprendidas vivas      */
+    int detached_count;                    /* numero de ventanas desprendidas  */
+    /* group_id de la ventana (principal o desprendida) que tiene el foco del
+     * teclado.  -1 (o cualquier group_id de hoja/flotante) = la principal; el
+     * group_id de una ventana desprendida = esa ventana tiene el foco.  Con
+     * detached_count==0 no se usa: el teclado va siempre a la principal. */
+    int detached_focus_group;
 } Editor;
 
 /* -- Dimensiones efectivas según preferencias ----------------------------- */
@@ -524,3 +540,52 @@ int editor_float_dock_target(Editor *e, int drag_fi, int mx, int my,
 /* Retira del array cualquier panel flotante que se haya quedado sin pestanas
  * (p.ej. tras arrastrar su ultima pestana al dock).  Compacta el z-order. */
 void editor_float_gc_empty(Editor *e);
+
+/* Da el foco de edicion al grupo @p group de una ventana desprendida (que NO es
+ * una hoja del dock): fija active_group/active_tab a su pestana activa valida y
+ * carga su estado (e->buf y escalares de vista pasan a reflejar esa pestana).
+ * No hace nada si el grupo esta vacio.  Es el analogo de editor_focus_group para
+ * grupos que viven fuera del arbol de dock. */
+void editor_focus_detached_group(Editor *e, int group);
+
+/* Mueve TODAS las pestanas del grupo @p group a la hoja del dock con foco y la
+ * enfoca con la pestana activa del grupo origen como activa.  No toca recursos
+ * de SDL: solo reasigna tab.group y repara foco/pestana activa/estado.  Lo usa el
+ * cierre de una ventana desprendida para re-acoplar su grupo a la principal.  No
+ * hace nada si no hay pestanas en @p group o no hay hoja de dock destino. */
+void editor_detached_reattach_group(Editor *e, int group);
+
+/* -- Ventanas desprendidas (ventana REAL del SO; ver detached/detached.h) --- */
+/* Promueve el panel flotante de indice @p fi a una ventana desprendida del SO:
+ * crea su SDL_Window/SDL_Renderer del tamano del flotante, le pasa su group_id y
+ * ELIMINA el FloatPanel in-window (sus pestanas siguen en tabs[] con el mismo
+ * grupo).  No hace nada si @p fi es invalido, si no hay sitio para mas ventanas
+ * desprendidas (detached_count >= MAX_DETACHED) o si SDL falla creando la
+ * ventana/renderer (en ese caso el flotante se conserva). */
+void editor_detach_float(Editor *e, int fi);
+
+/* Indice de la ventana desprendida cuyo SDL_Window tiene el @p window_id dado, o
+ * -1 si ninguna (p.ej. el evento es de la ventana principal).  Es el enrutado de
+ * eventos multi-ventana.  Funcion barata (compara hasta MAX_DETACHED ids). */
+int editor_detached_by_window_id(Editor *e, unsigned int window_id);
+
+/* Dibuja TODAS las ventanas desprendidas (su tira de pestanas + el contenido de
+ * su pestana activa) en sus renderers propios, presentando cada una.  Salva y
+ * restaura el renderer/tamano/bind de la ventana principal alrededor de cada
+ * una, de modo que el estado del Editor queda como estaba al entrar.  No hace
+ * nada si detached_count==0: cero regresion. */
+void editor_render_detached(Editor *e);
+
+/* Maneja un evento de SDL @p ev que pertenece a la ventana desprendida de indice
+ * @p di (ya resuelto por editor_detached_by_window_id): foco de su grupo, clic
+ * que coloca el cursor en su pestana activa, teclado que edita esa pestana,
+ * rueda que hace scroll, resize que actualiza su win_w/h y CLOSE_REQUESTED que la
+ * cierra re-acoplando su grupo a la principal.  @p ev es un SDL_Event* (void*
+ * para no acoplar este header a SDL). */
+void editor_detached_handle_event(Editor *e, int di, void *ev);
+
+/* Cierra la ventana desprendida de indice @p di: re-acopla su grupo de pestanas
+ * a la ventana principal (a la hoja del dock con foco) y destruye su
+ * renderer+window.  No deja pestanas huerfanas ni grupos colgantes.  No hace nada
+ * si @p di es invalido. */
+void editor_detached_close(Editor *e, int di);

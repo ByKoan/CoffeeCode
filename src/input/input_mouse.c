@@ -18,6 +18,8 @@
  */
 #include "input_internal.h"
 #include "editor/tab_reorder.h"
+/* render_detached_window (refresca el hit-test antes del clic) viene de
+ * render/render.h, incluido por input_internal.h. */
 
 #define FALLBACK_CHAR_W 8 /* ancho de carácter por defecto              */
 /* líneas desplazadas por "muesca" de rueda */
@@ -177,7 +179,8 @@ static int handle_float_click(Editor *e, int mx, int my) {
      * salvo sobre los botones de la barra de titulo, que tienen prioridad. */
     int redges = float_resize_edges(fp0, mx, my);
     if (redges && !rect_has(float_close_rect(fp0), mx, my) &&
-        !rect_has(float_dock_rect(fp0), mx, my)) {
+        !rect_has(float_dock_rect(fp0), mx, my) &&
+        !rect_has(float_detach_rect(fp0), mx, my)) {
         editor_float_focus(e, fi);
         fi = e->float_count - 1;
         e->float_drag = fi;
@@ -199,6 +202,10 @@ static int handle_float_click(Editor *e, int mx, int my) {
         return 1;
     case FLOAT_HIT_DOCK:
         editor_float_dock(e, fi);
+        return 1;
+    case FLOAT_HIT_DETACH:
+        /* promover este flotante a una ventana REAL del SO */
+        editor_detach_float(e, fi);
         return 1;
     case FLOAT_HIT_TITLEBAR: {
         /* iniciar arrastre de movimiento: guardar el desfase cursor->esquina */
@@ -1539,4 +1546,156 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     /* clic en el texto: empezar selección */
     else
         start_text_selection(e, mx, my);
+}
+
+/* -- Ventanas desprendidas: clic en la tira de pestanas / contenido --------- */
+
+/**
+ * @brief Procesa un clic sobre la tira de pestanas de una ventana desprendida.
+ *
+ * Reusa el registro de hit-test que render_detached_window acaba de poblar para
+ * ESA ventana (UI_LIST_TAB / UI_LIST_TAB_CLOSE por indice global, UI_LIST_SPLIT_NEW
+ * por group_id).  A diferencia de click_tabbar (que enfoca via editor_focus_group,
+ * valido solo para grupos del dock), aqui el grupo NO es una hoja del dock, asi
+ * que se opera directamente sobre el grupo desprendido: cambiar de pestana
+ * (editor_focus_detached_group + asignar), cerrar (editor_tab_close con base
+ * coherente) o crear (editor_tab_new en el grupo desprendido).
+ *
+ * @return 1 si el clic cayo sobre la tira de pestanas (consumido), 0 si no.
+ */
+static int detached_tabbar_click(Editor *e, int group, int mx, int my) {
+    /* boton "+" del grupo desprendido */
+    int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
+    if (gnew == group) {
+        editor_focus_detached_group(e, group); /* enfocar el grupo desprendido */
+        editor_tab_new(e); /* nueva pestana: queda en e->active_group (==group) */
+        return 1;
+    }
+
+    int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
+    int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
+    /* solo pestanas de ESTE grupo (el registro mezcla todas las barras) */
+    if (close_i >= 0 && (close_i >= e->tab_count || e->tabs[close_i].group != group))
+        close_i = -1;
+    if (tab_i >= 0 && (tab_i >= e->tab_count || e->tabs[tab_i].group != group))
+        tab_i = -1;
+    if (close_i < 0 && tab_i < 0) return 0; /* no se pulso ninguna pestana */
+
+    if (close_i >= 0) { /* "x": cerrar esa pestana del grupo desprendido */
+        editor_focus_detached_group(e, group);
+        e->active_tab = close_i;
+        e->active_group = group; /* base coherente para editor_tab_close */
+        editor_tab_close(e);
+    } else { /* cuerpo de la pestana: cambiar a ella dentro del grupo */
+        editor_focus_detached_group(e, group);
+        e->active_group = group;          /* editor_tab_switch la deja en este grupo */
+        editor_tab_switch(e, tab_i);
+    }
+    e->needs_redraw = 1;
+    return 1;
+}
+
+void editor_detached_handle_event(Editor *e, int di, void *ev_void) {
+    if (di < 0 || di >= e->detached_count) return;
+    SDL_Event *ev = (SDL_Event *)ev_void;
+    DetachedWindow *dw = &e->detached[di];
+    int group = dw->group_id;
+
+    switch (ev->type) {
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        editor_detached_close(e, di); /* X del SO: re-acoplar + destruir ventana */
+        return;
+    case SDL_EVENT_WINDOW_RESIZED:
+        dw->win_w = ev->window.data1; /* nuevo tamano de ESTA ventana */
+        dw->win_h = ev->window.data2;
+        e->needs_redraw = 1;
+        return;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        e->detached_focus_group = group; /* el teclado va a esta ventana */
+        editor_focus_detached_group(e, group);
+        e->needs_redraw = 1;
+        return;
+    case SDL_EVENT_MOUSE_WHEEL:
+        e->detached_focus_group = group;
+        editor_focus_detached_group(e, group);
+        handle_scroll(e, -ev->wheel.y * SCROLL_LINES_PER_NOTCH);
+        return;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (ev->button.button == SDL_BUTTON_LEFT) e->mouse_selecting = 0;
+        return;
+    case SDL_EVENT_MOUSE_MOTION:
+        /* arrastre de seleccion dentro del contenido de la ventana desprendida */
+        if (e->mouse_selecting && e->detached_focus_group == group && e->buf) {
+            int mx = (int)ev->motion.x, my = (int)ev->motion.y;
+            Rect content = detached_content_rect(dw->win_w, dw->win_h);
+            e->pane_active = 1;
+            e->pane_left = content.x;
+            e->pane_top = content.y;
+            e->pane_width = content.w;
+            e->pane_height = content.h;
+            int line, col;
+            point_to_line_col(e, mx, my, &line, &col);
+            e->sel_active = 1;
+            buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+            editor_sync_cursor(e);
+            e->pane_active = 0;
+            e->needs_redraw = 1;
+        }
+        return;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+        if (ev->button.button != SDL_BUTTON_LEFT) return;
+        int mx = (int)ev->button.x, my = (int)ev->button.y;
+
+        /* el teclado pasa a esta ventana */
+        e->detached_focus_group = group;
+        editor_focus_detached_group(e, group);
+
+        /* refrescar el registro de hit-test con la geometria de ESTA ventana
+         * (varias ventanas comparten un unico e->ui; el ultimo render gana).
+         * Salvar el registro de la ventana principal antes y reponerlo despues
+         * del hit-test, por si en el mismo drenado de eventos llega luego un clic
+         * de la ventana principal. */
+        UiRegistry saved_ui = e->ui;
+        render_detached_window(e, (SDL_Renderer *)dw->renderer, group, dw->win_w,
+                               dw->win_h);
+        /* render_detached_window dejo e->buf en la pestana activa del grupo: como
+         * ya enfocamos el grupo, sigue siendo la correcta. */
+
+        Rect tabbar = detached_tabbar_rect(dw->win_w, dw->win_h);
+        if (rect_has(tabbar, mx, my)) {
+            detached_tabbar_click(e, group, mx, my);
+            e->ui = saved_ui; /* reponer hit-test de la principal */
+            return;
+        }
+
+        /* clic en el contenido: colocar el cursor mapeando con el area de la
+         * ventana desprendida (pane override a su rect de contenido). */
+        Rect content = detached_content_rect(dw->win_w, dw->win_h);
+        if (rect_has(content, mx, my) && e->tab_count > 0 && e->buf) {
+            e->pane_active = 1;
+            e->pane_left = content.x;
+            e->pane_top = content.y;
+            e->pane_width = content.w;
+            e->pane_height = content.h;
+            int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
+            if (mx >= text_x) {
+                int line, col;
+                point_to_line_col(e, mx, my, &line, &col);
+                editor_sel_clear(e);
+                e->sel_anchor_line = line;
+                e->sel_anchor_col = col;
+                e->mouse_selecting = 1; /* permitir arrastrar para seleccionar */
+                buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+            }
+            e->pane_active = 0;
+        }
+        e->ui = saved_ui; /* reponer hit-test de la principal */
+        e->needs_redraw = 1;
+        return;
+    }
+    default:
+        return; /* el teclado/texto los maneja input.c (input_detached_event) */
+    }
 }

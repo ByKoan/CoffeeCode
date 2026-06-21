@@ -32,6 +32,14 @@ Rect float_dock_rect(const FloatPanel *p) {
     return r;
 }
 
+Rect float_detach_rect(const FloatPanel *p) {
+    /* a la izquierda del boton de acoplar (tercer boton desde la derecha) */
+    int y = p->rect.y + (FLOAT_TITLEBAR_H - FLOAT_BTN_SZ) / 2;
+    int x = p->rect.x + p->rect.w - FLOAT_BTN_SZ * 3 - 4 - 4 - 4; /* tres botones */
+    Rect r = {x, y, FLOAT_BTN_SZ, FLOAT_BTN_SZ};
+    return r;
+}
+
 Rect float_tabbar_rect(const FloatPanel *p) {
     /* bajo la barra de titulo, a todo el ancho; alto = TAB_BAR_HEIGHT del editor,
      * pero aqui se define con su propia constante para no acoplar al editor.  El
@@ -76,6 +84,7 @@ FloatHit float_hit_test(const FloatPanel *p, int mx, int my) {
     /* botones de la barra de titulo antes que la propia barra */
     if (rect_has(float_close_rect(p), mx, my)) return FLOAT_HIT_CLOSE;
     if (rect_has(float_dock_rect(p), mx, my)) return FLOAT_HIT_DOCK;
+    if (rect_has(float_detach_rect(p), mx, my)) return FLOAT_HIT_DETACH;
     if (rect_has(float_titlebar_rect(p), mx, my)) return FLOAT_HIT_TITLEBAR;
 
     if (rect_has(float_tabbar_rect(p), mx, my)) return FLOAT_HIT_TABBAR;

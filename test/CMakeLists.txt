@@ -75,6 +75,14 @@ add_coffee_test(test_float_dock dock/test_float_dock.c
     "${CMAKE_SOURCE_DIR}/src/dock/dock.c"
     "${CMAKE_SOURCE_DIR}/src/dock/float.c")
 
+# --- detached (puro: geometria de las ventanas desprendidas, sin SDL) -------
+# Solo enlaza detached_geom.c (tira de pestanas + area de contenido de una
+# ventana desprendida a partir de su tamano).  El ciclo de vida de la ventana del
+# SO, el enrutado de eventos por SDL_WindowID y el render multi-ventana viven
+# aparte y necesitan SDL.
+add_coffee_test(test_detached detached/test_detached.c
+    "${CMAKE_SOURCE_DIR}/src/detached/detached_geom.c")
+
 # --- tab_membership (puro: invariante "pestana activa por grupo", sin SDL) --
 # Evita el bug del "buffer compartido": el indice activo de un grupo nunca debe
 # apuntar a una pestana de otro grupo (p.ej. una movida a un flotante).

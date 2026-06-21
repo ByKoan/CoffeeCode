@@ -1198,3 +1198,63 @@ void editor_float_dock_to(Editor *e, int fi, int target_group, int zone) {
     editor_sync_cursor(e);
     e->needs_redraw = 1;
 }
+
+void editor_focus_detached_group(Editor *e, int group) {
+    if (e->tab_count == 0) return;
+    int idx = editor_group_valid_active_tab(e, group);
+    if (idx < 0) return; /* grupo vacio: nada que enfocar */
+    if (group == e->active_group && idx == e->active_tab) return; /* ya activo */
+
+    editor_tab_save_state(e); /* preservar la vista del grupo actual */
+    e->active_group = group;
+    e->active_tab = idx;
+    e->group_active_tab[group] = idx;
+    editor_tab_load_state(e); /* e->buf y escalares -> pestana del grupo */
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
+
+void editor_detached_reattach_group(Editor *e, int group) {
+    /* sin pestanas en el grupo: nada que re-acoplar */
+    if (editor_group_tab_count(e, group) == 0) return;
+
+    int active = e->group_active_tab[group]; /* pestana activa del grupo origen */
+
+    /* hoja de dock destino = la enfocada del arbol.  Si el foco quedo en el
+     * grupo de la ventana desprendida (no es una hoja del dock), elegir la
+     * primera hoja del arbol. */
+    int dst_group = e->dock.nodes[e->dock.focused_leaf].group_id;
+    if (dock_leaf_by_group(&e->dock, dst_group) == DOCK_NONE) {
+        DockRect area = editor_dock_area(e);
+        DockLeafRect leaves[DOCK_MAX_LEAVES];
+        int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+        dst_group = (n > 0) ? leaves[0].group_id : -1;
+    }
+    if (dst_group < 0 || dock_leaf_by_group(&e->dock, dst_group) == DOCK_NONE)
+        return; /* sin destino valido */
+
+    editor_tab_save_state(e);
+
+    /* mover TODAS las pestanas del grupo origen a la hoja destino */
+    for (int i = 0; i < e->tab_count; i++)
+        if (e->tabs[i].group == group) e->tabs[i].group = dst_group;
+    if (active >= 0 && active < e->tab_count && e->tabs[active].group == dst_group)
+        e->group_active_tab[dst_group] = active; /* su activa sigue activa */
+
+    /* enfocar la hoja destino con una pestana valida del grupo */
+    e->active_group = dst_group;
+    e->dock.focused_leaf = dock_leaf_by_group(&e->dock, dst_group);
+    int idx = e->group_active_tab[dst_group];
+    if (idx < 0 || idx >= e->tab_count || e->tabs[idx].group != dst_group)
+        idx = editor_group_first_tab(e, dst_group);
+    if (idx >= 0) {
+        e->active_tab = idx;
+        e->group_active_tab[dst_group] = idx;
+    }
+    if (e->dock.leaf_count <= 1) e->pane_active = 0;
+    editor_tab_load_state(e);
+    editor_update_lexer(e, 0);
+    editor_sync_cursor(e);
+    e->needs_redraw = 1;
+}
