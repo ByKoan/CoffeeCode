@@ -121,6 +121,11 @@ int main(int argc, char *argv[]) {
     log_msg("editor_init OK, entrando en app_run");
     App app;
     app_init(&app, e);
+    /* Sin archivo por argumento, editor_init ya restauro la disposicion de la
+     * ventana PRINCIPAL; aqui recreamos las ventanas SECUNDARIAS de la ultima
+     * sesion.  Con un archivo por argumento no se restaura nada (arranque limpio
+     * sobre ese archivo), igual que la principal. */
+    if (!filepath || !filepath[0]) app_layout_restore(&app);
     app_run(&app);
     log_msg("app_run terminado, saliendo");
 

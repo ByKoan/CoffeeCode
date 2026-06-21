@@ -772,3 +772,18 @@ void render_tab_drag(Editor *e) {
                         e->theme.col_tab_accent);
     }
 }
+
+void render_drag_window_highlight(Editor *e) {
+    if (!e->drag_hover_highlight) return; /* no es la ventana destino del arrastre */
+    SDL_Renderer *r = e->renderer;
+    Color acc = e->theme.col_tab_accent;
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    /* velo translucido sobre toda la ventana para sugerir "soltar aqui" */
+    set_color(r, acc.r, acc.g, acc.b, 0x18);
+    fill_rect(r, 0, 0, e->win_w, e->win_h);
+    /* marco grueso de acento en el borde de la ventana */
+    set_color(r, acc.r, acc.g, acc.b, 0xFF);
+    for (int i = 0; i < 3; i++)
+        stroke_rect(r, i, i, e->win_w - 2 * i, e->win_h - 2 * i);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+}

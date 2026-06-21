@@ -662,6 +662,10 @@ void ext_host_set_buffer(CoffeeHost *host, Buffer *buffer) {
     if (host) host->backend.buffer = buffer;
 }
 
+void ext_host_set_userdata(CoffeeHost *host, void *ud) {
+    if (host) host->backend.ud = ud;
+}
+
 /* Revierte TODO lo registrado por la extension @p owner (registro por-ext). */
 static void host_revoke_owner(CoffeeHost *h, int owner) {
     /* comandos */

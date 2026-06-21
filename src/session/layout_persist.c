@@ -79,6 +79,10 @@ size_t layout_serialize(const LayoutData *d, char *out, size_t cap) {
     EMIT("focus active_group %d\n", d->active_group);
     EMIT("focus active_tab %d\n", d->active_tab);
 
+    /* -- geometria de la ventana del SO (opcional; la usan las secundarias) -- */
+    if (d->has_win)
+        EMIT("win %d %d %d %d\n", d->win_x, d->win_y, d->win_w, d->win_h);
+
     /* -- pestanas -- */
     EMIT("tabs %d\n", d->tab_count);
     for (int i = 0; i < d->tab_count; i++) {
@@ -175,6 +179,19 @@ int layout_parse(const char *text, LayoutData *out) {
                     out->active_group = val;
                 else if (!strcmp(key, "active_tab"))
                     out->active_tab = val;
+            }
+            continue;
+        }
+
+        /* -- geometria de la ventana del SO: "win <x> <y> <w> <h>" -- */
+        if (strncmp(s, "win ", 4) == 0) {
+            int x = 0, y = 0, w = 0, h = 0;
+            if (sscanf(s + 4, "%d %d %d %d", &x, &y, &w, &h) == 4) {
+                out->win_x = x;
+                out->win_y = y;
+                out->win_w = w;
+                out->win_h = h;
+                out->has_win = 1;
             }
             continue;
         }
@@ -299,4 +316,94 @@ int layout_parse(const char *text, LayoutData *out) {
     }
 
     return saw_anything ? 1 : 0;
+}
+
+/* -- Sesion multi-ventana -------------------------------------------------- */
+
+size_t session_serialize(const LayoutSession *s, char *out, size_t cap) {
+    if (!s || !out || cap == 0) return 0;
+    out[0] = '\0';
+    size_t off = 0;
+    int n = s->count;
+    if (n < 1) n = 1;
+    if (n > LAYOUT_MAX_WINDOWS) n = LAYOUT_MAX_WINDOWS;
+
+    for (int i = 0; i < n; i++) {
+        /* delimitador de bloque de ventana */
+        int hdr = snprintf(out + off, cap - off, "window %d\n", i);
+        if (hdr < 0 || (size_t)hdr >= cap - off) return 0; /* no cabe */
+        off += (size_t)hdr;
+        /* volcar la disposicion de esta ventana a continuacion */
+        size_t wrote = layout_serialize(&s->windows[i], out + off, cap - off);
+        if (wrote == 0) return 0; /* la ventana no cabe: abortar */
+        off += wrote;
+    }
+    return off;
+}
+
+int session_parse(const char *text, LayoutSession *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    for (int i = 0; i < LAYOUT_MAX_WINDOWS; i++)
+        layout_data_clear(&out->windows[i]);
+    out->count = 1; /* siempre hay al menos la ventana 0 */
+    if (!text) return 0;
+
+    /* COMPATIBILIDAD: si no hay ningun delimitador "window", el texto es un
+     * layout antiguo de una sola ventana -> parsearlo entero como la ventana 0. */
+    if (!strstr(text, "window ")) {
+        int ok = layout_parse(text, &out->windows[0]);
+        out->count = 1;
+        return ok ? 1 : 0;
+    }
+
+    /* Partir el texto por las lineas "window N" y parsear cada bloque por
+     * separado.  Buscamos el inicio de cada bloque y su fin (el siguiente
+     * "window " a principio de linea, o el fin del texto). */
+    int parsed = 0;
+    int win0_ok = 0; /* 1 si la ventana 0 (principal) parseo algo coherente */
+    const char *p = text;
+    int win_count = 0;
+    /* saltar cualquier preambulo antes del primer "window " */
+    const char *first = strstr(p, "window ");
+    if (first) p = first;
+
+    while (p && *p && win_count < LAYOUT_MAX_WINDOWS) {
+        /* p apunta a "window N\n...".  Leer N. */
+        int idx = -1;
+        if (sscanf(p, "window %d", &idx) != 1) break;
+        /* avanzar p al inicio del CUERPO (tras la linea "window N") */
+        const char *body = strchr(p, '\n');
+        if (!body) break;
+        body++; /* primer caracter del cuerpo */
+
+        /* el cuerpo termina en el siguiente "\nwindow " o en el fin del texto */
+        const char *next = strstr(body, "\nwindow ");
+        size_t body_len = next ? (size_t)(next - body) : strlen(body);
+
+        /* copiar el bloque a un buffer temporal NUL-terminado para layout_parse */
+        char *block = (char *)malloc(body_len + 1);
+        if (!block) break;
+        memcpy(block, body, body_len);
+        block[body_len] = '\0';
+
+        /* destino: respetar el indice declarado si es valido; si no, al orden */
+        int dst = (idx >= 0 && idx < LAYOUT_MAX_WINDOWS) ? idx : win_count;
+        if (dst >= 0 && dst < LAYOUT_MAX_WINDOWS) {
+            int ok = layout_parse(block, &out->windows[dst]);
+            if (ok) parsed++;
+            if (dst == 0 && ok) win0_ok = 1;
+            if (dst + 1 > out->count) out->count = dst + 1;
+        }
+        free(block);
+        win_count++;
+
+        /* avanzar al siguiente bloque */
+        p = next ? next + 1 : NULL; /* +1 para saltar el '\n' inicial de "\nwindow" */
+    }
+
+    /* La ventana 0 (principal) decide si la sesion es util: si no parseo nada
+     * coherente, el llamante cae al arranque por defecto. */
+    (void)parsed;
+    return win0_ok ? out->count : 0;
 }

@@ -695,8 +695,11 @@ void editor_free(Editor *e) {
     }
 
     /* Persistir la disposicion actual ANTES de liberar nada: necesita las rutas
-     * de las pestanas y el arbol de paneles aun vivos. */
-    layout_save(e);
+     * de las pestanas y el arbol de paneles aun vivos.  Si la capa de aplicacion
+     * ya guardo la SESION COMPLETA (principal + secundarias), no re-escribir aqui
+     * solo-principal (sobreescribiria las secundarias).  Con init aislado (sin
+     * App) el flag esta a 0 y se guarda como siempre: cero regresion. */
+    if (!e->layout_save_suppressed) layout_save(e);
 
     /* Destruir el host de extensiones ANTES de liberar las pestanas: emite
      * COFFEE_EVENT_SHUTDOWN y descarga las DLLs mientras los buffers aun viven. */

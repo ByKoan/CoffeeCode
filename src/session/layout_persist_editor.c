@@ -57,8 +57,17 @@ static int layout_file_path(char *out, size_t cap) {
 /* -- Guardado -------------------------------------------------------------- */
 
 /* Rellena @p d con la disposicion viva de @p e. */
-static void layout_capture(const Editor *e, LayoutData *d) {
+void layout_capture_editor(const Editor *e, LayoutData *d) {
+    if (!e || !d) return;
     layout_data_clear(d);
+
+    /* geometria de la ventana del SO (la usan las secundarias al recrearse). */
+    d->win_w = e->win_w;
+    d->win_h = e->win_h;
+    d->win_x = 0;
+    d->win_y = 0;
+    if (e->window) SDL_GetWindowPosition(e->window, &d->win_x, &d->win_y);
+    d->has_win = 1;
 
     /* -- tamanos de la UI -- */
     d->ftree_width = e->ftree.width;
@@ -136,7 +145,7 @@ void layout_save(const Editor *e) {
     if (!has_path_tab && e->dock.leaf_count <= 1 && e->float_count == 0) return;
 
     LayoutData d;
-    layout_capture(e, &d);
+    layout_capture_editor(e, &d);
 
     static char text[64 * 1024]; /* holgado para el pool completo */
     size_t n = layout_serialize(&d, text, sizeof text);
@@ -203,22 +212,9 @@ static int float_group_exists(const Editor *e, int group_id) {
     return 0;
 }
 
-int layout_restore(Editor *e) {
-    if (!e) return 0;
-
-    /* Leer el fichero entero. */
-    char path[1024];
-    if (!layout_file_path(path, sizeof path)) return 0;
-    FILE *f = fopen(path, "r");
-    if (!f) return 0; /* no hay disposicion guardada: arranque por defecto */
-
-    static char text[64 * 1024];
-    size_t rd = fread(text, 1, sizeof(text) - 1, f);
-    fclose(f);
-    text[rd] = '\0';
-
-    LayoutData d;
-    if (!layout_parse(text, &d)) return 0; /* corrupto o vacio: default */
+int layout_apply_editor(Editor *e, const LayoutData *dd) {
+    if (!e || !dd) return 0;
+    LayoutData d = *dd; /* copia local: el resto del codigo usa 'd' por valor */
 
     /* -- Reabrir cada archivo guardado (saltando los que ya no existan) ------
      * editor_tab_open coloca la pestana en e->active_group, asi que fijamos el
@@ -346,4 +342,32 @@ int layout_restore(Editor *e) {
     editor_update_lexer(e, 0);
     e->needs_redraw = 1;
     return 1;
+}
+
+int layout_restore(Editor *e) {
+    if (!e) return 0;
+
+    /* Leer el fichero entero. */
+    char path[1024];
+    if (!layout_file_path(path, sizeof path)) return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0; /* no hay disposicion guardada: arranque por defecto */
+
+    static char text[64 * 1024];
+    size_t rd = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[rd] = '\0';
+
+    /* El fichero puede ser una SESION multi-ventana (con bloques "window N") o el
+     * formato antiguo de una sola ventana.  session_parse cubre ambos: aqui solo
+     * restauramos la ventana principal (la 0); las secundarias las recrea la capa
+     * de aplicacion (app_layout_restore).  Asi layout_restore sigue valido para el
+     * arranque sin App (init aislado): cero regresion. */
+    LayoutSession s;
+    if (!session_parse(text, &s)) return 0; /* corrupto o vacio: default */
+    return layout_apply_editor(e, &s.windows[0]);
+}
+
+int session_file_path(char *out, size_t cap) {
+    return layout_file_path(out, cap);
 }

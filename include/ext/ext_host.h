@@ -109,6 +109,19 @@ const char *ext_host_last_error(CoffeeHost *host);
 void ext_host_set_buffer(CoffeeHost *host, Buffer *buffer);
 
 /**
+ * @brief Actualiza el userdata del backend del host (el ::Editor al que llegan
+ *        los hooks de UI: panel inferior, barra de estado, repintado).
+ *
+ * En el IDE multi-ventana el host de extensiones es UNICO y compartido por
+ * todas las ventanas, pero sus hooks escriben en UN solo Editor (el del
+ * @c backend.ud).  Al cambiar el foco de ventana, la capa de aplicacion la
+ * llama para que la salida de las extensiones (output_append, channel_append,
+ * set_status, log_line, request_repaint) aterrice en la ventana ENFOCADA.
+ * Con una sola ventana el userdata es siempre la principal: cero cambio.
+ */
+void ext_host_set_userdata(CoffeeHost *host, void *ud);
+
+/**
  * @brief Carga UNA extension desde un directorio con su manifiesto.
  *
  * @p dir debe contener @c coffee-extension.toml (con @c id, @c entry, @c abi y

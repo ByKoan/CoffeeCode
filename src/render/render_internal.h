@@ -60,6 +60,11 @@ void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
  * los bordes) y un "fantasma" del titulo junto al cursor.  No dibuja nada si no
  * hay un arrastre en curso (e->dragging_tab == 0). */
 void render_tab_drag(Editor *e);
+/* Multi-ventana: resalta esta ventana como DESTINO de una pestana arrastrada
+ * desde otra ventana (velo translucido + marco de acento de "soltar aqui").  No
+ * dibuja nada si e->drag_hover_highlight == 0 (caso por defecto y con una sola
+ * ventana): cero regresion. */
+void render_drag_window_highlight(Editor *e);
 /* Dibuja los paneles flotantes (overlay dentro de la ventana) ENCIMA del dock:
  * por cada flotante en z-order (atras->delante) su marco, barra de titulo (con
  * nombre de la pestana activa + botones acoplar y cerrar), su tira de pestanas y

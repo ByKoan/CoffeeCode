@@ -766,6 +766,26 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
                 e->tab_reorder_group = -1;
             else
                 update_tab_reorder_target(e, mouse_x, mouse_y);
+
+            /* MULTI-VENTANA: resaltar la ventana DESTINO bajo el cursor global
+             * cuando es DISTINTA de la origen, para que su render dibuje el borde
+             * de "soltar aqui".  Limpiar el resaltado en las demas ventanas.  Con
+             * una sola ventana no hay destino distinto: el flag queda en 0. */
+            App *app = app_current();
+            if (app && app->window_count > 1) {
+                float gxf = 0.0f, gyf = 0.0f;
+                SDL_GetGlobalMouseState(&gxf, &gyf);
+                int dst_wi = app_window_at_global(app, (int)gxf, (int)gyf);
+                for (int wi = 0; wi < app->window_count; wi++) {
+                    Editor *w = app->windows[wi];
+                    if (!w) continue;
+                    int hl = (w != e && wi == dst_wi) ? 1 : 0;
+                    if (w->drag_hover_highlight != hl) {
+                        w->drag_hover_highlight = hl;
+                        w->needs_redraw = 1; /* repintar la ventana destino */
+                    }
+                }
+            }
             e->needs_redraw = 1; /* repintar la guia de la zona destino */
             return;              /* arrastre en curso: consume el motion */
         }
@@ -1020,6 +1040,20 @@ int on_tab_drag_release(Editor *e, int mx, int my) {
     /* fin del arrastre: soltar la captura global del raton (la pidio el motion al
      * superar el umbral).  Se hace siempre que hubo arrastre, gane quien gane. */
     if (was_dragging) SDL_CaptureMouse(false);
+
+    /* limpiar el resaltado de "soltar aqui" en TODAS las ventanas (multi-ventana);
+     * con una sola ventana no hay ninguno puesto. */
+    if (was_dragging) {
+        App *app = app_current();
+        if (app)
+            for (int wi = 0; wi < app->window_count; wi++) {
+                Editor *w = app->windows[wi];
+                if (w && w->drag_hover_highlight) {
+                    w->drag_hover_highlight = 0;
+                    w->needs_redraw = 1;
+                }
+            }
+    }
     if (!was_dragging) return 0; /* fue un clic normal: ya lo gestiono el down */
 
     /* validar el indice por si tab_count cambio entre tanto */

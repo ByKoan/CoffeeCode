@@ -150,6 +150,12 @@ typedef struct Editor {
      * is_secondary==0 (caso por defecto, ventana principal) todo es como
      * siempre: cero regresion. */
     int is_secondary;       /* 1 = ventana secundaria; no posee recursos compartidos */
+    /* 1 = no persistir la disposicion en editor_free.  Lo activa la capa de
+     * aplicacion (app_run) cuando ELLA ya guardo la sesion COMPLETA (principal +
+     * secundarias) antes de liberar nada, para que el layout_save de editor_free
+     * no sobreescriba el fichero con solo la principal.  Con 0 (init sin App, o
+     * fallo de init) editor_free guarda como siempre: cero regresion. */
+    int layout_save_suppressed;
     int char_w;             /* ancho de un carácter en px (monoespaciada) */
     int font_size;          /* tamaño de la fuente en px (de settings)  */
     int line_height;        /* alto de línea del área de texto en px     */
@@ -327,6 +333,14 @@ typedef struct Editor {
     int tab_reorder_pos;   /* posicion de insercion (0..n) en ese grupo        */
     int tab_reorder_x;     /* X (px) de la linea de insercion para el render   */
     int tab_reorder_bar_y; /* Y de la barra destino (para la linea de insercion) */
+
+    /* -- Multi-ventana: resaltado de la ventana DESTINO al arrastrar una pestana
+     * entre ventanas.  Durante un arrastre cross-window, la capa de aplicacion
+     * marca con 1 la ventana bajo el cursor global cuando es DISTINTA de la
+     * origen, para que su render dibuje un borde de "soltar aqui".  Se limpia al
+     * mover el cursor a otra ventana o al soltar.  Con una sola ventana siempre
+     * vale 0: cero regresion. */
+    int drag_hover_highlight;
 
     /* -- Override transitorio del área de contenido del editor --------------
      * Cuando el editor está dividido, el render dibuja CADA hoja haciendo su

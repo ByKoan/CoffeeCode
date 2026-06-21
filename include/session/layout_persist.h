@@ -107,7 +107,40 @@ typedef struct {
     /* -- foco -- */
     int active_group; /**< group_id de la hoja/flotante con foco        */
     int active_tab;   /**< indice GLOBAL en tabs[] de la pestana activa  */
+
+    /* -- ventana del SO (solo relevante para ventanas SECUNDARIAS) ----------
+     * Posicion (px de pantalla) y tamano (px) de la ventana del SO de esta
+     * disposicion.  La PRINCIPAL no los usa al restaurar (mantiene su propia
+     * colocacion del SO), pero las SECUNDARIAS si: se recrean en esa posicion y
+     * tamano.  @c has_win marca si el bloque trae geometria valida (las lineas
+     * "win ..." son opcionales; sin ellas, has_win=0 y se usan defaults). */
+    int win_x, win_y; /**< posicion de pantalla de la ventana (px)        */
+    int win_w, win_h; /**< tamano de la ventana (px)                       */
+    int has_win;      /**< 1 si win_x/y/w/h traen valores validos          */
 } LayoutData;
+
+/* -- Sesion multi-ventana --------------------------------------------------
+ * Una SESION agrupa la disposicion de TODAS las ventanas del IDE: la principal
+ * (indice 0) mas las secundarias.  Las funciones de sesion serializan/parsean
+ * el conjunto delimitando cada ventana, reutilizando el (de)serializador de una
+ * sola @c LayoutData por ventana.  Con una sola ventana, el fichero contiene un
+ * unico bloque de ventana y es compatible hacia atras con los layouts viejos
+ * (sin delimitador de ventana): @c session_parse cae a tratar todo el texto como
+ * la ventana 0 si no encuentra ningun "window N". */
+
+/** Maximo de ventanas que una sesion puede persistir (== APP_MAX_WINDOWS). */
+#define LAYOUT_MAX_WINDOWS 6
+
+/**
+ * @brief Disposicion de una sesion multi-ventana completa.
+ *
+ * @c windows[0] es SIEMPRE la principal; @c windows[1..count-1] son secundarias.
+ * Es POD pura (no posee recursos dinamicos).
+ */
+typedef struct {
+    LayoutData windows[LAYOUT_MAX_WINDOWS]; /**< una disposicion por ventana */
+    int count;                              /**< numero de ventanas (>= 1)   */
+} LayoutSession;
 
 /**
  * @brief Pone @p d a un estado "vacio" coherente (sin pestanas ni flotantes).
@@ -148,6 +181,28 @@ size_t layout_serialize(const LayoutData *d, char *out, size_t cap);
  */
 int layout_parse(const char *text, LayoutData *out);
 
+/**
+ * @brief Serializa una sesion multi-ventana @p s a texto en @p out.
+ *
+ * Emite, para cada ventana, una linea delimitadora @c "window <i>" seguida del
+ * volcado de su @c LayoutData (mismas lineas que @c layout_serialize).  Funcion
+ * PURA.  @return bytes escritos (sin el NUL), o 0 si no cabe.
+ */
+size_t session_serialize(const LayoutSession *s, char *out, size_t cap);
+
+/**
+ * @brief Parsea el texto @p text rellenando la sesion @p out.
+ *
+ * Divide el texto por lineas @c "window <i>" y parsea cada bloque con la misma
+ * logica que @c layout_parse.  COMPATIBILIDAD: si el texto NO contiene ningun
+ * delimitador @c "window" (formato antiguo de una sola ventana), trata todo el
+ * texto como la ventana 0.  Funcion PURA.
+ *
+ * @return Numero de ventanas con disposicion no vacia/coherente (>= 0).  Si la
+ *         ventana 0 quedo vacia, devuelve 0 (el llamante cae a default).
+ */
+int session_parse(const char *text, LayoutSession *out);
+
 /* ===========================================================================
  *  Wireado al Editor (implementado en layout_persist_editor.c, con SDL/Editor)
  * =========================================================================== */
@@ -178,3 +233,28 @@ void layout_save(const struct Editor *e);
  * @return 1 si se restauro una disposicion con al menos una pestana; 0 si no.
  */
 int layout_restore(struct Editor *e);
+
+/**
+ * @brief Captura la disposicion viva de @p e en @p d (POD), incluyendo la
+ *        geometria de su ventana del SO (posicion + tamano).
+ *
+ * Es la pieza reutilizable que usa @c layout_save y la capa de aplicacion para
+ * volcar CADA ventana de una sesion multi-ventana.  No toca disco.
+ */
+void layout_capture_editor(const struct Editor *e, LayoutData *d);
+
+/**
+ * @brief Aplica una disposicion ya parseada @p d sobre el editor @p e.
+ *
+ * Reabre las pestanas (saltando las que ya no existan), reconstruye el dock y
+ * los flotantes, fija el foco y los tamanos de la UI y valida las invariantes.
+ * @return 1 si quedo al menos una pestana valida; 0 si no (el llamante decide).
+ */
+int layout_apply_editor(struct Editor *e, const LayoutData *d);
+
+/**
+ * @brief Compone la ruta del fichero de disposicion (@c layout.txt) en @p out.
+ * @return 1 si se obtuvo; 0 si fallo.  La usa la capa de aplicacion para
+ *         guardar/restaurar la sesion COMPLETA (principal + secundarias).
+ */
+int session_file_path(char *out, size_t cap);

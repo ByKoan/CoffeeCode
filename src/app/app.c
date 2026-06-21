@@ -17,7 +17,10 @@
 #include "ext/ext_host.h"
 #include "input/input.h"
 #include "render/render.h"
+#include "session/layout_persist.h"
 #include <SDL3/SDL.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* App actualmente en ejecucion (la fija app_run mientras corre).  Permite que el
  * input, que solo recibe el Editor, llegue a la App para crear/fusionar ventanas
@@ -77,11 +80,16 @@ static int app_window_by_id(App *a, unsigned int wid) {
     return -1;
 }
 
-/* Re-apunta el host de extensiones (compartido) al buffer activo de la ventana
- * @p e, para que la API de extensiones opere sobre la ventana con foco. */
+/* Re-apunta el host de extensiones (UNICO y compartido) por COMPLETO a la
+ * ventana @p e: tanto el buffer activo (operaciones de buffer del CoffeeApi)
+ * como el userdata (el Editor al que llegan los hooks de UI: panel inferior,
+ * barra de estado, output, log, repintado).  Asi la salida de una extension
+ * aterriza en la ventana ENFOCADA, no siempre en la principal.  Con una sola
+ * ventana @p e es siempre la principal: cero cambio. */
 static void app_point_ext_host(Editor *e) {
-    if (e && e->ext_host && e->buf)
-        ext_host_set_buffer((CoffeeHost *)e->ext_host, e->buf);
+    if (!e || !e->ext_host) return;
+    ext_host_set_userdata((CoffeeHost *)e->ext_host, e);
+    if (e->buf) ext_host_set_buffer((CoffeeHost *)e->ext_host, e->buf);
 }
 
 /* Ventana destino al CERRAR la secundaria @p wi: la ULTIMA ENFOCADA distinta de
@@ -280,6 +288,106 @@ void app_detach_float_to_window(App *a, Editor *e, int fi) {
     SDL_RaiseWindow(sec->window);
 }
 
+/* 1 si alguna ventana de @p a tiene una pestana con ruta (algo que persistir).
+ * Replica el criterio "merece guardar" de layout_save pero sobre el conjunto. */
+static int app_session_has_content(App *a) {
+    for (int w = 0; w < a->window_count; w++) {
+        Editor *e = a->windows[w];
+        if (!e) continue;
+        for (int i = 0; i < e->tab_count; i++)
+            if (e->tabs[i].filepath[0]) return 1;
+        if (e->dock.leaf_count > 1 || e->float_count > 0) return 1;
+    }
+    return 0;
+}
+
+void app_layout_save(App *a) {
+    if (!a || a->window_count < 1 || !a->windows[0]) return;
+
+    /* Construir la sesion: una LayoutData por ventana viva. */
+    LayoutSession s;
+    memset(&s, 0, sizeof s);
+    s.count = a->window_count;
+    if (s.count > LAYOUT_MAX_WINDOWS) s.count = LAYOUT_MAX_WINDOWS;
+    for (int w = 0; w < s.count; w++) {
+        if (a->windows[w])
+            layout_capture_editor(a->windows[w], &s.windows[w]);
+        else
+            layout_data_clear(&s.windows[w]);
+    }
+
+    /* La principal SIEMPRE va a guardar la sesion (aqui), asi que su editor_free
+     * NO debe re-escribir solo-principal por encima.  Suprimirlo siempre que la
+     * App haya tomado el control del guardado. */
+    a->windows[0]->layout_save_suppressed = 1;
+
+    /* Nada que persistir: respetar la semantica de layout_save (no escribir un
+     * fichero "vacio" que ensucie el arranque por defecto). */
+    if (!app_session_has_content(a)) return;
+
+    static char text[256 * 1024]; /* holgado: varias ventanas con su pool */
+    size_t n = session_serialize(&s, text, sizeof text);
+    if (n == 0) return; /* no cabe: abandonar sin escribir */
+
+    char path[1024];
+    if (!session_file_path(path, sizeof path)) return;
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fwrite(text, 1, n, f);
+    fclose(f);
+}
+
+void app_layout_restore(App *a) {
+    if (!a || a->window_count < 1 || !a->windows[0]) return;
+
+    /* Leer el fichero de disposicion (mismo que layout_restore). */
+    char path[1024];
+    if (!session_file_path(path, sizeof path)) return;
+    FILE *f = fopen(path, "r");
+    if (!f) return; /* sin sesion guardada: solo la principal */
+
+    static char text[256 * 1024];
+    size_t rd = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[rd] = '\0';
+
+    LayoutSession s;
+    if (!session_parse(text, &s)) return; /* corrupto/vacio: solo la principal */
+
+    /* La principal (windows[0]) ya la restauro editor_init via layout_restore.
+     * Aqui solo recreamos las SECUNDARIAS guardadas (indices 1..count-1). */
+    for (int w = 1; w < s.count && a->window_count < APP_MAX_WINDOWS; w++) {
+        const LayoutData *d = &s.windows[w];
+        /* sin pestanas guardadas: nada que recrear para esta ventana */
+        if (d->tab_count <= 0) continue;
+
+        int win_w = d->has_win && d->win_w > 0 ? d->win_w : 800;
+        int win_h = d->has_win && d->win_h > 0 ? d->win_h : 600;
+        Editor *sec = (Editor *)calloc(1, sizeof(Editor));
+        if (!sec) continue;
+        if (!editor_init_secondary(sec, a->windows[0], win_w, win_h)) {
+            free(sec); /* SDL fallo: omitir esta ventana, seguir con el resto */
+            continue;
+        }
+        if (sec->window && d->has_win)
+            SDL_SetWindowPosition(sec->window, d->win_x, d->win_y);
+
+        /* Aplicar su disposicion (pestanas, dock, flotantes).  Si no quedo ninguna
+         * pestana valida (archivos borrados), descartar la ventana recien creada. */
+        if (!layout_apply_editor(sec, d) || sec->tab_count == 0) {
+            editor_free(sec);
+            free(sec);
+            continue;
+        }
+        a->windows[a->window_count++] = sec;
+        sec->needs_redraw = 1;
+    }
+
+    /* el foco se queda en la principal tras restaurar (estado de arranque). */
+    a->focused = 0;
+    a->prev_focused = 0;
+}
+
 void app_run(App *a) {
     if (!a || a->window_count < 1) return;
     g_app = a;
@@ -310,6 +418,11 @@ void app_run(App *a) {
             if (a->windows[i] && !a->windows[i]->running)
                 app_close_secondary(a, i);
     }
+
+    /* Guardar la SESION COMPLETA (principal + secundarias vivas) ANTES de salir,
+     * mientras las secundarias aun existen.  Marca la principal para que su
+     * editor_free no vuelva a guardar solo-principal por encima. */
+    app_layout_save(a);
 
     g_app = NULL;
 }

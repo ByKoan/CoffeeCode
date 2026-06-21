@@ -79,6 +79,34 @@ void app_run(App *a);
  */
 void app_free(App *a);
 
+/**
+ * @brief Guarda la disposicion de la SESION COMPLETA (ventana principal +
+ *        secundarias) en el fichero de disposicion.
+ *
+ * Recorre todas las ventanas vivas, captura la disposicion de cada una (con la
+ * geometria de su ventana del SO) y las escribe como una sesion multi-ventana.
+ * Llamada por @c app_run al terminar, ANTES de liberar las secundarias, para no
+ * perder su estado.  Tras escribir, marca la principal para que su @c editor_free
+ * no vuelva a guardar (evita sobreescribir la sesion con solo la principal).
+ *
+ * @param a App con las ventanas vivas (no NULL).
+ */
+void app_layout_save(App *a);
+
+/**
+ * @brief Restaura la SESION COMPLETA: la principal (ya restaurada por
+ *        @c editor_init) mas las ventanas SECUNDARIAS guardadas.
+ *
+ * Recrea cada ventana secundaria (con @c editor_init_secondary), la coloca en su
+ * posicion+tamano de pantalla y le aplica su disposicion (pestanas, dock,
+ * flotantes).  Las secundarias sin pestanas validas (archivos borrados) se
+ * omiten.  Robusto: ante una sesion antigua de una sola ventana o un fichero sin
+ * secundarias, no crea ninguna y todo queda como antes.
+ *
+ * @param a App con la principal ya en @c windows[0] (no NULL).
+ */
+void app_layout_restore(App *a);
+
 /* -- Operaciones multi-ventana (usadas desde input) ----------------------- */
 
 /**

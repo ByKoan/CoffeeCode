@@ -220,6 +220,129 @@ static void test_tab_sin_ruta_no_round_trip(void) {
     EXPECT_EQ_STR(b.tabs[0].path, "a.c");
 }
 
+/* -- Geometria de ventana (lineas "win"): round-trip ----------------------- */
+static void test_win_geom_round_trip(void) {
+    LayoutData a;
+    layout_data_clear(&a);
+    strncpy(a.tabs[0].path, "x.c", sizeof(a.tabs[0].path) - 1);
+    a.tabs[0].group = 0;
+    a.tabs[0].is_group_active = 1;
+    a.tab_count = 1;
+    a.win_x = 320;
+    a.win_y = 145;
+    a.win_w = 900;
+    a.win_h = 640;
+    a.has_win = 1;
+
+    char text[4096];
+    size_t n = layout_serialize(&a, text, sizeof text);
+    EXPECT_TRUE(n > 0);
+
+    LayoutData b;
+    int ok = layout_parse(text, &b);
+    EXPECT_EQ_INT(ok, 1);
+    EXPECT_EQ_INT(b.has_win, 1);
+    EXPECT_EQ_INT(b.win_x, 320);
+    EXPECT_EQ_INT(b.win_y, 145);
+    EXPECT_EQ_INT(b.win_w, 900);
+    EXPECT_EQ_INT(b.win_h, 640);
+}
+
+/* -- Sesion multi-ventana: round-trip de 2 ventanas ------------------------ */
+static void test_session_round_trip(void) {
+    LayoutSession s;
+    memset(&s, 0, sizeof s);
+    s.count = 2;
+
+    /* ventana 0 (principal) */
+    layout_data_clear(&s.windows[0]);
+    strncpy(s.windows[0].tabs[0].path, "src/main.c",
+            sizeof(s.windows[0].tabs[0].path) - 1);
+    s.windows[0].tabs[0].group = 0;
+    s.windows[0].tabs[0].is_group_active = 1;
+    s.windows[0].tab_count = 1;
+    s.windows[0].ftree_width = 250;
+
+    /* ventana 1 (secundaria) con geometria de pantalla */
+    layout_data_clear(&s.windows[1]);
+    strncpy(s.windows[1].tabs[0].path, "C:/con espacios/b.txt",
+            sizeof(s.windows[1].tabs[0].path) - 1);
+    s.windows[1].tabs[0].group = 0;
+    s.windows[1].tabs[0].is_group_active = 1;
+    s.windows[1].tab_count = 1;
+    s.windows[1].win_x = 1000;
+    s.windows[1].win_y = 50;
+    s.windows[1].win_w = 720;
+    s.windows[1].win_h = 480;
+    s.windows[1].has_win = 1;
+
+    char text[8192];
+    size_t n = session_serialize(&s, text, sizeof text);
+    EXPECT_TRUE(n > 0);
+
+    LayoutSession r;
+    int ret = session_parse(text, &r);
+    EXPECT_EQ_INT(ret, 2);   /* dos ventanas */
+    EXPECT_EQ_INT(r.count, 2);
+
+    /* ventana 0 */
+    EXPECT_EQ_INT(r.windows[0].tab_count, 1);
+    EXPECT_EQ_STR(r.windows[0].tabs[0].path, "src/main.c");
+    EXPECT_EQ_INT(r.windows[0].ftree_width, 250);
+
+    /* ventana 1 con su geometria */
+    EXPECT_EQ_INT(r.windows[1].tab_count, 1);
+    EXPECT_EQ_STR(r.windows[1].tabs[0].path, "C:/con espacios/b.txt");
+    EXPECT_EQ_INT(r.windows[1].has_win, 1);
+    EXPECT_EQ_INT(r.windows[1].win_x, 1000);
+    EXPECT_EQ_INT(r.windows[1].win_w, 720);
+    EXPECT_EQ_INT(r.windows[1].win_h, 480);
+}
+
+/* -- Compatibilidad: layout antiguo (sin "window") como sesion de 1 ventana - */
+static void test_session_compat_formato_antiguo(void) {
+    /* texto del formato viejo, sin ningun delimitador "window" */
+    const char *old =
+        "ui ftree_width 200\n"
+        "tab 0 1 src/x.c\n";
+    LayoutSession r;
+    int ret = session_parse(old, &r);
+    EXPECT_EQ_INT(ret, 1);            /* se trata como la ventana 0 */
+    EXPECT_EQ_INT(r.count, 1);
+    EXPECT_EQ_INT(r.windows[0].tab_count, 1);
+    EXPECT_EQ_STR(r.windows[0].tabs[0].path, "src/x.c");
+    EXPECT_EQ_INT(r.windows[0].ftree_width, 200);
+}
+
+/* -- Robustez: sesion vacia / NULL ----------------------------------------- */
+static void test_session_vacio(void) {
+    LayoutSession r;
+    int ret = session_parse("", &r);
+    EXPECT_EQ_INT(ret, 0);           /* sin contenido -> 0 */
+    EXPECT_EQ_INT(r.count, 1);       /* siempre al menos la ventana 0 */
+    EXPECT_EQ_INT(r.windows[0].tab_count, 0);
+
+    ret = session_parse(NULL, &r);
+    EXPECT_EQ_INT(ret, 0);
+    EXPECT_EQ_INT(r.windows[0].tab_count, 0);
+}
+
+/* -- Robustez: bloque de ventana con basura no rompe la principal ----------- */
+static void test_session_ventana_basura_no_rompe_principal(void) {
+    const char *text =
+        "window 0\n"
+        "tab 0 1 a.c\n"
+        "window 1\n"
+        "esto no es valido\n@@@\n";
+    LayoutSession r;
+    int ret = session_parse(text, &r);
+    /* la principal parseo bien; la secundaria quedo vacia (se omitira al recrear) */
+    EXPECT_EQ_INT(r.windows[0].tab_count, 1);
+    EXPECT_EQ_STR(r.windows[0].tabs[0].path, "a.c");
+    EXPECT_EQ_INT(r.windows[1].tab_count, 0);
+    EXPECT_TRUE(ret >= 1); /* la sesion es util porque la ventana 0 parseo */
+}
+
 int main(void) {
     tt_suite("layout_persist");
     tt_run("round-trip completo", test_round_trip);
@@ -229,5 +352,11 @@ int main(void) {
     tt_run("dock invalido se descarta y conserva pestanas",
            test_dock_invalido_descarta_solo_arbol);
     tt_run("pestana con ruta round-trip", test_tab_sin_ruta_no_round_trip);
+    tt_run("geometria de ventana round-trip", test_win_geom_round_trip);
+    tt_run("sesion multi-ventana round-trip", test_session_round_trip);
+    tt_run("sesion compat formato antiguo", test_session_compat_formato_antiguo);
+    tt_run("sesion vacia/NULL", test_session_vacio);
+    tt_run("sesion con ventana basura conserva principal",
+           test_session_ventana_basura_no_rompe_principal);
     return tt_summary();
 }
