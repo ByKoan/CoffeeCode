@@ -78,6 +78,11 @@ static TTF_Font *load_editor_font(float size, const char *path) {
 }
 
 void editor_reload_font(Editor *e) {
+    /* En una ventana secundaria la fuente es COMPARTIDA (la posee la principal):
+     * no la recargamos ni la cerramos aqui para no liberar un puntero ajeno.  El
+     * cambio de fuente se hace en la ventana principal y las secundarias lo
+     * reflejan al copiar de nuevo sus metricas (no critico para v1). */
+    if (e->is_secondary) return;
     /* Cargar la nueva fuente en una variable temporal: si falla (ruta inválida
      * o tamaño imposible) se conserva la actual y no se rompe el editor. */
     TTF_Font *nf =
@@ -574,6 +579,94 @@ int editor_init(Editor *e, const char *filepath) {
     return 1;
 }
 
+int editor_init_secondary(Editor *e, Editor *primary, int w, int h) {
+    if (!e || !primary) return 0;
+    memset(e, 0, sizeof(*e)); /* todo a cero: punteros NULL y flags en 0 */
+    e->is_secondary = 1;      /* NO posee recursos compartidos */
+    e->running = 1;
+    e->needs_redraw = 1;
+    e->menu_hovered = -1;
+    e->find.result_line = -1;
+    e->cursor_visible = 1;
+    e->cursor_blink_ms = SDL_GetTicks();
+    e->ext_panel_w = LAYOUT_EXT_DEFAULT_W;
+    e->dragging_divider = DIVIDER_NONE;
+    e->hovered_divider = DIVIDER_NONE;
+
+    /* Panel inferior propio (cada ventana es un IDE completo). */
+    panel_store_init(&e->panels);
+    e->bottom_panel_open = 0;
+    e->bottom_panel_h = LAYOUT_BOTTOM_DEFAULT_H;
+    e->bottom_active_chan = 0;
+    e->bottom_focused = 0;
+    e->bottom_sel_anchor = -1;
+    e->bottom_sel_caret = -1;
+    e->bottom_sel_active = 0;
+    e->bottom_selecting = 0;
+
+    /* -- Recursos COMPARTIDOS de la ventana principal (por puntero/valor) ----
+     * La fuente (TTF_Font*) es independiente del renderer en SDL_ttf: draw_text
+     * crea la textura sobre e->renderer en cada llamada, asi que la MISMA fuente
+     * sirve para varios renderers.  El ext_host es uno solo para todo el IDE.  Se
+     * copian tambien las metricas de fuente, el tema y las preferencias (estas
+     * por valor: las secundarias no las re-guardan).  La lista de fuentes del
+     * selector queda vacia en la secundaria (no abre preferencias de fuente). */
+    e->settings = primary->settings;
+    e->autosave = primary->autosave;
+    e->theme = primary->theme;
+    e->font = primary->font;             /* COMPARTIDA: no se cierra al liberar */
+    e->font_size = primary->font_size;
+    e->line_height = primary->line_height;
+    e->char_w = primary->char_w;
+    e->ext_host = primary->ext_host;     /* COMPARTIDO: no se destruye al liberar */
+
+    /* -- Ventana del SO propia de esta instancia -- */
+    if (w < 300) w = 300; /* tamano minimo sensato para un IDE completo */
+    if (h < 200) h = 200;
+    e->win_w = w;
+    e->win_h = h;
+    e->window =
+        SDL_CreateWindow("CoffeeCode", w, h, SDL_WINDOW_RESIZABLE);
+    if (!e->window) {
+        fprintf(stderr, "SDL_CreateWindow (sec): %s\n", SDL_GetError());
+        return 0;
+    }
+    e->renderer = SDL_CreateRenderer(e->window, NULL);
+    if (!e->renderer) {
+        fprintf(stderr, "SDL_CreateRenderer (sec): %s\n", SDL_GetError());
+        SDL_DestroyWindow(e->window);
+        e->window = NULL;
+        return 0;
+    }
+    SDL_SetRenderVSync(e->renderer, 1);
+    SDL_StartTextInput(e->window);
+
+    /* -- Explorador propio + arbol de dock de una hoja vacia (sin pestanas) -- */
+    ftree_init(&e->ftree);
+    e->tab_count = 0;
+    e->active_tab = 0;
+    dock_init_single(&e->dock, 0);
+    e->active_group = 0;
+    e->pane_active = 0;
+    e->dock_drag_split = DOCK_NONE;
+    e->dock_drag_orient = DOCK_VERTICAL;
+    e->drag_tab = -1;
+    e->dragging_tab = 0;
+    e->tab_reorder_group = -1;
+    e->float_count = 0;
+    e->float_drag = -1;
+    e->float_resizing = 0;
+    e->float_resize_edges = 0;
+    e->float_dock_target_group = -1;
+    e->float_dock_zone = DOCK_DZ_NONE;
+    e->detached_count = 0;        /* las secundarias no anidan desprendidas (v1) */
+    e->detached_focus_group = -1;
+    e->buf = NULL;
+    e->lex = NULL;
+    e->undo = NULL;
+    return 1;
+}
+
 /**
  * @brief Libera todas las pestañas y destruye los recursos de SDL.
  *
@@ -583,6 +676,24 @@ int editor_init(Editor *e, const char *filepath) {
  * TTF_Quit y @c SDL_Quit cierran las librerías al final.
  */
 void editor_free(Editor *e) {
+    /* -- Ventana SECUNDARIA: libera SOLO lo que POSEE -----------------------
+     * Sus pestanas (buf/lex/undo) y su explorador son propios; su window/renderer
+     * los creo en editor_init_secondary.  NO toca la fuente, el ext_host ni los
+     * subsistemas SDL/TTF: son de la ventana principal, que los libera al final.
+     * No persiste disposicion (lo hace la principal con su propio estado). */
+    if (e->is_secondary) {
+        for (int i = 0; i < e->tab_count; i++)
+            tab_free_resources(&e->tabs[i]);
+        ftree_free(&e->ftree);
+        /* PanelStore es POD de arrays fijos: no posee memoria que liberar. */
+        if (e->window) SDL_StopTextInput(e->window);
+        if (e->renderer) SDL_DestroyRenderer(e->renderer);
+        if (e->window) SDL_DestroyWindow(e->window);
+        e->renderer = NULL;
+        e->window = NULL;
+        return;
+    }
+
     /* Persistir la disposicion actual ANTES de liberar nada: necesita las rutas
      * de las pestanas y el arbol de paneles aun vivos. */
     layout_save(e);
@@ -693,6 +804,50 @@ static void editor_poll_lsp_install(Editor *e) {
     }
 }
 
+void editor_frame_tasks(Editor *e) {
+    /* Autoguardado: si está activado y hay cambios sin guardar, persistir
+     * el archivo, pero como mucho una vez cada 300 ms (SDL_GetTicks da los
+     * ms transcurridos desde SDL_Init) para no escribir en disco en cada
+     * tecla. */
+    if (e->autosave && e->modified && e->filepath[0]) {
+        Uint64 now = SDL_GetTicks();
+        if (now - e->autosave_last_ms >= 300) {
+            if (buf_save_file(e->buf, e->filepath)) {
+                e->modified = 0;
+                /* sincronizar de vuelta a la pestaña: ruta, flag y mtime */
+                if (e->tab_count > 0) {
+                    EditorTab *_t = &e->tabs[e->active_tab];
+                    strncpy(_t->filepath, e->filepath, 511);
+                    _t->modified = 0;
+                    {
+                        struct stat _st;
+                        _t->loaded_mtime = (stat(e->filepath, &_st) == 0)
+                                               ? (long)_st.st_mtime
+                                               : 0;
+                    }
+                }
+                e->needs_redraw = 1;
+            }
+            e->autosave_last_ms = now;
+        }
+    }
+
+    /* Sondear instalaciones LSP en curso */
+    editor_poll_lsp_install(e);
+
+    /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
+     * Solo se marca needs_redraw cuando cambia el estado, evitando
+     * redibujos innecesarios cuando el cursor no ha cambiado. */
+    {
+        Uint64 now = SDL_GetTicks();
+        if (now - e->cursor_blink_ms >= CURSOR_BLINK_MS) {
+            e->cursor_visible = !e->cursor_visible;
+            e->cursor_blink_ms = now;
+            e->needs_redraw = 1;
+        }
+    }
+}
+
 void editor_run(Editor *e) {
     SDL_Event ev;
     while (e->running) {
@@ -707,47 +862,7 @@ void editor_run(Editor *e) {
                 input_handle_event(e, &ev);
         }
 
-        /* Autoguardado: si está activado y hay cambios sin guardar, persistir
-         * el archivo, pero como mucho una vez cada 300 ms (SDL_GetTicks da los
-         * ms transcurridos desde SDL_Init) para no escribir en disco en cada
-         * tecla. */
-        if (e->autosave && e->modified && e->filepath[0]) {
-            Uint64 now = SDL_GetTicks();
-            if (now - e->autosave_last_ms >= 300) {
-                if (buf_save_file(e->buf, e->filepath)) {
-                    e->modified = 0;
-                    /* sincronizar de vuelta a la pestaña: ruta, flag y mtime */
-                    if (e->tab_count > 0) {
-                        EditorTab *_t = &e->tabs[e->active_tab];
-                        strncpy(_t->filepath, e->filepath, 511);
-                        _t->modified = 0;
-                        {
-                            struct stat _st;
-                            _t->loaded_mtime = (stat(e->filepath, &_st) == 0)
-                                                   ? (long)_st.st_mtime
-                                                   : 0;
-                        }
-                    }
-                    e->needs_redraw = 1;
-                }
-                e->autosave_last_ms = now;
-            }
-        }
-
-        /* Sondear instalaciones LSP en curso */
-        editor_poll_lsp_install(e);
-
-        /* Parpadeo del cursor: alternar visibilidad cada CURSOR_BLINK_MS.
-         * Solo se marca needs_redraw cuando cambia el estado, evitando
-         * redibujos innecesarios cuando el cursor no ha cambiado. */
-        {
-            Uint64 now = SDL_GetTicks();
-            if (now - e->cursor_blink_ms >= CURSOR_BLINK_MS) {
-                e->cursor_visible = !e->cursor_visible;
-                e->cursor_blink_ms = now;
-                e->needs_redraw = 1;
-            }
-        }
+        editor_frame_tasks(e); /* autoguardado + LSP + parpadeo del cursor */
 
         /* Redibujar solo si algo cambió desde el último frame. */
         if (e->needs_redraw) {

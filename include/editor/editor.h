@@ -138,6 +138,18 @@ typedef struct Editor {
     SDL_Renderer *renderer; /* contexto de dibujo 2D acelerado          */
     TTF_Font *font;         /* fuente monoespaciada cargada en runtime  */
     int win_w, win_h;       /* tamaño de la ventana en píxeles          */
+    /* -- Multi-ventana: instancias secundarias --------------------------------
+     * Cada ventana del IDE es una instancia COMPLETA de Editor (su propio dock,
+     * flotantes, explorador, paneles...).  La ventana PRINCIPAL (creada con
+     * editor_init) es DUENA de los recursos compartidos por puntero: la fuente
+     * (font), el host de extensiones (ext_host) y los subsistemas globales de
+     * SDL/TTF.  Una ventana SECUNDARIA (creada con editor_init_secondary)
+     * REFERENCIA esos recursos pero NO los crea ni los destruye: con
+     * is_secondary==1, editor_free libera SOLO su window/renderer y sus buffers,
+     * dejando intactos font/ext_host/SDL (los libera la principal).  Con
+     * is_secondary==0 (caso por defecto, ventana principal) todo es como
+     * siempre: cero regresion. */
+    int is_secondary;       /* 1 = ventana secundaria; no posee recursos compartidos */
     int char_w;             /* ancho de un carácter en px (monoespaciada) */
     int font_size;          /* tamaño de la fuente en px (de settings)  */
     int line_height;        /* alto de línea del área de texto en px     */
@@ -389,6 +401,40 @@ static inline int editor_shortcut_h(const Editor *e) {
 int editor_init(Editor *e, const char *filepath);
 void editor_free(Editor *e);
 void editor_run(Editor *e);
+
+/* Tareas periodicas de un Editor que se ejecutan una vez por iteracion del bucle
+ * (independientes de eventos): autoguardado, sondeo de instalaciones LSP en
+ * curso y parpadeo del cursor.  La extrae el bucle multi-ventana (app_run) para
+ * correrlas por CADA ventana; editor_run la usa para la suya. */
+void editor_frame_tasks(Editor *e);
+
+/* Inicializa @p e como ventana SECUNDARIA de @p primary: crea su PROPIO
+ * SDL_Window/SDL_Renderer del tamano (@p w,@p h) y COMPARTE por puntero los
+ * recursos de @p primary (fuente, ext_host, metricas de fuente y tema).  El
+ * editor secundario arranca SIN pestanas (dock de una hoja vacia), listo para
+ * recibir pestanas movidas desde otra ventana.  Marca @c is_secondary=1 para que
+ * @c editor_free NO libere los recursos compartidos (de los que la principal
+ * sigue siendo duena) ni cierre SDL/TTF.  Devuelve 1 si todo fue bien; 0 si SDL
+ * fallo creando la ventana/renderer (en ese caso @p e queda sin usar). */
+int editor_init_secondary(Editor *e, Editor *primary, int w, int h);
+
+/* Mueve TODAS las pestanas (structs ::EditorTab) del grupo @p src_group del
+ * editor @p src al editor @p dst (a su hoja de dock con foco), preservando su
+ * almacenamiento (buf/lex/undo/lsp): es una copia superficial del struct + limpieza
+ * del slot origen, sin re-cargar del disco.  Repara en @p src los indices
+ * guardados (active_tab + group_active_tab[]) y colapsa su hoja origen si queda
+ * vacia; en @p dst enfoca la hoja destino con la pestana activa del grupo origen
+ * como activa.  Lo usa el desprender (a una ventana nueva).  No hace nada si el
+ * grupo origen esta vacio o no hay hoja destino en @p dst. */
+void editor_transfer_group(Editor *src, int src_group, Editor *dst);
+
+/* Mueve TODAS las pestanas de @p src (de cualquiera de sus grupos) a la hoja de
+ * dock con foco de @p dst, aplanandolas en ese grupo.  Es la fusion de una
+ * ventana secundaria de vuelta a la principal al cerrarla: tras esto @p src queda
+ * sin pestanas (tab_count==0) y sus recursos los libera @c editor_free.  La
+ * pestana activa de @p src queda como activa en @p dst.  No hace nada si @p src
+ * no tiene pestanas o @p dst no tiene hoja destino. */
+void editor_merge_all(Editor *src, Editor *dst);
 /* Recarga la fuente desde las preferencias (settings.font_path/font_size) y
  * recalcula char_w/line_height. Mantiene la fuente actual si la nueva falla. */
 void editor_reload_font(Editor *e);

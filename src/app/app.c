@@ -1,0 +1,237 @@
+/**
+ * @file app.c
+ * @brief Capa de aplicacion multi-ventana: bucle de eventos, enrutado por
+ *        SDL_WindowID y operaciones de desprender/fusionar ventanas.
+ *
+ * Cada ventana del IDE es una instancia COMPLETA de ::Editor (con su propio
+ * dock, flotantes, explorador y paneles).  La App orquesta el conjunto sin
+ * tocar el render ni el input de cada ventana: reutiliza @c render_frame y
+ * @c input_handle_event TAL CUAL, por ventana.
+ *
+ * Invariante de cero regresion: con @c window_count == 1 el bucle es
+ * equivalente a @c editor_run sobre la principal (un solo Editor, su input y su
+ * render); el enrutado por windowID es entonces un unico chequeo trivial.
+ */
+#include "app/app.h"
+#include "ext/ext_host.h"
+#include "input/input.h"
+#include "render/render.h"
+#include <SDL3/SDL.h>
+
+/* App actualmente en ejecucion (la fija app_run mientras corre).  Permite que el
+ * input, que solo recibe el Editor, llegue a la App para crear/fusionar ventanas
+ * sin reescribir toda la cadena de input. */
+static App *g_app = NULL;
+
+App *app_current(void) { return g_app; }
+
+/* Enruta un evento al Editor correcto y maneja los casos multi-ventana (foco,
+ * cierre de secundaria).  Interna del bucle multi-ventana. */
+static void app_dispatch(App *a, SDL_Event *ev);
+
+void app_init(App *a, Editor *primary) {
+    if (!a || !primary) return;
+    a->windows[0] = primary;
+    for (int i = 1; i < APP_MAX_WINDOWS; i++) a->windows[i] = NULL;
+    a->window_count = 1;
+    a->focused = 0;
+}
+
+/* SDL_WindowID al que pertenece un evento, o 0 si no esta ligado a una ventana
+ * (p.ej. SDL_EVENT_QUIT).  SDL_Event es una union: cada tipo guarda el windowID
+ * en un miembro distinto. */
+static unsigned int app_event_window_id(const SDL_Event *ev) {
+    switch (ev->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        return ev->window.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        return ev->key.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+        return ev->text.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return ev->button.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+        return ev->motion.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return ev->wheel.windowID;
+    default:
+        return 0; /* evento sin ventana asociada */
+    }
+}
+
+/* Indice de la ventana de la App cuyo SDL_Window tiene @p wid, o -1 si ninguna.
+ * Con window_count==1 es un unico chequeo barato. */
+static int app_window_by_id(App *a, unsigned int wid) {
+    if (wid == 0) return -1;
+    for (int i = 0; i < a->window_count; i++) {
+        Editor *e = a->windows[i];
+        if (e && e->window && SDL_GetWindowID(e->window) == wid) return i;
+    }
+    return -1;
+}
+
+/* Re-apunta el host de extensiones (compartido) al buffer activo de la ventana
+ * @p e, para que la API de extensiones opere sobre la ventana con foco. */
+static void app_point_ext_host(Editor *e) {
+    if (e && e->ext_host && e->buf)
+        ext_host_set_buffer((CoffeeHost *)e->ext_host, e->buf);
+}
+
+/* Fusiona la ventana secundaria de indice @p wi de vuelta a la principal y la
+ * destruye, compactando el array de ventanas.  Mueve TODAS sus pestanas a la
+ * principal (a su hoja de dock con foco).  No hace nada con la principal (wi==0).
+ */
+static void app_close_secondary(App *a, int wi) {
+    if (wi <= 0 || wi >= a->window_count) return; /* nunca la principal */
+    Editor *sec = a->windows[wi];
+    Editor *primary = a->windows[0];
+
+    /* fusionar sus pestanas a la principal antes de liberar nada */
+    editor_merge_all(sec, primary);
+    app_point_ext_host(primary);
+    primary->needs_redraw = 1;
+
+    /* liberar la secundaria (libera SOLO lo que posee: window/renderer + tabs) */
+    editor_free(sec);
+    free(sec);
+
+    /* compactar el array de ventanas */
+    for (int i = wi; i < a->window_count - 1; i++) a->windows[i] = a->windows[i + 1];
+    a->windows[a->window_count - 1] = NULL;
+    a->window_count--;
+
+    /* el foco vuelve a la principal */
+    if (a->focused >= a->window_count) a->focused = 0;
+    else if (a->focused == wi) a->focused = 0;
+    else if (a->focused > wi) a->focused--;
+}
+
+void app_detach_float_to_window(App *a, Editor *e, int fi) {
+    if (!a || !e) return;
+    if (a->window_count >= APP_MAX_WINDOWS) return; /* sin sitio para mas ventanas */
+    if (fi < 0 || fi >= e->float_count) return;
+
+    int group = e->floats[fi].group_id;
+    int w = e->floats[fi].rect.w;
+    int h = e->floats[fi].rect.h;
+
+    /* crear la ventana NUEVA como un IDE completo (Editor secundario) */
+    Editor *sec = (Editor *)calloc(1, sizeof(Editor));
+    if (!sec) return;
+    if (!editor_init_secondary(sec, a->windows[0], w, h)) {
+        free(sec); /* SDL fallo: conservar el flotante */
+        return;
+    }
+
+    /* mover las pestanas del grupo del flotante a la ventana nueva */
+    editor_transfer_group(e, group, sec);
+
+    /* eliminar el FloatPanel in-window de @p e (sus pestanas ya estan en sec) */
+    if (fi >= 0 && fi < e->float_count) {
+        for (int i = fi; i < e->float_count - 1; i++) e->floats[i] = e->floats[i + 1];
+        e->float_count--;
+    }
+    editor_float_gc_empty(e);
+    e->needs_redraw = 1;
+
+    /* registrar la ventana nueva y darle el foco */
+    int wi = a->window_count++;
+    a->windows[wi] = sec;
+    a->focused = wi;
+    app_point_ext_host(sec);
+    SDL_RaiseWindow(sec->window);
+}
+
+void app_run(App *a) {
+    if (!a || a->window_count < 1) return;
+    g_app = a;
+
+    SDL_Event ev;
+    /* el bucle vive mientras la ventana principal este viva */
+    while (a->windows[0] && a->windows[0]->running) {
+        if (SDL_WaitEventTimeout(&ev, 16)) {
+            app_dispatch(a, &ev);
+            while (SDL_PollEvent(&ev)) app_dispatch(a, &ev);
+        }
+
+        /* tareas periodicas + render POR CADA ventana */
+        for (int i = 0; i < a->window_count; i++) {
+            Editor *e = a->windows[i];
+            if (!e) continue;
+            editor_frame_tasks(e);
+            if (e->needs_redraw) {
+                render_frame(e);
+                if (e->detached_count > 0) editor_render_detached(e);
+                e->needs_redraw = 0;
+            }
+        }
+
+        /* cerrar secundarias que pidieron salir desde su propio input (running=0
+         * por Ctrl+Q): fusionarlas a la principal. */
+        for (int i = a->window_count - 1; i >= 1; i--)
+            if (a->windows[i] && !a->windows[i]->running)
+                app_close_secondary(a, i);
+    }
+
+    g_app = NULL;
+}
+
+static void app_dispatch(App *a, SDL_Event *ev) {
+    /* SDL_EVENT_QUIT: cerrar la app entera (lo dispara SDL al no quedar ventanas
+     * o por peticion explicita).  Lo trata la principal. */
+    if (ev->type == SDL_EVENT_QUIT) {
+        a->windows[0]->running = 0;
+        return;
+    }
+
+    int wi = app_window_by_id(a, app_event_window_id(ev));
+    if (wi < 0) {
+        /* evento sin ventana resoluble: con una sola ventana, va a la principal
+         * (cero regresion); con varias, a la enfocada. */
+        wi = (a->window_count == 1) ? 0 : a->focused;
+        if (wi < 0 || wi >= a->window_count) wi = 0;
+    }
+    Editor *e = a->windows[wi];
+    if (!e) return;
+
+    /* Cierre de una ventana por la X del SO: la principal termina la app; una
+     * secundaria se fusiona de vuelta a la principal. */
+    if (ev->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        if (wi == 0) {
+            a->windows[0]->running = 0;
+        } else {
+            app_close_secondary(a, wi);
+        }
+        return;
+    }
+
+    /* Cambio de foco de teclado: actualizar la ventana enfocada y re-apuntar el
+     * host de extensiones a su buffer activo. */
+    if (ev->type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        a->focused = wi;
+        app_point_ext_host(e);
+        /* tambien dejamos que el input lo procese (no hace dano). */
+    }
+
+    /* todo lo demas: el input de ESA ventana, tal cual (mismo codigo). */
+    input_handle_event(e, ev);
+}
+
+void app_free(App *a) {
+    if (!a) return;
+    /* liberar SOLO las secundarias (la principal la libera el llamante). */
+    for (int i = a->window_count - 1; i >= 1; i--) {
+        if (a->windows[i]) {
+            editor_free(a->windows[i]);
+            free(a->windows[i]);
+            a->windows[i] = NULL;
+        }
+    }
+    a->window_count = 1;
+    a->focused = 0;
+}

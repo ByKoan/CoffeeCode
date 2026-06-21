@@ -96,6 +96,14 @@ add_coffee_test(test_tab_membership editor/test_tab_membership.c
 add_coffee_test(test_tab_reorder editor/test_tab_reorder.c
     "${CMAKE_SOURCE_DIR}/src/editor/tab_reorder.c")
 
+# --- tabmove (puro: mover pestanas entre ventanas, sin SDL) -----------------
+# Verifica la aritmetica del desprender/fusionar multi-ventana: anyadir al array
+# destino + quitar del origen compactando + reparar los indices guardados.  La
+# misma logica que editor_transfer_group/editor_merge_all sobre los structs
+# reales, aqui sobre arrays planos de group_id.  Solo enlaza tabmove.c (puro).
+add_coffee_test(test_tabmove app/test_tabmove.c
+    "${CMAKE_SOURCE_DIR}/src/app/tabmove.c")
+
 # --- layout_persist (puro: (de)serializacion de la disposicion, sin SDL) ----
 # Verifica el round-trip de la struct POD LayoutData (pestanas, arbol de dock,
 # flotantes y tamanos de la UI) a/desde texto, y la robustez ante texto

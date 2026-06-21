@@ -17,6 +17,7 @@
  * funciones @c on_mouse_* de aquí.
  */
 #include "input_internal.h"
+#include "app/app.h"
 #include "editor/tab_reorder.h"
 /* render_detached_window (refresca el hit-test antes del clic) viene de
  * render/render.h, incluido por input_internal.h. */
@@ -203,10 +204,13 @@ static int handle_float_click(Editor *e, int mx, int my) {
     case FLOAT_HIT_DOCK:
         editor_float_dock(e, fi);
         return 1;
-    case FLOAT_HIT_DETACH:
-        /* promover este flotante a una ventana REAL del SO */
-        editor_detach_float(e, fi);
+    case FLOAT_HIT_DETACH: {
+        /* desprender este flotante a una VENTANA NUEVA completa (otro IDE): la
+         * App crea un Editor secundario y le mueve las pestanas del flotante. */
+        App *a = app_current();
+        if (a) app_detach_float_to_window(a, e, fi);
         return 1;
+    }
     case FLOAT_HIT_TITLEBAR: {
         /* iniciar arrastre de movimiento: guardar el desfase cursor->esquina */
         e->float_drag = fi;

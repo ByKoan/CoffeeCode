@@ -1258,3 +1258,181 @@ void editor_detached_reattach_group(Editor *e, int group) {
     editor_sync_cursor(e);
     e->needs_redraw = 1;
 }
+
+/* ===========================================================================
+ *  Transferencia de pestanas ENTRE instancias de Editor (multi-ventana)
+ *
+ * Cada ventana del IDE es un Editor completo (su propio tabs[]/dock/grupos).
+ * Mover una pestana de una ventana a otra es una COPIA SUPERFICIAL del struct
+ * EditorTab (que POSEE su buf/lex/undo/lsp sin alias internos: el mismo
+ * razonamiento que editor_tab_close al compactar tabs[]) seguida de limpiar el
+ * slot origen.  No se re-lee del disco ni se recrea ningun recurso.
+ * =========================================================================== */
+
+/* group_id de la hoja del dock con foco de @p dst (destino de las pestanas
+ * movidas).  Si el foco no apunta a una hoja viva, devuelve la primera hoja del
+ * arbol; -1 si @p dst no tiene ninguna hoja (no deberia pasar). */
+static int editor_dst_focus_group(Editor *dst) {
+    int g = dst->dock.nodes[dst->dock.focused_leaf].group_id;
+    if (dock_leaf_by_group(&dst->dock, g) != DOCK_NONE) return g;
+    DockRect area = editor_dock_area(dst);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&dst->dock, area, leaves, DOCK_MAX_LEAVES);
+    return (n > 0) ? leaves[0].group_id : -1;
+}
+
+/* Reenfoca @p dst sobre @p dst_group con una pestana valida como activa (tras
+ * recibir pestanas movidas).  Vuelca el estado "en vivo" a esa pestana. */
+static void editor_focus_dst_group(Editor *dst, int dst_group) {
+    dst->active_group = dst_group;
+    dst->dock.focused_leaf = dock_leaf_by_group(&dst->dock, dst_group);
+    int idx = dst->group_active_tab[dst_group];
+    if (idx < 0 || idx >= dst->tab_count || dst->tabs[idx].group != dst_group)
+        idx = editor_group_first_tab(dst, dst_group);
+    if (idx >= 0) {
+        dst->active_tab = idx;
+        dst->group_active_tab[dst_group] = idx;
+        if (dst->dock.leaf_count <= 1) dst->pane_active = 0;
+        editor_tab_load_state(dst);
+        editor_update_lexer(dst, 0);
+        editor_sync_cursor(dst);
+    }
+    dst->needs_redraw = 1;
+}
+
+/* Quita del array tabs[] de @p src la pestana de indice @p idx (ya copiada al
+ * destino), compactando y reparando los indices guardados de @p src
+ * (active_tab + group_active_tab[]) igual que editor_tab_close. */
+static void editor_src_remove_tab(Editor *src, int idx) {
+    /* el slot ya fue copiado al destino: NO liberar sus recursos aqui. */
+    for (int i = idx; i < src->tab_count - 1; i++) src->tabs[i] = src->tabs[i + 1];
+    memset(&src->tabs[src->tab_count - 1], 0, sizeof(EditorTab));
+    src->tab_count--;
+    if (src->active_tab > idx) src->active_tab--;
+    for (int g = 0; g < MAX_GROUPS; g++)
+        if (src->group_active_tab[g] > idx) src->group_active_tab[g]--;
+}
+
+/* Mueve la pestana de indice @p src_idx de @p src al final de tabs[] de @p dst,
+ * asignandole el grupo @p dst_group.  Devuelve el indice destino, o -1 si @p dst
+ * no tiene sitio (MAX_TABS).  Copia superficial + limpieza del slot origen. */
+static int editor_move_tab_between(Editor *src, int src_idx, Editor *dst,
+                                   int dst_group) {
+    if (dst->tab_count >= MAX_TABS) return -1;
+    int dst_idx = dst->tab_count++;
+    dst->tabs[dst_idx] = src->tabs[src_idx]; /* copia superficial del struct */
+    dst->tabs[dst_idx].group = dst_group;
+    editor_src_remove_tab(src, src_idx);
+    return dst_idx;
+}
+
+/* Deja @p src sin pestanas en el estado de bienvenida (una sola hoja vacia). */
+static void editor_reset_empty(Editor *src) {
+    src->buf = NULL;
+    src->lex = NULL;
+    src->undo = NULL;
+    src->hl = NULL;
+    src->active_tab = 0;
+    src->filepath[0] = '\0';
+    src->modified = 0;
+    dock_init_single(&src->dock, 0);
+    src->active_group = 0;
+    src->pane_active = 0;
+    for (int g = 0; g < MAX_GROUPS; g++) src->group_active_tab[g] = 0;
+}
+
+/* Reenfoca @p src tras perder pestanas: si quedan, sobre una pestana viva; si no,
+ * deja el estado de bienvenida. */
+static void editor_src_refocus_after_loss(Editor *src) {
+    if (src->tab_count == 0) {
+        editor_reset_empty(src);
+        return;
+    }
+    int fg = src->dock.nodes[src->dock.focused_leaf].group_id;
+    int idx = editor_group_valid_active_tab(src, fg);
+    if (idx < 0) { /* el grupo con foco quedo vacio: tomar cualquier pestana */
+        idx = 0;
+        fg = src->tabs[0].group;
+    }
+    src->active_group = fg;
+    src->dock.focused_leaf = dock_leaf_by_group(&src->dock, fg);
+    if (src->dock.focused_leaf == DOCK_NONE) src->dock.focused_leaf = 0;
+    src->active_tab = idx;
+    src->group_active_tab[fg] = idx;
+    if (src->dock.leaf_count <= 1) src->pane_active = 0;
+    editor_tab_load_state(src);
+    editor_update_lexer(src, 0);
+    editor_sync_cursor(src);
+}
+
+void editor_transfer_group(Editor *src, int src_group, Editor *dst) {
+    if (!src || !dst) return;
+    if (editor_group_tab_count(src, src_group) == 0) return;
+
+    int dst_group = editor_dst_focus_group(dst);
+    if (dst_group < 0) return;
+
+    if (src->tab_count > 0) editor_tab_save_state(src);
+    if (dst->tab_count > 0) editor_tab_save_state(dst);
+
+    /* indice global en src de la pestana activa del grupo origen (para hacerla
+     * activa en el destino tras moverla). */
+    int src_active = editor_group_valid_active_tab(src, src_group);
+    int dst_active = -1;
+
+    /* mover todas las pestanas del grupo origen: cada move compacta src, asi que
+     * se re-escanea desde el principio. */
+    for (;;) {
+        int si = editor_group_first_tab(src, src_group);
+        if (si < 0) break;
+        int was_active = (si == src_active);
+        if (src_active > si) src_active--; /* el move desplazara los > si */
+        int di = editor_move_tab_between(src, si, dst, dst_group);
+        if (di < 0) break; /* destino lleno: dejar el resto en origen */
+        if (was_active) dst_active = di;
+    }
+
+    if (dst_active >= 0) dst->group_active_tab[dst_group] = dst_active;
+
+    /* si la hoja origen quedo vacia y src estaba dividido, colapsarla. */
+    if (src->dock.leaf_count > 1 &&
+        editor_group_tab_count(src, src_group) == 0 &&
+        dock_leaf_by_group(&src->dock, src_group) != DOCK_NONE) {
+        editor_unsplit(src, src_group);
+    }
+    editor_src_refocus_after_loss(src);
+    src->needs_redraw = 1;
+
+    editor_focus_dst_group(dst, dst_group);
+}
+
+void editor_merge_all(Editor *src, Editor *dst) {
+    if (!src || !dst || src->tab_count == 0) return;
+
+    int dst_group = editor_dst_focus_group(dst);
+    if (dst_group < 0) return;
+
+    editor_tab_save_state(src);
+    if (dst->tab_count > 0) editor_tab_save_state(dst);
+
+    /* pestana globalmente activa de src -> activa en el destino tras moverla */
+    int src_active = (src->active_tab >= 0 && src->active_tab < src->tab_count)
+                         ? src->active_tab
+                         : 0;
+    int dst_active = -1;
+
+    /* mover TODAS las pestanas (aplanando sus grupos) a la hoja destino */
+    while (src->tab_count > 0) {
+        int was_active = (0 == src_active);
+        if (src_active > 0) src_active--;
+        int di = editor_move_tab_between(src, 0, dst, dst_group);
+        if (di < 0) break; /* destino lleno */
+        if (was_active) dst_active = di;
+    }
+
+    if (dst_active >= 0) dst->group_active_tab[dst_group] = dst_active;
+
+    if (src->tab_count == 0) editor_reset_empty(src);
+    src->needs_redraw = 1;
+    editor_focus_dst_group(dst, dst_group);
+}
