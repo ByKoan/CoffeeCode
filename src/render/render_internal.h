@@ -108,6 +108,16 @@ void render_enc_popup(Editor *e);
 void render_ext_views(Editor *e);
 /* Dibuja el panel de extensiones del IDE (lista de cargadas + acciones). */
 void render_ext_panel(Editor *e);
+/* Pinta los fondos de linea decorados por extensiones (set_line_background) del
+ * buffer en vivo (e->buf), como banda completa del panel desde render_content_
+ * left hasta @p content_right.  No pinta nada si no hay host/buffer/decoraciones. */
+void render_ext_line_backgrounds(Editor *e, int content_right, int text_top,
+                                 int visible_lines, int total_lines);
+/* Pinta el marcador de gutter decorado por extensiones (set_gutter_marker) de la
+ * linea visible @p li, en la franja del gutter [@p gutter_x, ancho GUTTER_WIDTH)
+ * a la altura @p y.  Devuelve 1 si pinto un marcador (el numero de linea no se
+ * dibuja sobre el), 0 si la linea no tiene marcador. */
+int render_ext_gutter_marker(Editor *e, int li, int gutter_x, int y);
 /* Geometria de la X (px) donde el panel de extensiones empieza, para que el
  * resto del cromo no lo pise. 0 si el panel esta cerrado. */
 int render_ext_panel_width(Editor *e);

@@ -875,10 +875,15 @@ static void render_gutter(Editor *e, int left_offset, int text_top,
     for (int vi = 0; vi < visible_lines; vi++) {
         int li = e->scroll_line + vi;
         if (li >= total_lines) break;
+        int y = text_top + vi * e->line_height;
+        /* Marcador de gutter de una extension (set_gutter_marker): si esta linea
+         * lo tiene, sustituye al numero de linea (queda mas limpio, estilo icono
+         * de error del LSP).  Sin marcador (caso por defecto) se dibuja el numero
+         * como siempre: cero regresion. */
+        if (render_ext_gutter_marker(e, li, left_offset, y)) continue;
         char num[16];
         /* 1-based, alineado a la derecha */
         snprintf(num, sizeof(num), "%4d", li + 1);
-        int y = text_top + vi * e->line_height;
         draw_text_c(e, num, left_offset + GUTTER_NUM_PAD,
                     y + (e->line_height - e->font_size) / 2,
                     e->theme.txt_gutter_num);
@@ -951,6 +956,11 @@ static void render_content_layers(Editor *e, int left_offset, int content_right,
                       content_right - band_left, e->line_height);
         }
     }
+    /* fondos de linea decorados por extensiones (set_line_background): se pintan
+     * ANTES de la seleccion y el texto, como banda completa del panel.  Sin
+     * decoraciones (caso por defecto) este bucle no pinta nada. */
+    render_ext_line_backgrounds(e, content_right, text_top, visible_lines,
+                                total_lines);
     render_selection(e, left_offset, text_top, visible_lines);
     render_text_area(e, left_offset, text_top, visible_lines, total_lines);
     render_gutter(e, left_offset, text_top, text_height, visible_lines,

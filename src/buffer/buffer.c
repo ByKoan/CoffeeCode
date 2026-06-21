@@ -645,6 +645,39 @@ size_t buf_line_end(const Buffer *b, size_t pos) {
     return pos;
 }
 
+/**
+ * @brief Convierte (linea, columna) a posicion logica, con la columna contada en
+ *        CARACTERES (codepoints UTF-8), base 0.
+ *
+ * A diferencia de las columnas de display del editor (donde un CJK/emoji ocupa
+ * 2 celdas), aqui @p col es un indice de caracter: avanza un caracter por
+ * unidad, decodificando UTF-8 para saltar los bytes de cada uno.  Es la
+ * convencion que usan los servidores LSP (line/character 0-based), de modo que
+ * goto-to-definition aterrice en el caracter exacto.  Recorta @p line a
+ * [0, nro_lineas-1] y @p col al final de la linea (si pide mas alla, para en el
+ * '\n').
+ *
+ * @param b    Buffer.
+ * @param line Linea destino (base 0; se recorta).
+ * @param col  Columna en caracteres (base 0; se recorta al fin de linea).
+ * @return Offset logico correspondiente dentro del buffer.
+ */
+size_t buf_offset_from_line_col_chars(const Buffer *b, int line, int col) {
+    size_t line_start = buf_line_offset(b, line); /* O(1), ya recorta line */
+    size_t line_end = buf_line_end(b, line_start);
+    if (col < 0) col = 0;
+    size_t p = line_start;
+    int c = 0;
+    /* avanzar un caracter (no una celda) por cada unidad de columna */
+    while (p < line_end && c < col) {
+        uint32_t cp;
+        int n = buf_decode_at(b, p, line_end, &cp);
+        p += (size_t)n;
+        c++;
+    }
+    return p;
+}
+
 /* -- carga / guarda ------------------------------------------------------- */
 
 /**

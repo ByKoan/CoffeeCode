@@ -65,6 +65,13 @@ typedef struct CoffeeHostBackend {
     void (*save_file)(void *ud);
     void (*new_tab)(void *ud);
 
+    /* -- Proyecto / navegacion (opcionales) -- */
+    /** Ruta absoluta de la carpeta raiz abierta en el explorador, o NULL. */
+    const char *(*workspace_root)(void *ud);
+    /** Abre @p path (o cambia a su pestana) y mueve el cursor a (@p line,
+     *  @p col) 0-based (col en caracteres), haciendo scroll.  Devuelve 1/0. */
+    int (*goto_location)(void *ud, const char *path, int line, int col);
+
     /* -- Repintado y decoraciones (opcionales) -- */
     void (*request_repaint)(void *ud);
 } CoffeeHostBackend;
@@ -212,6 +219,46 @@ size_t ext_host_view_count(CoffeeHost *host);
  * @return 1 si @p idx es valido y la vista esta viva, 0 si no.
  */
 int ext_host_view_at(CoffeeHost *host, size_t idx, CoffeeHostView *out);
+
+/* ===========================================================================
+ *  Decoraciones del editor (por-BUFFER): el render del IDE las consulta.
+ * ---------------------------------------------------------------------------
+ *  Las extensiones ponen decoraciones (fondo de linea, marcador de gutter) via
+ *  CoffeeApi::set_line_background / set_gutter_marker sobre el BUFFER ACTIVO.
+ *  El host las guarda asociadas a ese Buffer*, de modo que cada archivo/pestana
+ *  tiene las SUYAS y al cambiar de pestana se muestran las del archivo activo.
+ *  El render consulta estos accesores pasando su buffer "en vivo" (e->buf).
+ * =========================================================================== */
+
+/**
+ * @brief Color de fondo decorado para la linea @p line del buffer @p buffer.
+ *
+ * @param[out] out_color Color de fondo (4 bytes RGBA) si hay decoracion.
+ * @return 1 si la linea tiene fondo decorado (rellena @p out_color), 0 si no.
+ */
+int ext_host_line_background(CoffeeHost *host, const Buffer *buffer, size_t line,
+                             CoffeeColor *out_color);
+
+/**
+ * @brief Marcador de gutter de la linea @p line del buffer @p buffer.
+ *
+ * @param[out] out_glyph Puntero al glifo (cadena UTF-8 propiedad del host,
+ *                       valida hasta clear/unload).  Puede ser NULL.
+ * @param[out] out_color Color del marcador.  Puede ser NULL.
+ * @return 1 si la linea tiene marcador (rellena las salidas no NULL), 0 si no.
+ */
+int ext_host_gutter_marker(CoffeeHost *host, const Buffer *buffer, size_t line,
+                           const char **out_glyph, CoffeeColor *out_color);
+
+/**
+ * @brief Descarta TODAS las decoraciones asociadas a @p buffer.
+ *
+ * El editor la llama cuando un Buffer deja de ser valido (al cerrar una
+ * pestana, antes de liberar/reusar su struct) para que ninguna decoracion
+ * quede colgando de una direccion reciclada.  Sin coste si el buffer no tenia
+ * decoraciones.  No-op si @p host o @p buffer son NULL.
+ */
+void ext_host_drop_buffer(CoffeeHost *host, const Buffer *buffer);
 
 #ifdef __cplusplus
 } /* extern "C" */

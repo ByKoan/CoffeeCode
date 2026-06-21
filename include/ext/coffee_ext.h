@@ -283,6 +283,24 @@ typedef struct CoffeeApi {
     /** Registra un callback periodico llamado UNA vez por frame (hilo
      *  principal), para trabajo periodico de la extension.  Soporta varios. */
     void (*register_tick)(CoffeeHost *h, CoffeeTickFn cb, void *userdata);
+
+    /* ---- Proyecto / navegacion (anyadidos AL FINAL, sigue ABI v3) ----
+     * NOTA ABI: punteros anyadidos al final del struct; las extensiones
+     * compiladas contra el layout anterior siguen siendo compatibles (no ven
+     * estas funciones, pero cargan). */
+
+    /** Ruta absoluta de la carpeta raiz del proyecto abierta en el explorador
+     *  (la del arbol de archivos / Ctrl+K), o NULL si no hay carpeta abierta
+     *  (en ese caso la extension cae al directorio del archivo activo).  El
+     *  puntero es estable: valido hasta el siguiente cambio de carpeta. */
+    const char *(*workspace_root)(CoffeeHost *h);
+
+    /** Abre @p path (o cambia a su pestana si ya esta abierto) y mueve el cursor
+     *  a (@p line, @p col) 0-based, donde @p col cuenta CARACTERES (codepoints,
+     *  convencion LSP), haciendo scroll para que quede visible.  Recorta valores
+     *  fuera de rango.  Devuelve 1 si el archivo se abrio, 0 si no.  Lo usa, por
+     *  ejemplo, go-to-definition de un servidor LSP. */
+    int (*goto_location)(CoffeeHost *h, const char *path, int line, int col);
 } CoffeeApi;
 
 /**

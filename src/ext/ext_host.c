@@ -158,6 +158,28 @@ typedef struct {
 } HostView;
 
 /**
+ * @brief Una decoracion de linea puesta por una extension.
+ *
+ * Se asocia al @c Buffer ACTIVO en el momento de ponerla, de modo que cada
+ * archivo/pestana lleva las suyas (al cambiar de pestana el render consulta el
+ * buffer en vivo y muestra las de ese archivo).  @c kind distingue fondo de
+ * linea de marcador de gutter.  Un @c bg con los cuatro componentes a 0
+ * (alfa incluido) significa "quitar" (set_line_background con bg.a==0). */
+typedef enum {
+    HOST_DECO_LINE_BG = 0, /**< fondo de la linea */
+    HOST_DECO_GUTTER       /**< marcador en el gutter (glifo + color) */
+} HostDecoKind;
+
+typedef struct {
+    const Buffer *buffer; /**< buffer al que pertenece (no se libera aqui) */
+    size_t line;          /**< linea decorada (0-based) */
+    HostDecoKind kind;    /**< tipo de decoracion */
+    CoffeeColor color;    /**< color (fondo o del marcador) */
+    char *glyph;          /**< glifo del gutter (NULL para fondo de linea) */
+    int owner;            /**< extension dueña (registro por-ext) */
+} HostDeco;
+
+/**
  * @brief Implementacion concreta del handle opaco @c CoffeeHost.
  *
  * Las extensiones reciben un @c CoffeeHost* y lo pasan de vuelta a cada funcion
@@ -180,6 +202,8 @@ struct CoffeeHost {
     size_t ext_count, ext_cap;
     HostView *views;
     size_t view_count, view_cap;
+    HostDeco *decos; /**< decoraciones de linea por-buffer (fondo + gutter) */
+    size_t deco_count, deco_cap;
 
     /** Indice de la extension que se esta registrando ahora mismo (para
      *  atribuir lo que registre).  -1 cuando no hay registro en curso. */
@@ -356,6 +380,23 @@ static const char *api_current_path(CoffeeHost *h) {
     return NULL;
 }
 
+static const char *api_workspace_root(CoffeeHost *h) {
+    if (!h) return NULL;
+    if (h->backend.workspace_root) return h->backend.workspace_root(h->backend.ud);
+    return NULL; /* sin backend (headless): no hay carpeta abierta */
+}
+
+static int api_goto_location(CoffeeHost *h, const char *path, int line,
+                             int col) {
+    if (!h || !path || !path[0]) return 0;
+    if (h->backend.goto_location)
+        return h->backend.goto_location(h->backend.ud, path, line, col);
+    /* sin backend (headless): no hay editor donde saltar */
+    fprintf(stderr, "[ext-host] goto_location('%s', %d, %d): sin backend\n",
+            path, line, col);
+    return 0;
+}
+
 /* ---- Acciones del IDE (delegadas; stub si no hay hook) ---- */
 
 static void api_open_file(CoffeeHost *h, const char *path) {
@@ -473,19 +514,80 @@ static void api_remove_view(CoffeeHost *h, const char *id) {
 static void api_request_repaint(CoffeeHost *h) {
     if (h && h->backend.request_repaint) h->backend.request_repaint(h->backend.ud);
 }
+/* Busca la decoracion de (buffer, line, kind) del buffer ACTIVO; -1 si no hay.
+ * Las decoraciones son por-buffer: usamos h->backend.buffer como buffer activo
+ * (el que el editor fija al abrir/cambiar de pestana). */
+static int host_find_deco(CoffeeHost *h, const Buffer *buf, size_t line,
+                          HostDecoKind kind) {
+    for (size_t i = 0; i < h->deco_count; ++i)
+        if (h->decos[i].buffer == buf && h->decos[i].line == line &&
+            h->decos[i].kind == kind)
+            return (int)i;
+    return -1;
+}
+
+/* Elimina la decoracion del indice @p i (swap-remove, libera su glifo). */
+static void host_deco_remove_at(CoffeeHost *h, size_t i) {
+    free(h->decos[i].glyph);
+    h->decos[i] = h->decos[--h->deco_count]; /* swap-remove */
+}
+
 static int api_set_line_background(CoffeeHost *h, size_t line, CoffeeColor bg) {
-    (void)h;
-    (void)line;
-    (void)bg;
-    return -1; /* no implementado aun */
+    if (!h) return -1;
+    const Buffer *buf = h->backend.buffer; /* buffer activo */
+    if (!buf) return -1;                   /* sin buffer activo: nada que decorar */
+    int idx = host_find_deco(h, buf, line, HOST_DECO_LINE_BG);
+    /* alfa 0 = quitar la decoracion de fondo de esa linea */
+    if (bg.a == 0) {
+        if (idx >= 0) host_deco_remove_at(h, (size_t)idx);
+        return 0;
+    }
+    if (idx >= 0) {        /* actualizar la existente */
+        h->decos[idx].color = bg;
+        h->decos[idx].owner = h->registering;
+        return 0;
+    }
+    if (!host_grow((void **)&h->decos, &h->deco_cap, h->deco_count,
+                   sizeof(HostDeco)))
+        return -3;
+    HostDeco *d = &h->decos[h->deco_count++];
+    d->buffer = buf;
+    d->line = line;
+    d->kind = HOST_DECO_LINE_BG;
+    d->color = bg;
+    d->glyph = NULL;
+    d->owner = h->registering;
+    return 0;
 }
 static int api_set_gutter_marker(CoffeeHost *h, size_t line, const char *glyph,
                                  CoffeeColor color) {
-    (void)h;
-    (void)line;
-    (void)glyph;
-    (void)color;
-    return -1;
+    if (!h) return -1;
+    const Buffer *buf = h->backend.buffer;
+    if (!buf) return -1;
+    int idx = host_find_deco(h, buf, line, HOST_DECO_GUTTER);
+    /* glyph NULL/vacio = quitar el marcador de esa linea */
+    if (!glyph || !glyph[0]) {
+        if (idx >= 0) host_deco_remove_at(h, (size_t)idx);
+        return 0;
+    }
+    if (idx >= 0) { /* actualizar el existente */
+        free(h->decos[idx].glyph);
+        h->decos[idx].glyph = host_strdup(glyph);
+        h->decos[idx].color = color;
+        h->decos[idx].owner = h->registering;
+        return 0;
+    }
+    if (!host_grow((void **)&h->decos, &h->deco_cap, h->deco_count,
+                   sizeof(HostDeco)))
+        return -3;
+    HostDeco *d = &h->decos[h->deco_count++];
+    d->buffer = buf;
+    d->line = line;
+    d->kind = HOST_DECO_GUTTER;
+    d->color = color;
+    d->glyph = host_strdup(glyph);
+    d->owner = h->registering;
+    return 0;
 }
 static int api_set_inline_hint(CoffeeHost *h, size_t line, const char *text,
                                CoffeeColor color) {
@@ -493,9 +595,24 @@ static int api_set_inline_hint(CoffeeHost *h, size_t line, const char *text,
     (void)line;
     (void)text;
     (void)color;
-    return -1;
+    return -1; /* hints inline: fase posterior */
 }
-static void api_clear_decorations(CoffeeHost *h) { (void)h; }
+/* clear_decorations: quita TODAS las decoraciones del buffer activo puestas por
+ * la extension en curso.  Si no hay extension en curso (registering<0), limpia
+ * las del buffer activo sin filtrar por dueña (uso desde el propio IDE). */
+static void api_clear_decorations(CoffeeHost *h) {
+    if (!h) return;
+    const Buffer *buf = h->backend.buffer;
+    if (!buf) return;
+    for (size_t i = 0; i < h->deco_count;) {
+        int same_owner = (h->registering < 0) ||
+                         (h->decos[i].owner == h->registering);
+        if (h->decos[i].buffer == buf && same_owner)
+            host_deco_remove_at(h, i); /* swap-remove: NO incrementar i */
+        else
+            ++i;
+    }
+}
 
 /* ---- Inter-extension: servicios y dependencias ---- */
 
@@ -682,6 +799,9 @@ static void host_fill_api(CoffeeHost *h) {
     a->proc_on_exit = api_proc_on_exit;
     a->proc_kill = api_proc_kill;
     a->register_tick = api_register_tick;
+
+    a->workspace_root = api_workspace_root;
+    a->goto_location = api_goto_location;
 }
 
 /* ===========================================================================
@@ -747,6 +867,13 @@ static void host_revoke_owner(CoffeeHost *h, int owner) {
             ++i;
         }
     }
+    /* decoraciones de linea/gutter */
+    for (size_t i = 0; i < h->deco_count;) {
+        if (h->decos[i].owner == owner)
+            host_deco_remove_at(h, i); /* libera glifo + swap-remove */
+        else
+            ++i;
+    }
 }
 
 void ext_host_destroy(CoffeeHost *host) {
@@ -777,10 +904,12 @@ void ext_host_destroy(CoffeeHost *host) {
         free(host->exts[i].id);
         free(host->exts[i].dir);
     }
+    for (size_t i = 0; i < host->deco_count; ++i) free(host->decos[i].glyph);
     free(host->cmds);
     free(host->subs);
     free(host->svcs);
     free(host->views);
+    free(host->decos);
     free(host->cfgs);
     free(host->exts);
     free(host->ext_dir_cache);
@@ -853,6 +982,35 @@ int ext_host_view_at(CoffeeHost *host, size_t idx, CoffeeHostView *out) {
     out->input = v->input;
     out->userdata = v->userdata;
     return 1;
+}
+
+int ext_host_line_background(CoffeeHost *host, const Buffer *buffer, size_t line,
+                             CoffeeColor *out_color) {
+    if (!host || !buffer) return 0;
+    int idx = host_find_deco(host, buffer, line, HOST_DECO_LINE_BG);
+    if (idx < 0) return 0;
+    if (out_color) *out_color = host->decos[idx].color;
+    return 1;
+}
+
+int ext_host_gutter_marker(CoffeeHost *host, const Buffer *buffer, size_t line,
+                           const char **out_glyph, CoffeeColor *out_color) {
+    if (!host || !buffer) return 0;
+    int idx = host_find_deco(host, buffer, line, HOST_DECO_GUTTER);
+    if (idx < 0) return 0;
+    if (out_glyph) *out_glyph = host->decos[idx].glyph;
+    if (out_color) *out_color = host->decos[idx].color;
+    return 1;
+}
+
+void ext_host_drop_buffer(CoffeeHost *host, const Buffer *buffer) {
+    if (!host || !buffer) return;
+    for (size_t i = 0; i < host->deco_count;) {
+        if (host->decos[i].buffer == buffer)
+            host_deco_remove_at(host, i); /* swap-remove: NO incrementar i */
+        else
+            ++i;
+    }
 }
 
 /* ===========================================================================

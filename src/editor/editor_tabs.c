@@ -357,6 +357,19 @@ void editor_tab_close(Editor *e) {
     int closed = e->active_tab;          /* índice global que se elimina */
     int closed_group = e->tabs[closed].group; /* grupo de la pestaña cerrada */
 
+    /* Las decoraciones del host se asocian por direccion de Buffer.  Al cerrar
+     * se libera el buffer cerrado y se COMPACTA el array (las pestañas
+     * posteriores se mueven a slots de menor indice = otras direcciones).  Para
+     * que ninguna decoracion quede colgando de una direccion reciclada o
+     * asociada al archivo equivocado, descartamos las de todos los buffers del
+     * rango afectado por la compactacion; la extension (p.ej. el LSP) las
+     * re-emite al recibir el siguiente FILE_OPEN. */
+    if (e->ext_host) {
+        CoffeeHost *host = (CoffeeHost *)e->ext_host;
+        for (int i = closed; i < e->tab_count; i++)
+            ext_host_drop_buffer(host, &e->tabs[i].buf);
+    }
+
     tab_free_resources(&e->tabs[closed]);
 
     /* desplazar las pestañas restantes y limpiar el hueco final */

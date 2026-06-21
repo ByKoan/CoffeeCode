@@ -341,6 +341,36 @@ static void ext_hook_request_repaint(void *ud) {
     if (e) e->needs_redraw = 1;
 }
 
+/** workspace_root: ruta de la carpeta abierta en el explorador, o NULL.
+ *  Devuelve el puntero ESTABLE al buffer interno del FileTree (valido hasta el
+ *  siguiente ftree_load), no una copia temporal. */
+static const char *ext_hook_workspace_root(void *ud) {
+    Editor *e = (Editor *)ud;
+    if (!e) return NULL;
+    return e->ftree.root_path[0] ? e->ftree.root_path : NULL;
+}
+
+/** goto_location: abre @p path (o cambia a su pestana) y mueve el cursor a
+ *  (@p line, @p col) 0-based (col en CARACTERES), haciendo scroll para que
+ *  quede visible.  Devuelve 1 si se abrio, 0 si no. */
+static int ext_hook_goto_location(void *ud, const char *path, int line,
+                                  int col) {
+    Editor *e = (Editor *)ud;
+    if (!e || !path || !path[0]) return 0;
+    /* editor_tab_open reusa la pestana si el archivo ya esta abierto, o abre una
+     * nueva; tras volver, e->buf y e->active_tab reflejan ese archivo. */
+    editor_tab_open(e, path);
+    if (!e->buf) return 0; /* el archivo no se pudo abrir */
+    /* (linea, columna-en-caracteres) -> offset logico (convencion LSP). */
+    size_t pos = buf_offset_from_line_col_chars(e->buf, line, col);
+    buf_move_to(e->buf, pos);
+    editor_sync_cursor(e);     /* refrescar cursor_line/col desde la pos */
+    editor_ensure_visible(e);  /* desplazar el scroll para que se vea */
+    editor_cursor_blink_reset(e);
+    e->needs_redraw = 1;
+    return 1;
+}
+
 /**
  * @brief Inicializa SDL, crea la ventana/renderer, carga la fuente y prepara el
  *        editor; opcionalmente abre un archivo inicial.
@@ -548,6 +578,8 @@ int editor_init(Editor *e, const char *filepath) {
         backend.channel_clear = ext_hook_channel_clear;
         backend.log_line = ext_hook_log_line;
         backend.request_repaint = ext_hook_request_repaint;
+        backend.workspace_root = ext_hook_workspace_root;
+        backend.goto_location = ext_hook_goto_location;
         CoffeeHost *host = ext_host_create(&backend);
         e->ext_host = host;
         if (host) {

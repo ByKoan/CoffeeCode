@@ -34,6 +34,7 @@
 #define EXT_BTN_H 18        /* alto de esos botones                  */
 #define EXT_PAD 8           /* margen interior                       */
 #define EXT_INSTALL_H 26    /* alto del boton "Instalar"             */
+#define EXT_GUTTER_PAD 4    /* sangria del glifo en el gutter (== GUTTER_NUM_PAD) */
 
 /* ===========================================================================
  *  CoffeePainter + vtable CoffeePaint (las primitivas que ven las extensiones)
@@ -143,6 +144,47 @@ void render_ext_views(Editor *e) {
      * se apilan al pie del panel de extensiones.  Esta funcion queda como punto
      * de extension futuro (overlays sobre el editor, segmentos de statusbar). */
     (void)e;
+}
+
+/* ===========================================================================
+ *  Decoraciones de linea (set_line_background / set_gutter_marker)
+ * ---------------------------------------------------------------------------
+ *  Las decoraciones son por-BUFFER: se consultan al host con el buffer en vivo
+ *  (e->buf), asi cada archivo muestra las suyas.  Sin host/buffer/decoraciones
+ *  estas funciones no pintan nada (cero regresion para el editor sin extensiones
+ *  o sin diagnosticos).
+ * =========================================================================== */
+
+void render_ext_line_backgrounds(Editor *e, int content_right, int text_top,
+                                 int visible_lines, int total_lines) {
+    if (!e->ext_host || !e->buf) return;
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    int band_left = render_content_left(e);
+    for (int vi = 0; vi < visible_lines; vi++) {
+        int li = e->scroll_line + vi; /* linea logica de esta fila */
+        if (li >= total_lines) break;
+        CoffeeColor bg;
+        if (!ext_host_line_background(host, e->buf, (size_t)li, &bg)) continue;
+        set_color(e->renderer, bg.r, bg.g, bg.b, bg.a);
+        fill_rect(e->renderer, band_left, text_top + vi * e->line_height,
+                  content_right - band_left, e->line_height);
+    }
+}
+
+int render_ext_gutter_marker(Editor *e, int li, int gutter_x, int y) {
+    if (!e->ext_host || !e->buf) return 0;
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    const char *glyph = NULL;
+    CoffeeColor color;
+    if (!ext_host_gutter_marker(host, e->buf, (size_t)li, &glyph, &color))
+        return 0;
+    if (!glyph || !glyph[0]) return 0;
+    /* dibujar el glifo a la izquierda del gutter, alineado verticalmente como
+     * el numero de linea; el color es el que fijo la extension. */
+    draw_text(e, glyph, gutter_x + EXT_GUTTER_PAD,
+              y + (e->line_height - e->font_size) / 2, color.r, color.g,
+              color.b);
+    return 1;
 }
 
 /* ===========================================================================

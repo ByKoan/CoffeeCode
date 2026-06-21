@@ -207,6 +207,98 @@ static void test_introspeccion_install_unload_reload(void) {
     buf_free(&b);
 }
 
+/**
+ * @brief Decoraciones por-buffer: set/query/clear/drop via el CoffeeApi.
+ *
+ * Sin DLL: se invocan las funciones del CoffeeApi directamente (igual que haria
+ * una extension) sobre el buffer activo del host, y se consultan con los
+ * accesores que usa el render.  Verifica que son por-buffer, que set con alfa 0
+ * / glifo vacio quita, que clear_decorations limpia y que drop_buffer purga.
+ */
+static void test_decoraciones(void) {
+    Buffer b1, b2;
+    buf_init(&b1);
+    buf_init(&b2);
+    CoffeeHostBackend backend;
+    memset(&backend, 0, sizeof backend);
+    backend.buffer = &b1; /* b1 es el buffer activo */
+    CoffeeHost *host = ext_host_create(&backend);
+    EXPECT_NOT_NULL(host);
+    const CoffeeApi *api = ext_host_api(host);
+    EXPECT_NOT_NULL(api);
+
+    /* sin decoraciones: las consultas devuelven 0 */
+    CoffeeColor got;
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 3, &got), 0);
+    EXPECT_EQ_INT(ext_host_gutter_marker(host, &b1, 3, NULL, NULL), 0);
+
+    /* poner fondo de linea en la linea 3 del buffer activo (b1) */
+    CoffeeColor red = {200, 40, 40, 128};
+    EXPECT_EQ_INT(api->set_line_background(host, 3, red), 0);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 3, &got), 1);
+    EXPECT_EQ_INT(got.r, 200);
+    EXPECT_EQ_INT(got.a, 128);
+    /* es POR-BUFFER: b2 no tiene esa decoracion */
+    EXPECT_EQ_INT(ext_host_line_background(host, &b2, 3, &got), 0);
+
+    /* marcador de gutter en la linea 5 */
+    CoffeeColor yel = {220, 200, 0, 255};
+    EXPECT_EQ_INT(api->set_gutter_marker(host, 5, "E", yel), 0);
+    const char *glyph = NULL;
+    CoffeeColor gc;
+    EXPECT_EQ_INT(ext_host_gutter_marker(host, &b1, 5, &glyph, &gc), 1);
+    EXPECT_NOT_NULL(glyph);
+    EXPECT_EQ_STR(glyph, "E");
+    EXPECT_EQ_INT(gc.g, 200);
+
+    /* set con alfa 0 quita el fondo de esa linea */
+    CoffeeColor clear = {0, 0, 0, 0};
+    EXPECT_EQ_INT(api->set_line_background(host, 3, clear), 0);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 3, &got), 0);
+
+    /* glifo vacio quita el marcador */
+    EXPECT_EQ_INT(api->set_gutter_marker(host, 5, "", yel), 0);
+    EXPECT_EQ_INT(ext_host_gutter_marker(host, &b1, 5, NULL, NULL), 0);
+
+    /* poner varias y limpiarlas todas con clear_decorations */
+    api->set_line_background(host, 1, red);
+    api->set_gutter_marker(host, 2, "W", yel);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 1, &got), 1);
+    EXPECT_EQ_INT(ext_host_gutter_marker(host, &b1, 2, NULL, NULL), 1);
+    api->clear_decorations(host);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 1, &got), 0);
+    EXPECT_EQ_INT(ext_host_gutter_marker(host, &b1, 2, NULL, NULL), 0);
+
+    /* drop_buffer purga las del buffer (al cerrar su pestana) */
+    api->set_line_background(host, 7, red);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 7, &got), 1);
+    ext_host_drop_buffer(host, &b1);
+    EXPECT_EQ_INT(ext_host_line_background(host, &b1, 7, &got), 0);
+
+    ext_host_destroy(host);
+    buf_free(&b1);
+    buf_free(&b2);
+}
+
+/**
+ * @brief workspace_root y goto_location sin backend devuelven NULL/0 (headless).
+ */
+static void test_workspace_y_goto_sin_backend(void) {
+    Buffer b;
+    buf_init(&b);
+    CoffeeHostBackend backend;
+    memset(&backend, 0, sizeof backend);
+    backend.buffer = &b; /* sin hooks de workspace_root/goto_location */
+    CoffeeHost *host = ext_host_create(&backend);
+    const CoffeeApi *api = ext_host_api(host);
+    EXPECT_NOT_NULL(api);
+    /* sin backend: workspace_root = NULL, goto_location = 0 (no crashea) */
+    EXPECT_NULL(api->workspace_root(host));
+    EXPECT_EQ_INT(api->goto_location(host, "x.txt", 1, 2), 0);
+    ext_host_destroy(host);
+    buf_free(&b);
+}
+
 int main(void) {
     tt_suite("ext_host");
     tt_run("load DLL -> register -> command -> buffer + unload revierte",
@@ -216,5 +308,8 @@ int main(void) {
     tt_run("reload deja la extension activa y operativa", test_recarga);
     tt_run("introspeccion + install/unload/reload",
            test_introspeccion_install_unload_reload);
+    tt_run("decoraciones por-buffer (set/query/clear/drop)", test_decoraciones);
+    tt_run("workspace_root/goto_location sin backend (headless)",
+           test_workspace_y_goto_sin_backend);
     return tt_summary();
 }
