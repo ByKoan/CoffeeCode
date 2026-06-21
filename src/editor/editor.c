@@ -507,6 +507,7 @@ int editor_init(Editor *e, const char *filepath) {
     e->float_count = 0;    /* sin paneles flotantes al arrancar  */
     e->float_drag = -1;    /* sin flotante en arrastre            */
     e->float_resizing = 0;
+    e->float_resize_edges = 0;
     e->buf = NULL;
     e->lex = NULL;
     e->undo = NULL;

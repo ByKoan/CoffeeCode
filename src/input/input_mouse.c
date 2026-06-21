@@ -167,7 +167,22 @@ static int handle_float_click(Editor *e, int mx, int my) {
     int fi = float_at_point(e, mx, my);
     if (fi < 0) return 0; /* el clic no cae sobre ningun flotante */
 
-    FloatHit hit = float_hit_test(&e->floats[fi], mx, my);
+    FloatPanel *fp0 = &e->floats[fi]; /* valido hasta editor_float_focus */
+
+    /* Borde redimensionable (cualquier lado/esquina, como una ventana normal),
+     * salvo sobre los botones de la barra de titulo, que tienen prioridad. */
+    int redges = float_resize_edges(fp0, mx, my);
+    if (redges && !rect_has(float_close_rect(fp0), mx, my) &&
+        !rect_has(float_dock_rect(fp0), mx, my)) {
+        editor_float_focus(e, fi);
+        fi = e->float_count - 1;
+        e->float_drag = fi;
+        e->float_resizing = 1;
+        e->float_resize_edges = redges;
+        return 1;
+    }
+
+    FloatHit hit = float_hit_test(fp0, mx, my);
 
     /* cualquier interaccion trae el flotante al frente y enfoca su grupo.  Tras
      * editor_float_focus el flotante queda como el ultimo del array. */
@@ -192,6 +207,7 @@ static int handle_float_click(Editor *e, int mx, int my) {
     case FLOAT_HIT_RESIZE:
         e->float_drag = fi;
         e->float_resizing = 1;
+        e->float_resize_edges = FLOAT_EDGE_RIGHT | FLOAT_EDGE_BOTTOM;
         return 1;
     case FLOAT_HIT_TABBAR: {
         /* la geometria de las pestanas del flotante la registro render_tabbar_group
@@ -281,6 +297,37 @@ static void set_divider_cursor(int which, int dock_orient) {
 }
 
 /**
+ * @brief Conmuta el cursor del sistema al de redimension del flotante segun los
+ *        bordes @p edges (EW lados, NS arriba/abajo, NWSE/NESW esquinas).
+ */
+static void set_float_cursor(int edges) {
+    static SDL_Cursor *c_ew = NULL, *c_ns = NULL, *c_nwse = NULL, *c_nesw = NULL,
+                      *c_arrow = NULL;
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        c_ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        c_ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+        c_nwse = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+        c_nesw = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+        c_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    }
+    int lr = edges & (FLOAT_EDGE_LEFT | FLOAT_EDGE_RIGHT);
+    int tb = edges & (FLOAT_EDGE_TOP | FLOAT_EDGE_BOTTOM);
+    SDL_Cursor *t = c_arrow;
+    if (lr && tb) {
+        int tl = (edges & FLOAT_EDGE_TOP) && (edges & FLOAT_EDGE_LEFT);
+        int br = (edges & FLOAT_EDGE_BOTTOM) && (edges & FLOAT_EDGE_RIGHT);
+        t = (tl || br) ? c_nwse : c_nesw; /* TL/BR -> NWSE; TR/BL -> NESW */
+    } else if (lr) {
+        t = c_ew;
+    } else if (tb) {
+        t = c_ns;
+    }
+    if (t) SDL_SetCursor(t);
+}
+
+/**
  * @brief Actualiza el divisor bajo el cursor y conmuta su cursor del sistema.
  *
  * Pura consulta de hover: no inicia arrastre.  Pide redibujar solo si cambio el
@@ -292,11 +339,22 @@ static void set_divider_cursor(int which, int dock_orient) {
  * @param my Y del raton en pixeles.
  */
 static void update_divider_hover(Editor *e, int mx, int my) {
-    /* Los flotantes van ENCIMA del dock: si el cursor esta sobre uno, no es un
-     * divisor (p.ej. su esquina de resize solapa la zona del divisor inferior). */
-    int hit = (e->float_count > 0 && float_at_point(e, mx, my) >= 0)
-                  ? DIVIDER_NONE
-                  : layout_hit_divider(e, mx, my);
+    /* Los flotantes van ENCIMA del dock.  Si el cursor esta sobre un flotante:
+     * en un borde -> cursor de redimension; dentro pero no en un borde -> flecha;
+     * en ningun caso es un divisor del dock. */
+    if (e->float_count > 0) {
+        int fi = float_at_point(e, mx, my);
+        if (fi >= 0) {
+            int edges = float_resize_edges(&e->floats[fi], mx, my);
+            if (e->hovered_divider != DIVIDER_NONE) {
+                e->hovered_divider = DIVIDER_NONE;
+                e->needs_redraw = 1;
+            }
+            set_float_cursor(edges); /* edges==0 -> flecha normal */
+            return;
+        }
+    }
+    int hit = layout_hit_divider(e, mx, my);
     if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
         e->hovered_divider = hit;
         set_divider_cursor(hit, e->dock_drag_orient);
@@ -636,9 +694,9 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         FloatPanel *fp = &e->floats[e->float_drag];
         Rect bounds = editor_float_bounds(e);
         if (e->float_resizing) {
-            int nw = mouse_x - fp->rect.x;
-            int nh = mouse_y - fp->rect.y;
-            fp->rect = float_clamp_resize(fp->rect, nw, nh, bounds);
+            fp->rect = float_clamp_resize_edges(fp->rect, e->float_resize_edges,
+                                                mouse_x, mouse_y, bounds);
+            set_float_cursor(e->float_resize_edges); /* mantener el cursor */
         } else {
             int nx = mouse_x - e->float_drag_off_x;
             int ny = mouse_y - e->float_drag_off_y;

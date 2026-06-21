@@ -110,3 +110,48 @@ Rect float_clamp_resize(Rect rect, int new_w, int new_h, Rect bounds) {
     rect.h = new_h;
     return rect;
 }
+
+int float_resize_edges(const FloatPanel *p, int mx, int my) {
+    Rect r = p->rect;
+    if (!rect_has(r, mx, my)) return 0; /* fuera del marco */
+    int b = FLOAT_RESIZE_BORDER;
+    int edges = 0;
+    if (mx < r.x + b) edges |= FLOAT_EDGE_LEFT;
+    else if (mx >= r.x + r.w - b) edges |= FLOAT_EDGE_RIGHT;
+    if (my < r.y + b) edges |= FLOAT_EDGE_TOP;
+    else if (my >= r.y + r.h - b) edges |= FLOAT_EDGE_BOTTOM;
+    return edges;
+}
+
+Rect float_clamp_resize_edges(Rect rect, int edges, int mx, int my,
+                              Rect bounds) {
+    /* trabajar con los cuatro bordes; mover solo los que esten en la mascara */
+    int left = rect.x, top = rect.y;
+    int right = rect.x + rect.w, bottom = rect.y + rect.h;
+    if (edges & FLOAT_EDGE_LEFT) left = mx;
+    if (edges & FLOAT_EDGE_RIGHT) right = mx;
+    if (edges & FLOAT_EDGE_TOP) top = my;
+    if (edges & FLOAT_EDGE_BOTTOM) bottom = my;
+
+    /* recortar a los limites de la ventana */
+    if (left < bounds.x) left = bounds.x;
+    if (top < bounds.y) top = bounds.y;
+    if (right > bounds.x + bounds.w) right = bounds.x + bounds.w;
+    if (bottom > bounds.y + bounds.h) bottom = bounds.y + bounds.h;
+
+    /* respetar el tamano minimo empujando el borde que se esta moviendo */
+    if (right - left < FLOAT_MIN_W) {
+        if (edges & FLOAT_EDGE_LEFT) left = right - FLOAT_MIN_W;
+        else right = left + FLOAT_MIN_W;
+    }
+    if (bottom - top < FLOAT_MIN_H) {
+        if (edges & FLOAT_EDGE_TOP) top = bottom - FLOAT_MIN_H;
+        else bottom = top + FLOAT_MIN_H;
+    }
+
+    rect.x = left;
+    rect.y = top;
+    rect.w = right - left;
+    rect.h = bottom - top;
+    return rect;
+}

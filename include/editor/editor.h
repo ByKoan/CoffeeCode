@@ -332,6 +332,7 @@ typedef struct Editor {
      * el movimiento para que el flotante no "salte" bajo el cursor. */
     int float_drag;        /* indice del flotante en arrastre, o -1            */
     int float_resizing;    /* 1 = redimensionando; 0 = moviendo                */
+    int float_resize_edges;/* mascara FLOAT_EDGE_* de los bordes que se arrastran */
     int float_drag_off_x;  /* desfase X cursor -> esquina del marco al mover   */
     int float_drag_off_y;  /* desfase Y cursor -> esquina del marco al mover   */
 } Editor;

@@ -137,11 +137,66 @@ static void test_clamp_resize(void) {
     EXPECT_TRUE(m.y + m.h <= bounds.y + bounds.h);
 }
 
+/* -- Redimension por bordes (cualquier lado/esquina) ----------------------- */
+
+static void test_resize_edges(void) {
+    FloatPanel p;
+    p.rect = (Rect){100, 100, 400, 300};
+    p.group_id = 0;
+    /* interior -> ningun borde */
+    EXPECT_EQ_INT(float_resize_edges(&p, 300, 250), 0);
+    /* cada lado */
+    EXPECT_EQ_INT(float_resize_edges(&p, 102, 250), FLOAT_EDGE_LEFT);
+    EXPECT_EQ_INT(float_resize_edges(&p, 497, 250), FLOAT_EDGE_RIGHT);
+    EXPECT_EQ_INT(float_resize_edges(&p, 300, 102), FLOAT_EDGE_TOP);
+    EXPECT_EQ_INT(float_resize_edges(&p, 300, 397), FLOAT_EDGE_BOTTOM);
+    /* esquinas: dos bordes combinados */
+    EXPECT_EQ_INT(float_resize_edges(&p, 497, 397),
+                  FLOAT_EDGE_RIGHT | FLOAT_EDGE_BOTTOM);
+    EXPECT_EQ_INT(float_resize_edges(&p, 102, 102),
+                  FLOAT_EDGE_LEFT | FLOAT_EDGE_TOP);
+    /* fuera del marco -> 0 */
+    EXPECT_EQ_INT(float_resize_edges(&p, 50, 50), 0);
+}
+
+static void test_clamp_resize_edges(void) {
+    Rect huge = {0, 0, 2000, 2000}; /* sin recorte por limites */
+    Rect r = {100, 100, 400, 300};
+
+    /* borde derecho sigue al cursor; el origen no se mueve */
+    Rect m = float_clamp_resize_edges(r, FLOAT_EDGE_RIGHT, 700, 0, huge);
+    EXPECT_EQ_INT(m.x, 100);
+    EXPECT_EQ_INT(m.w, 600);
+    /* borde izquierdo mueve el origen; el borde derecho queda fijo (500) */
+    m = float_clamp_resize_edges(r, FLOAT_EDGE_LEFT, 50, 0, huge);
+    EXPECT_EQ_INT(m.x, 50);
+    EXPECT_EQ_INT(m.x + m.w, 500);
+    /* borde superior mueve el origen Y; el inferior queda fijo (400) */
+    m = float_clamp_resize_edges(r, FLOAT_EDGE_TOP, 0, 50, huge);
+    EXPECT_EQ_INT(m.y, 50);
+    EXPECT_EQ_INT(m.y + m.h, 400);
+    /* esquina: dos bordes a la vez */
+    m = float_clamp_resize_edges(r, FLOAT_EDGE_RIGHT | FLOAT_EDGE_BOTTOM, 700,
+                                 600, huge);
+    EXPECT_EQ_INT(m.w, 600);
+    EXPECT_EQ_INT(m.h, 500);
+    /* minimo: arrastrar el borde derecho hacia dentro respeta FLOAT_MIN_W */
+    m = float_clamp_resize_edges(r, FLOAT_EDGE_RIGHT, 150, 0, huge);
+    EXPECT_EQ_INT(m.w, FLOAT_MIN_W);
+    EXPECT_EQ_INT(m.x, 100); /* origen intacto */
+    /* limites: el borde derecho no se sale de bounds */
+    Rect narrow = {0, 0, 450, 2000};
+    m = float_clamp_resize_edges(r, FLOAT_EDGE_RIGHT, 700, 0, narrow);
+    EXPECT_TRUE(m.x + m.w <= 450);
+}
+
 int main(void) {
     tt_suite("float");
     tt_run("sub-rectangulos del marco", test_subrects);
     tt_run("hit-test: regiones y prioridad", test_hit_test);
     tt_run("clamp de movimiento dentro de limites", test_clamp_move);
     tt_run("clamp de redimension: minimo y limites", test_clamp_resize);
+    tt_run("bordes redimensionables bajo el cursor", test_resize_edges);
+    tt_run("clamp de redimension por bordes", test_clamp_resize_edges);
     return tt_summary();
 }

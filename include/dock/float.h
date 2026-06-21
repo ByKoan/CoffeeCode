@@ -31,6 +31,16 @@
 #define FLOAT_BTN_SZ 18
 /* Lado (px) de la esquina inferior-derecha que redimensiona el flotante. */
 #define FLOAT_RESIZE_SZ 14
+/* Grosor (px) de la banda de borde agarrable para redimensionar desde cualquier
+ * lado/esquina, como una ventana normal del SO. */
+#define FLOAT_RESIZE_BORDER 7
+
+/* Bordes que se estan redimensionando (mascara de bits; combinables en las
+ * esquinas, p.ej. RIGHT|BOTTOM). */
+#define FLOAT_EDGE_LEFT 1
+#define FLOAT_EDGE_RIGHT 2
+#define FLOAT_EDGE_TOP 4
+#define FLOAT_EDGE_BOTTOM 8
 /* Tamano por defecto al desprender una pestana a un flotante nuevo (px). */
 #define FLOAT_DEFAULT_W 480
 #define FLOAT_DEFAULT_H 320
@@ -148,3 +158,25 @@ Rect float_clamp_move(Rect rect, int new_x, int new_y, Rect bounds);
  * @return El nuevo rect con el tamano recortado.
  */
 Rect float_clamp_resize(Rect rect, int new_w, int new_h, Rect bounds);
+
+/**
+ * @brief Bordes redimensionables bajo el punto (@p mx,@p my): mascara de
+ *        ::FLOAT_EDGE_* (combinada en las esquinas), o 0 si el punto no cae en la
+ *        banda de borde de @p p.
+ *
+ * La banda tiene ::FLOAT_RESIZE_BORDER px de grosor en el perimetro del marco.
+ * Permite redimensionar desde cualquier lado/esquina (no solo la inferior-
+ * derecha), como una ventana normal.  Funcion PURA.
+ */
+int float_resize_edges(const FloatPanel *p, int mx, int my);
+
+/**
+ * @brief Redimensiona @p rect arrastrando los bordes @p edges hasta el cursor
+ *        (@p mx,@p my), acotando al minimo y a @p bounds.
+ *
+ * Los bordes en @p edges (mascara ::FLOAT_EDGE_*) siguen al cursor; los demas no
+ * se mueven.  El borde izquierdo/superior mueve el origen; el derecho/inferior
+ * mueve el tamano.  Respeta ::FLOAT_MIN_W / ::FLOAT_MIN_H y no deja que el marco
+ * salga de @p bounds.  Funcion PURA.
+ */
+Rect float_clamp_resize_edges(Rect rect, int edges, int mx, int my, Rect bounds);
