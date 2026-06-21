@@ -432,8 +432,12 @@ int editor_init(Editor *e, const char *filepath) {
 #ifdef _DEBUG
     fprintf(stderr, "STEP: SDL_CreateWindow\n");
 #endif
+    /* SDL_WINDOW_TRANSPARENT habilita el alfa por pixel del framebuffer, que
+     * usa el modo de fondo Transparente para dejar ver el escritorio.  En los
+     * modos opacos el frame se limpia con alfa 255, asi que la apariencia es
+     * identica a una ventana normal. */
     e->window = SDL_CreateWindow("CoffeeCode", e->win_w, e->win_h,
-                                 SDL_WINDOW_RESIZABLE);
+                                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT);
     if (!e->window) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         return 0;
@@ -627,8 +631,8 @@ int editor_init_secondary(Editor *e, Editor *primary, int w, int h) {
     if (h < 200) h = 200;
     e->win_w = w;
     e->win_h = h;
-    e->window =
-        SDL_CreateWindow("CoffeeCode", w, h, SDL_WINDOW_RESIZABLE);
+    e->window = SDL_CreateWindow("CoffeeCode", w, h,
+                                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT);
     if (!e->window) {
         fprintf(stderr, "SDL_CreateWindow (sec): %s\n", SDL_GetError());
         return 0;

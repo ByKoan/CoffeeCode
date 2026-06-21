@@ -20,7 +20,11 @@
 typedef enum {
     BG_MODE_NONE = 0,  /**< Sin fondo: solo el color del tema.        */
     BG_MODE_IMAGE = 1, /**< Imagen cargada desde @c background_path.  */
-    BG_MODE_COLOR = 2  /**< Color solido @c background_color.         */
+    BG_MODE_COLOR = 2, /**< Color solido @c background_color.         */
+    BG_MODE_TRANSPARENT = 3 /**< Area de texto translucida: deja ver el
+                             *   escritorio por detras de la ventana.  La
+                             *   opacidad va de 0 (totalmente transparente) a
+                             *   255 (opaco con el color del tema). */
 } BgMode;
 
 /** Forma de encajar la imagen de fondo dentro del area de texto. */

@@ -128,7 +128,8 @@ void settings_load(Settings *s) {
             s->background_path[sizeof s->background_path - 1] = '\0';
         }
         else if (!strcmp(key, "background_mode")) {
-            s->background_mode = clampi(atoi(val), BG_MODE_NONE, BG_MODE_COLOR);
+            s->background_mode =
+                clampi(atoi(val), BG_MODE_NONE, BG_MODE_TRANSPARENT);
             saw_bg_mode = 1;
         }
         else if (!strcmp(key, "background_color"))

@@ -1293,8 +1293,8 @@ static void handle_background_view_click(Editor *e, int mx, int my) {
     if (ui_hit(&e->ui, UI_BG_BACK, mx, my)) {
         e->background_view_open = 0; /* volver a preferencias */
     } else if (ui_hit(&e->ui, UI_BG_MODE, mx, my)) {
-        /* ciclo Ninguno -> Imagen -> Color -> Ninguno */
-        s->background_mode = (s->background_mode + 1) % 3;
+        /* ciclo Ninguno -> Imagen -> Color -> Transparente -> Ninguno */
+        s->background_mode = (s->background_mode + 1) % 4;
         /* cargar/limpiar la textura al entrar/salir del modo imagen */
         if (s->background_mode == BG_MODE_IMAGE && s->background_path[0])
             editor_load_background(e, s->background_path);

@@ -1159,11 +1159,29 @@ void render_frame(Editor *e) {
     int visible_lines = text_height / e->line_height; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
-    set_color_c(r, e->theme.col_bg);
-    SDL_RenderClear(r); /* borra el frame con el color de fondo */
+    /* Limpieza del frame.  En el modo Transparente el alfa de limpieza es la
+     * opacidad configurada (0 = se ve el escritorio, 255 = opaco con el color
+     * del tema); como la ventana es TRANSPARENT, ese alfa compone con lo que
+     * hay por detras.  El resto del chrome (barras, gutter, texto) se pinta
+     * despues con alfa 255, asi que solo el area de texto queda translucida.
+     * En los demas modos se limpia con alfa 255: identico a antes. */
+    if (e->settings.background_mode == BG_MODE_TRANSPARENT) {
+        int op = e->settings.background_opacity;
+        if (op < 0) op = 0;
+        if (op > 255) op = 255;
+        Color bg = e->theme.col_bg;
+        SDL_SetRenderDrawColor(r, bg.r, bg.g, bg.b, (Uint8)op);
+        SDL_RenderClear(r);
+        /* restaurar el color de dibujo a opaco para todo lo que viene */
+        set_color_c(r, e->theme.col_bg);
+    } else {
+        set_color_c(r, e->theme.col_bg);
+        SDL_RenderClear(r); /* borra el frame con el color de fondo */
+    }
 
     /* Fondo personalizado: se dibuja justo despues del clear, debajo de todo,
-     * segun el modo activo (sin fondo / color solido / imagen). */
+     * segun el modo activo (sin fondo / color solido / imagen / transparente).
+     * En modo Transparente no dibuja nada: el area de texto queda translucida. */
     render_background_area(e);
 
     if (e->tab_count == 0) {    /* sin archivos: pantalla de bienvenida */

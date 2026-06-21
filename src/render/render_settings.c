@@ -102,6 +102,7 @@ static const char *bg_mode_name(int mode) {
     switch (mode) {
     case BG_MODE_IMAGE: return "Imagen";
     case BG_MODE_COLOR: return "Color";
+    case BG_MODE_TRANSPARENT: return "Transparente";
     default:            return "Ninguno";
     }
 }
@@ -498,11 +499,35 @@ void render_background_view(Editor *e) {
     if (prev_h > 200) prev_h = 200;
     if (prev_h < 60) prev_h = 60;
     Rect pb = {x, y, col_w, prev_h};
-    /* fondo base de la muestra = color del tema, para imitar el editor */
-    set_color_c(r, e->theme.col_bg);
-    fill_rect(r, pb.x, pb.y, pb.w, pb.h);
     SDL_FRect parea = {(float)pb.x, (float)pb.y, (float)pb.w, (float)pb.h};
-    render_background_preview(e, parea);
+    if (s->background_mode == BG_MODE_TRANSPARENT) {
+        /* En modo Transparente no se puede mostrar el escritorio real dentro de
+         * la muestra; se dibuja un tablero de ajedrez (gris claro/oscuro) que lo
+         * representa y encima el color del tema con el alfa = opacidad. */
+        int cell = 14; /* lado de cada casilla del tablero */
+        SDL_SetRenderClipRect(r, &(SDL_Rect){pb.x, pb.y, pb.w, pb.h});
+        for (int ty = 0; ty * cell < pb.h; ty++) {
+            for (int tx = 0; tx * cell < pb.w; tx++) {
+                int dark = ((tx + ty) & 1);
+                set_color(r, dark ? 0x60 : 0x90, dark ? 0x60 : 0x90,
+                          dark ? 0x60 : 0x90, 0xFF);
+                fill_rect(r, pb.x + tx * cell, pb.y + ty * cell, cell, cell);
+            }
+        }
+        SDL_SetRenderClipRect(r, NULL);
+        int op = s->background_opacity;
+        if (op < 0) op = 0;
+        if (op > 255) op = 255;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        set_color(r, e->theme.col_bg.r, e->theme.col_bg.g, e->theme.col_bg.b,
+                  (Uint8)op);
+        fill_rect(r, pb.x, pb.y, pb.w, pb.h);
+    } else {
+        /* fondo base de la muestra = color del tema, para imitar el editor */
+        set_color_c(r, e->theme.col_bg);
+        fill_rect(r, pb.x, pb.y, pb.w, pb.h);
+        render_background_preview(e, parea);
+    }
     /* marco de la muestra */
     set_color_c(r, e->theme.col_status_sep);
     stroke_rect(r, pb.x, pb.y, pb.w, pb.h);
