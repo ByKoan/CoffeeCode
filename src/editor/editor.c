@@ -18,6 +18,7 @@
 #include "input/input.h"
 #include "layout/layout.h"
 #include "render/render.h"
+#include "session/layout_persist.h"
 #include "utf8/utf8.h"
 
 /**
@@ -556,6 +557,13 @@ int editor_init(Editor *e, const char *filepath) {
         editor_tab_open(e, filepath);
         SDL_SetWindowTitle(e->window,
                            filepath); /* título de la ventana = ruta */
+    } else {
+        /* Sin archivo por argumento: intentar restaurar la disposicion de la
+         * ultima sesion (pestanas, arbol de paneles, flotantes y tamanos).  Si
+         * no hay layout guardado, esta corrupto o queda vacio, layout_restore
+         * devuelve 0 y el arranque sigue siendo el de siempre (bienvenida). */
+        if (layout_restore(e) && e->tab_count > 0 && e->filepath[0])
+            SDL_SetWindowTitle(e->window, e->filepath);
     }
 
 #ifdef _DEBUG
@@ -573,6 +581,10 @@ int editor_init(Editor *e, const char *filepath) {
  * TTF_Quit y @c SDL_Quit cierran las librerías al final.
  */
 void editor_free(Editor *e) {
+    /* Persistir la disposicion actual ANTES de liberar nada: necesita las rutas
+     * de las pestanas y el arbol de paneles aun vivos. */
+    layout_save(e);
+
     /* Destruir el host de extensiones ANTES de liberar las pestanas: emite
      * COFFEE_EVENT_SHUTDOWN y descarga las DLLs mientras los buffers aun viven. */
     if (e->ext_host) {

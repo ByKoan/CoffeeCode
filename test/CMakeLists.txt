@@ -88,6 +88,14 @@ add_coffee_test(test_tab_membership editor/test_tab_membership.c
 add_coffee_test(test_tab_reorder editor/test_tab_reorder.c
     "${CMAKE_SOURCE_DIR}/src/editor/tab_reorder.c")
 
+# --- layout_persist (puro: (de)serializacion de la disposicion, sin SDL) ----
+# Verifica el round-trip de la struct POD LayoutData (pestanas, arbol de dock,
+# flotantes y tamanos de la UI) a/desde texto, y la robustez ante texto
+# vacio/basura.  Solo enlaza layout_persist.c (capa pura); el wireado al Editor
+# vive en layout_persist_editor.c y necesita SDL.
+add_coffee_test(test_layout_persist session/test_layout_persist.c
+    "${CMAKE_SOURCE_DIR}/src/session/layout_persist.c")
+
 # --- panel (puro: almacen de canales del panel inferior, sin SDL) ----------
 # Solo enlaza panel_core.c (registro de canales + scrollback acotado).  El
 # render y el input del panel viven sobre el Editor y necesitan SDL.
