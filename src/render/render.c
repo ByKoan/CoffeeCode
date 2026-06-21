@@ -124,24 +124,68 @@ static void bg_draw_image(SDL_Renderer *r, SDL_Texture *tex, int bw, int bh,
  * ::bg_draw_image con el escalado y la opacidad configurados).  Reutilizable
  * tanto para el fondo del editor como para la previsualizacion.
  */
-static void bg_fill_area(Editor *e, SDL_FRect area) {
+static void bg_fill_area(Editor *e, SDL_FRect area, int see_through) {
     const Settings *s = &e->settings;
+    SDL_Renderer *r = e->renderer;
     int op = s->background_opacity;
     if (op < 0) op = 0;
     if (op > 255) op = 255;
 
-    if (s->background_mode == BG_MODE_COLOR) {
-        Uint8 R = (Uint8)((s->background_color >> 16) & 0xFF);
-        Uint8 G = (Uint8)((s->background_color >> 8) & 0xFF);
-        Uint8 B = (Uint8)(s->background_color & 0xFF);
-        SDL_SetRenderDrawBlendMode(e->renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(e->renderer, R, G, B, (Uint8)op);
-        SDL_RenderFillRect(e->renderer, &area);
-    } else if (s->background_mode == BG_MODE_IMAGE && e->background_texture) {
-        bg_draw_image(e->renderer, e->background_texture, e->background_w,
-                      e->background_h, area, s->background_scaling, op);
+    /* BG_MODE_NONE: no se dibuja nada -> queda el color opaco del tema. */
+    if (s->background_mode == BG_MODE_NONE) return;
+
+    /* En el editor real (see_through=1) el area de texto COMPONE con el
+     * escritorio: se escribe el alfa DIRECTO (BLENDMODE_NONE) con el color ya
+     * premultiplicado por la opacidad, de modo que op=0 deja ver el escritorio y
+     * op=255 queda solido.  En la previsualizacion (see_through=0) se mezcla
+     * sobre el color del tema ya pintado (BLEND), para mostrar el efecto dentro
+     * de la pantalla de Ajustes sin abrir un agujero transparente. */
+    if (s->background_mode == BG_MODE_COLOR ||
+        s->background_mode == BG_MODE_TRANSPARENT) {
+        Uint8 R, G, B;
+        if (s->background_mode == BG_MODE_COLOR) {
+            R = (Uint8)((s->background_color >> 16) & 0xFF);
+            G = (Uint8)((s->background_color >> 8) & 0xFF);
+            B = (Uint8)(s->background_color & 0xFF);
+        } else { /* TRANSPARENT: tinte con el color del tema */
+            R = e->theme.col_bg.r;
+            G = e->theme.col_bg.g;
+            B = e->theme.col_bg.b;
+        }
+        if (see_through) {
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(r, (Uint8)(R * op / 255),
+                                   (Uint8)(G * op / 255), (Uint8)(B * op / 255),
+                                   (Uint8)op);
+        } else {
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(r, R, G, B, (Uint8)op);
+        }
+        SDL_RenderFillRect(r, &area);
+        return;
     }
-    /* BG_MODE_NONE: no se dibuja nada -> queda el color del tema. */
+
+    if (s->background_mode == BG_MODE_IMAGE && e->background_texture) {
+        if (see_through) {
+            /* dejar el area transparente y dibujar la imagen premultiplicada por
+             * la opacidad (colormod + alphamod = op), para que compense con el
+             * escritorio segun op: op=0 -> se ve el escritorio, op=255 -> solida. */
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+            SDL_RenderFillRect(r, &area);
+            SDL_SetTextureBlendMode(e->background_texture,
+                                    SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+            SDL_SetTextureColorMod(e->background_texture, (Uint8)op, (Uint8)op,
+                                   (Uint8)op);
+            bg_draw_image(r, e->background_texture, e->background_w,
+                          e->background_h, area, s->background_scaling, op);
+            SDL_SetTextureColorMod(e->background_texture, 255, 255, 255);
+        } else {
+            SDL_SetTextureBlendMode(e->background_texture, SDL_BLENDMODE_BLEND);
+            bg_draw_image(r, e->background_texture, e->background_w,
+                          e->background_h, area, s->background_scaling, op);
+        }
+    }
 }
 
 /**
@@ -156,11 +200,11 @@ void render_background_area(Editor *e) {
     int text_h = e->win_h - text_top - STATUS_HEIGHT - editor_shortcut_h(e);
     if (text_h < 0) text_h = 0;
     SDL_FRect area = {0.0f, (float)text_top, (float)e->win_w, (float)text_h};
-    bg_fill_area(e, area);
+    bg_fill_area(e, area, 1); /* editor real: compone con el escritorio */
 }
 
 void render_background_preview(Editor *e, SDL_FRect area) {
-    bg_fill_area(e, area);
+    bg_fill_area(e, area, 0); /* previsualizacion: mezcla sobre el tema */
 }
 
 /* ── Geometría del área de contenido (respeta el split de paneles) ──────────
@@ -1168,37 +1212,16 @@ void render_frame(Editor *e) {
     int visible_lines = text_height / e->line_height; /* filas que caben */
     int total_lines = (e->tab_count > 0) ? buf_line_count(e->buf) : 0;
 
-    /* Limpieza del frame.  En el modo Transparente el alfa de limpieza es la
-     * opacidad configurada (0 = se ve el escritorio, 255 = opaco con el color
-     * del tema); como la ventana es TRANSPARENT, ese alfa compone con lo que
-     * hay por detras.  El resto del chrome (barras, gutter, texto) se pinta
-     * despues con alfa 255, asi que solo el area de texto queda translucida.
-     * En los demas modos se limpia con alfa 255: identico a antes. */
-    if (e->settings.background_mode == BG_MODE_TRANSPARENT) {
-        int op = e->settings.background_opacity;
-        if (op < 0) op = 0;
-        if (op > 255) op = 255;
-        Color bg = e->theme.col_bg;
-        /* El compositor de Windows (DWM/DirectComposition) espera alfa
-         * PREMULTIPLICADO en una ventana transparente: el color debe venir ya
-         * multiplicado por su propio alfa.  Si se limpiara con el RGB recto, el
-         * escritorio se mezclaria de mas y los bordes saldrian lavados.  Por eso
-         * premultiplicamos el color del clear por la opacidad. */
-        Uint8 pr = (Uint8)(bg.r * op / 255);
-        Uint8 pg = (Uint8)(bg.g * op / 255);
-        Uint8 pb = (Uint8)(bg.b * op / 255);
-        SDL_SetRenderDrawColor(r, pr, pg, pb, (Uint8)op);
-        SDL_RenderClear(r);
-        /* restaurar el color de dibujo a opaco para todo lo que viene */
-        set_color_c(r, e->theme.col_bg);
-    } else {
-        set_color_c(r, e->theme.col_bg);
-        SDL_RenderClear(r); /* borra el frame con el color de fondo */
-    }
+    /* Limpieza del frame: SIEMPRE opaca con el color del tema.  El area de texto
+     * que deba ser see-through (modos Color/Imagen/Transparente) se vuelve a
+     * pintar a continuacion en render_background_area sobrescribiendo su alfa,
+     * de modo que nunca queda un agujero transparente fuera del area de texto. */
+    set_color_c(r, e->theme.col_bg);
+    SDL_RenderClear(r);
 
-    /* Fondo personalizado: se dibuja justo despues del clear, debajo de todo,
-     * segun el modo activo (sin fondo / color solido / imagen / transparente).
-     * En modo Transparente no dibuja nada: el area de texto queda translucida. */
+    /* Fondo del area de texto segun el modo activo (sin fondo / color / imagen /
+     * transparente).  En los modos que componen con el escritorio, fija el alfa
+     * del area a la opacidad configurada (0 = se ve el escritorio, 255 = solido). */
     render_background_area(e);
 
     if (e->tab_count == 0) {    /* sin archivos: pantalla de bienvenida */
