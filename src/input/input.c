@@ -135,13 +135,24 @@ static void field_select_all(FindField *fld) {
  */
 static void editor_insert_text(Editor *e, const char *text) {
     if (e->tab_count == 0) return; /* sin documento abierto, nada que editar */
-    buf_insert_str(e->buf, text, strlen(text));
+    size_t pos = buf_cursor_pos(e->buf);
+    size_t len = strlen(text);
+    /* Registrar la insercion en la pila de undo: sin esto, el texto TECLEADO no
+     * se podia deshacer con Ctrl+Z (este es el camino del evento TEXT_INPUT,
+     * distinto de las teclas especiales que pasan por input_keyboard.c). */
+    editor_undo_push_insert(e, pos, text, len);
+    buf_insert_str(e->buf, text, len);
     editor_sync_cursor(e); /* recalcular (línea, columna) del cursor */
     editor_update_lexer(
         e, e->cursor_line);   /* re-tokenizar desde la línea editada */
     editor_ensure_visible(e); /* asegurar que el cursor sigue visible */
     e->modified = 1;
     e->needs_redraw = 1;
+    /* Avisar a las extensiones del cambio (p.ej. el cliente LSP re-analiza con
+     * debounce).  Sin esto, escribir texto no actualizaba los diagnosticos. */
+    if (e->ext_host)
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_BUFFER_CHANGED,
+                      NULL);
 }
 
 /* ── Manejadores ────────────────────────────────────────────────────────────
