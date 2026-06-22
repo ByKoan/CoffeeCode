@@ -1,0 +1,12 @@
+[extension]
+id           = "vesta-lsp"
+name         = "Vesta LSP"
+version      = "0.1.0"
+author       = "desmonHak"
+entry        = "coffee_vesta_lsp@COFFEE_EXT_DLL_SUFFIX@"
+abi          = 3
+description  = "Cliente del language server de Vesta: diagnosticos de compilacion en vivo y servicio LSP compartido"
+dependencies = []
+provides     = ["coffee.svc.lsp"]
+
+[commands]
