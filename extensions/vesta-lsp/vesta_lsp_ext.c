@@ -163,12 +163,44 @@ static char *vl_path_to_uri(const char *path) {
     return out;
 }
 
+/**
+ * @brief Compara dos rutas nativas de forma tolerante al formato.
+ *
+ * La misma ruta puede llegar distinta segun la fuente: el evento FILE_OPEN trae
+ * la ruta tal cual (a veces con '/' y nombre corto tipo "DESMON~1"), mientras
+ * que current_path() devuelve e->filepath (a veces con '\\' y nombre largo).
+ * Comparamos normalizando '\\'->'/' y a minusculas para que casen; sin esto el
+ * documento del evento y el activo no se reconocian como el mismo.
+ */
+static int vl_path_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    for (;; ++a, ++b) {
+        unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+        if (ca == '\\') ca = '/';
+        if (cb == '\\') cb = '/';
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+        if (ca == '\0') return 1;
+    }
+}
+
 /** Busca el documento por ruta nativa (NULL si no existe). */
 static VlDoc *vl_find_doc_by_path(VlState *st, const char *path) {
     if (!path) return NULL;
     for (VlDoc *d = st->docs; d; d = d->next)
-        if (d->path && strcmp(d->path, path) == 0) return d;
+        if (d->path && vl_path_eq(d->path, path)) return d;
     return NULL;
+}
+
+/** 1 si @p doc es el documento del buffer en pantalla (best-effort).
+ *  Usa current_path() (tolerante al formato) y, si aun no esta poblado
+ *  (apertura por CLI), recurre al ultimo documento notificado por el IDE. */
+static int vl_doc_is_active(VlState *st, VlDoc *doc) {
+    if (!doc) return 0;
+    const char *active = st->api->current_path(st->host);
+    if (active && active[0]) return vl_path_eq(active, doc->path);
+    return st->last_open == doc;
 }
 
 /** Busca el documento por URI (NULL si no existe). */
@@ -411,14 +443,8 @@ static void vl_on_diagnostics(void *ud, const char *uri, cJSON *diagnostics) {
     }
     if (diagnostics) doc->diagnostics = cJSON_Duplicate(diagnostics, 1);
 
-    /* Si es el documento activo, refrescar la vista.  current_path() puede ser
-     * NULL en el instante en que llegan los primeros diagnosticos (apertura por
-     * CLI, antes de poblarse): en ese caso recurrimos al ultimo documento que el
-     * IDE nos notifico abrir (st->last_open). */
-    const char *active = st->api->current_path(st->host);
-    int is_active = (active && doc->path && strcmp(active, doc->path) == 0) ||
-                    ((!active || !active[0]) && st->last_open == doc);
-    if (is_active) {
+    /* Si es el documento activo, refrescar la vista (gutter/fondo + panel). */
+    if (vl_doc_is_active(st, doc)) {
         st->api->clear_decorations(st->host);
         vl_apply_decorations(st, doc->diagnostics);
         vl_refresh_problems_channel(st, doc);
@@ -439,13 +465,7 @@ static void vl_on_diagnostics(void *ud, const char *uri, cJSON *diagnostics) {
  */
 static void vl_send_did_open(VlState *st, VlDoc *doc) {
     if (!st->ready || !st->lsp || !doc || doc->open) return;
-    const char *active = st->api->current_path(st->host);
-    /* Es el documento del buffer en pantalla cuando current_path lo confirma o,
-     * mientras current_path aun no esta poblado (apertura via CLI), cuando es el
-     * ultimo documento que el IDE nos notifico abrir (st->last_open). */
-    int is_active = (active && doc->path && strcmp(active, doc->path) == 0) ||
-                    (!active && st->last_open == doc);
-    if (is_active) {
+    if (vl_doc_is_active(st, doc)) {
         char *text = vl_read_active_buffer(st);
         lsp_did_open(st->lsp, doc->uri, "vex", doc->version, text ? text : "");
         doc->open = 1;
