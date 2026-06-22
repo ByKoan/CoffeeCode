@@ -276,8 +276,15 @@ void editor_tab_open(Editor *e, const char *path) {
     /* ¿ya está abierto en alguna pestaña? Entonces solo activar esa. */
     for (int i = 0; i < e->tab_count; i++) {
         if (strcmp(e->tabs[i].filepath, path) == 0) {
-            if (i == e->active_tab)
-                return; /* ya es la activa: nada que hacer */
+            if (i == e->active_tab) {
+                /* Ya es la activa.  Aun asi notificar al host: tras restaurar la
+                 * sesion (layout_apply_editor re-activa la ultima pestana), esta
+                 * es la unica ocasion en que el cliente LSP recibe el FILE_OPEN
+                 * del archivo que queda en pantalla; sin el, el resaltado no se
+                 * pide.  Re-emitir FILE_OPEN del activo es idempotente. */
+                editor_ext_notify_open(e, e->tabs[i].filepath);
+                return;
+            }
             editor_tab_save_state(e);
             /* enfocar el grupo al que pertenece la pestaña y activarla allí */
             e->active_group = e->tabs[i].group;
@@ -471,6 +478,12 @@ void editor_tab_switch(Editor *e, int i) {
     e->group_active_tab[e->active_group] = i;
     editor_tab_load_state(e); /* recarga si cambió el mtime y no hay cambios */
     editor_update_lexer(e, 0);
+    /* Notificar al host (igual que editor_tab_open): fija el buffer activo y
+     * emite FILE_OPEN.  Sin esto, el cliente LSP no se entera del cambio de
+     * pestana y no vuelve a pedir los semantic tokens del archivo que recupera
+     * el foco; como clear_tokens es global, ese archivo se quedaba sin resaltar
+     * al volver a el. */
+    editor_ext_notify_open(e, e->tabs[i].filepath);
     editor_sync_cursor(e);
     e->needs_redraw = 1;
 }
