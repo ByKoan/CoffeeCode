@@ -158,6 +158,16 @@ if(COFFEE_BUILD_EXTENSIONS)
         endif()
     endfunction()
 
+    # --- SDK comun de extensiones (JSON-RPC / LSP) -------------------------
+    # Test headless del SDK: no necesita SDL, ni el extension host, ni proceso
+    # real.  Verifica el framing JSON-RPC (partido/multiple/correlacion por id)
+    # y el ciclo de vida LSP (initialize/initialized, didOpen, diagnosticos)
+    # alimentando bytes a mano y capturando lo que se "escribe" en un buffer.
+    if(TARGET coffee_ext_common)
+        add_coffee_test(test_ext_common ext/test_ext_common.c)
+        target_link_libraries(test_ext_common PRIVATE coffee_ext_common)
+    endif()
+
     add_coffee_test(test_ext_host ext/test_ext_host.c
         "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
         "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
