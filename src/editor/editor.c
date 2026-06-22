@@ -350,6 +350,17 @@ static const char *ext_hook_workspace_root(void *ud) {
     return e->ftree.root_path[0] ? e->ftree.root_path : NULL;
 }
 
+/* Ruta del archivo de la pestana activa (o NULL si es un buffer sin guardar o
+ * no hay pestanas).  e->filepath sigue al buffer activo (lo usan el titulo de
+ * ventana y el autoguardado), asi que es la fuente correcta del "archivo
+ * actual" que consultan las extensiones (p.ej. el cliente LSP).  Sin esto las
+ * extensiones no sabian que archivo se esta editando (current_path() == NULL). */
+static const char *ext_hook_current_path(void *ud) {
+    Editor *e = (Editor *)ud;
+    if (!e) return NULL;
+    return e->filepath[0] ? e->filepath : NULL;
+}
+
 /** goto_location: abre @p path (o cambia a su pestana) y mueve el cursor a
  *  (@p line, @p col) 0-based (col en CARACTERES), haciendo scroll para que
  *  quede visible.  Devuelve 1 si se abrio, 0 si no. */
@@ -580,6 +591,7 @@ int editor_init(Editor *e, const char *filepath) {
         backend.request_repaint = ext_hook_request_repaint;
         backend.workspace_root = ext_hook_workspace_root;
         backend.goto_location = ext_hook_goto_location;
+        backend.current_path = ext_hook_current_path;
         CoffeeHost *host = ext_host_create(&backend);
         e->ext_host = host;
         if (host) {
