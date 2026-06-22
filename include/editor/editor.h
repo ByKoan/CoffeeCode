@@ -62,9 +62,8 @@ typedef struct {
  * pestaña cuando no es la activa (cursor, scroll, selección). */
 typedef struct {
     Buffer buf;            /* gap buffer con el texto del archivo            */
-    LexerCache lex;        /* cache de tokens por línea (resaltado)          */
+    LexerCache lex;        /* cache de tramos coloreados por línea (resaltado) */
     UndoStack undo;        /* pila de undo/redo de esta pestaña              */
-    const Highlighter *hl; /* resaltador según el lenguaje del archivo */
     char filepath[512]; /* ruta del archivo, o "" si es nuevo sin guardar */
     int modified;       /* 1 si hay cambios sin guardar                   */
     long loaded_mtime;  /* mtime del fichero en la última carga desde disco */
@@ -179,7 +178,6 @@ typedef struct Editor {
      * se actualizan en editor_tab_load_state(). */
     Buffer *buf;
     LexerCache *lex;
-    const Highlighter *hl; /* resaltador del tab activo */
 
     /* vista */
     int scroll_line; /* primera línea visible (celdas, no px)          */

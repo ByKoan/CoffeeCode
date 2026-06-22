@@ -13,6 +13,7 @@
  * las funciones SDL devuelven
  * @c false / @c NULL en error y dejan el motivo en @c SDL_GetError().
  */
+#include "builtin/lang_c.h"
 #include "editor_internal.h"
 #include "ext/ext_host.h"
 #include "input/input.h"
@@ -595,6 +596,11 @@ int editor_init(Editor *e, const char *filepath) {
         CoffeeHost *host = ext_host_create(&backend);
         e->ext_host = host;
         if (host) {
+            /* Lenguaje base EMBEBIDO: el C es la unica extension de lenguaje
+             * integrada en el ejecutable.  Se registra en proceso (con la misma
+             * API que las DLLs) ANTES de cargar las extensiones externas, y
+             * colorea leyendo el tema vivo del editor (&e->theme es estable). */
+            coffee_builtin_c_register(host, ext_host_api(host), &e->theme);
             const char *base = SDL_GetBasePath();
             char extdir[1024];
             if (base)

@@ -260,6 +260,56 @@ int ext_host_gutter_marker(CoffeeHost *host, const Buffer *buffer, size_t line,
  */
 void ext_host_drop_buffer(CoffeeHost *host, const Buffer *buffer);
 
+/* ===========================================================================
+ *  Resaltado de sintaxis (ABI v4): registro de resaltadores + tramos pushed.
+ * ---------------------------------------------------------------------------
+ *  El core ya no trae resaltador propio.  Las extensiones registran un
+ *  resaltador sincrono por extension de archivo (register_highlighter) y/o
+ *  empujan tramos por linea sobre el buffer activo (set_tokens / clear_tokens).
+ *  El render del IDE consulta estos accesores para colorear cada linea.
+ * =========================================================================== */
+
+/**
+ * @brief 1 si hay un resaltador sincrono registrado para la extension de @p path.
+ *
+ * Compara la extension de @p path (case-insensitive) con las registradas.  El
+ * render lo usa para decidir si re-tokenizar una linea con un resaltador o
+ * dibujarla en texto plano.  @p path puede ser NULL/sin extension (devuelve 0).
+ */
+int ext_host_has_highlighter(CoffeeHost *host, const char *path);
+
+/**
+ * @brief Resalta UNA linea con el resaltador registrado para la extension de
+ *        @p path.
+ *
+ * Resuelve el resaltador por la extension de @p path y lo invoca con la linea.
+ * Escribe hasta @p max_out tramos en @p out (en COLUMNAS DE CARACTER) y devuelve
+ * cuantos escribio, o -1 si no hay resaltador para esa extension (el render cae a
+ * texto plano).  @p in_block / @p out_block encadenan el estado de comentario de
+ * bloque multilinea (out_block puede ser NULL).
+ */
+int ext_host_highlight_line(CoffeeHost *host, const char *path,
+                            const char *line_utf8, int line_len, int in_block,
+                            CoffeeSpan *out, int max_out, int *out_block);
+
+/**
+ * @brief Tramos pushed (set_tokens) de la linea @p line del buffer @p buffer.
+ *
+ * Copia hasta @p max_out tramos en @p out y devuelve cuantos hay (>=0), o -1 si
+ * esa linea no tiene tramos pushed (el render cae al resaltador sincrono).  Una
+ * linea con 0 tramos pushed explicitos (set_tokens count=0) devuelve 0.
+ */
+int ext_host_line_tokens(CoffeeHost *host, const Buffer *buffer, size_t line,
+                         CoffeeSpan *out, int max_out);
+
+/**
+ * @brief 1 si el buffer @p buffer tiene ALGUN tramo pushed (set_tokens).
+ *
+ * Permite al render saber rapido si debe consultar ext_host_line_tokens por
+ * linea, sin coste cuando ninguna extension empujo tramos a ese buffer.
+ */
+int ext_host_has_pushed_tokens(CoffeeHost *host, const Buffer *buffer);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

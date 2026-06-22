@@ -40,8 +40,14 @@ add_coffee_test(test_buffer  buffer/test_buffer.c
     "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
     "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
     "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+# El resaltador de C ahora es la extension embebida builtin/lang_c.c (el core ya
+# no trae resaltador propio); el test verifica esa funcion contra un tema, asi
+# que enlaza lang_c.c + theme.c (paleta) + utf8.c (codepoints).  lexer.c (solo la
+# cache) no hace falta aqui.
 add_coffee_test(test_lexer   lexer/test_lexer.c
-    "${CMAKE_SOURCE_DIR}/src/lexer/lexer.c"
+    "${CMAKE_SOURCE_DIR}/src/builtin/lang_c.c"
+    "${CMAKE_SOURCE_DIR}/src/render/theme.c"
+    "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
     "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
 
 # --- encoding (puro, sin dependencias) -------------------------------------
@@ -201,6 +207,18 @@ if(COFFEE_BUILD_EXTENSIONS)
         "COFFEE_ERR_TMP_DIR=\"${CMAKE_BINARY_DIR}/test_ext_errors_tmp\"")
     # Asegurar que el dir temporal de fixtures existe antes de ejecutar.
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test_ext_errors_tmp")
+
+    # --- resaltado controlado por extensiones (register_highlighter + tokens) -
+    # Verifica HEADLESS el sistema de resaltado del host (ABI v4): registrar un
+    # resaltador sincrono por extension y resolverlo por path, y el almacen de
+    # tramos pushed por-buffer (set_tokens / clear_tokens) con su prioridad y su
+    # limpieza al soltar un buffer.  Sin DLLs: registra fns de prueba en proceso.
+    add_coffee_test(test_ext_highlight ext/test_ext_highlight.c
+        "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
+        "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
+        "${CMAKE_SOURCE_DIR}/src/utf8/utf8.c"
+        "${CMAKE_SOURCE_DIR}/src/structs/vec.c")
+    coffee_link_ext_host(test_ext_highlight)
 
     # --- facility de subprocesos asincronos (ext_proc + SDL para hilos) ------
     # Smoke test HEADLESS del facility: lanza un proceso conocido, drena la cola

@@ -3,7 +3,7 @@
  * @brief Gestión de pestañas (crear, abrir, cerrar, cambiar) y guardado/
  *        restauración del estado de cada pestaña.
  *
- * Diseño: @c e->buf / @c e->lex / @c e->undo / @c e->hl son PUNTEROS directos a
+ * Diseño: @c e->buf / @c e->lex / @c e->undo son PUNTEROS directos a
  * @c tabs[active_tab] (no copias por valor), así nunca divergen aunque el
  * buffer haga realloc. @ref editor_tab_load_state redirige esos punteros y
  * restaura los escalares; @ref editor_tab_save_state guarda solo los escalares.
@@ -170,8 +170,7 @@ void editor_tab_save_state(Editor *e) {
  *
  * Es la operación inversa de ::editor_tab_save_state y el corazón del modelo de
  * pestañas. Paso a paso:
- *   1. Apunta @c e->buf / @c e->lex / @c e->undo / @c e->hl al almacenamiento
- * de
+ *   1. Apunta @c e->buf / @c e->lex / @c e->undo al almacenamiento de
  *      @c tabs[active_tab]. A partir de aquí todo el editor opera sobre esa
  *      pestaña sin copiar nada (los punteros comparten el mismo
  * almacenamiento).
@@ -194,7 +193,6 @@ static void editor_tab_load_state(Editor *e) {
     e->buf = &t->buf;
     e->lex = &t->lex;
     e->undo = &t->undo;
-    e->hl = t->hl;
 
     /* (2) Recarga eficiente: solo si tiene ruta, no está modificado y cambió el
      * mtime respecto a la última lectura desde disco. */
@@ -251,8 +249,8 @@ void editor_tab_new(Editor *e) {
     EditorTab *t = &e->tabs[idx];
     tab_init(t);
     lexer_cache_init(&t->lex, 1); /* cache para 1 línea (el buffer vacío) */
-    t->hl =
-        highlighter_default(); /* sin extensión conocida: resaltador genérico */
+    /* El resaltado lo decide el render por la extension del archivo (via el
+     * host de extensiones); una pestaña nueva sin ruta sale en texto plano. */
     t->group = e->active_group; /* la nueva pestaña vive en el grupo enfocado */
 
     e->active_tab = idx;
@@ -267,10 +265,9 @@ void editor_tab_new(Editor *e) {
  * Si ese fichero ya está abierto en alguna pestaña, simplemente cambia a ella
  * (guardando antes el estado de la actual y recargando si su mtime cambió). Si
  * no estaba abierto, crea una pestaña nueva, carga el contenido del disco,
- * registra el mtime y la ruta, inicializa la cache del lexer al nº de líneas y
- * elige el resaltador según la extensión del archivo. No abre nada si se
- * alcanzó
- * @c MAX_TABS.
+ * registra el mtime y la ruta e inicializa la cache del lexer al nº de líneas
+ * (el resaltado lo decide el render por la extensión, via el host de
+ * extensiones). No abre nada si se alcanzó @c MAX_TABS.
  *
  * @param e    Editor donde abrir el fichero.
  * @param path Ruta del fichero a abrir.
@@ -305,7 +302,8 @@ void editor_tab_open(Editor *e, const char *path) {
     strncpy(t->filepath, path, sizeof(t->filepath) - 1);
     int total = buf_line_count(&t->buf);
     lexer_cache_init(&t->lex, total > 0 ? total : 1); /* cache por línea */
-    t->hl = highlighter_for_path(path); /* resaltador según la extensión */
+    /* El resaltado se resuelve en el render por la extension del archivo (via el
+     * host de extensiones); aqui no se fija ningun resaltador. */
     t->group = e->active_group; /* la nueva pestaña vive en el grupo enfocado */
 
     e->active_tab = idx;
@@ -390,7 +388,6 @@ void editor_tab_close(Editor *e) {
         e->buf = NULL;
         e->lex = NULL;
         e->undo = NULL;
-        e->hl = NULL;
         e->active_tab = 0;
         e->filepath[0] = '\0';
         e->modified = 0;
@@ -507,7 +504,6 @@ void editor_render_bind_tab(Editor *e, int idx) {
     e->buf = &t->buf;
     e->lex = &t->lex;
     e->undo = &t->undo;
-    e->hl = t->hl;
     /* y volcar sus escalares de vista a los campos en vivo para dibujar */
     e->cursor_line = t->cursor_line;
     e->cursor_col = t->cursor_col;
@@ -1293,7 +1289,6 @@ static void editor_reset_empty(Editor *src) {
     src->buf = NULL;
     src->lex = NULL;
     src->undo = NULL;
-    src->hl = NULL;
     src->active_tab = 0;
     src->filepath[0] = '\0';
     src->modified = 0;

@@ -22,6 +22,7 @@
  * abajo.
  */
 #include "render_internal.h"
+#include "ext/ext_host.h"
 #include "layout/layout.h"
 #include "utf8/utf8.h"
 #include <stdio.h>
@@ -658,33 +659,96 @@ static void render_empty_screen(Editor *e) {
 }
 
 /**
- * @brief Re-tokeniza las líneas marcadas como "sucias" en la cache del lexer.
+ * @brief Convierte una columna de carácter (codepoint) a un offset de byte.
  *
- * El resaltado se cachea por línea (cada @c LineTokens guarda los tokens de una
- * línea). Aquí se recorren todas y, las marcadas como sucias por una edición,
- * se vuelven a tokenizar con @c tokenize_line del resaltador (@c e->hl). El
- * estado
- * @c in_block (¿estamos dentro de un comentario de bloque?) se arrastra de una
- * línea a la siguiente, porque un /​* abierto afecta a las líneas
- * posteriores. Tras tokenizar, se limpia el flag "sucio" de esa línea.
+ * Los resaltadores de extension emiten ::CoffeeSpan en COLUMNAS DE CARACTER; la
+ * cache interna (::Token) trabaja en BYTES para que el render posicione el texto
+ * igual que antes.  Recorre @p line decodificando UTF-8 hasta llegar al
+ * codepoint @p col (recortado al final de la línea).  Para texto ASCII (lo
+ * habitual en código) byte == columna y esto es un simple avance.
  *
- * @param e Editor (lexer, buffer y resaltador activos).
+ * @param line      Texto de la línea (UTF-8). @param bytes Longitud en bytes.
+ * @param col       Columna de carácter (codepoints) buscada.
+ * @return Offset de byte correspondiente a esa columna (0..bytes).
+ */
+static int col_to_byte(const char *line, int bytes, uint32_t col) {
+    int b = 0;
+    uint32_t c = 0;
+    while (b < bytes && c < col) {
+        uint32_t cp;
+        int n = utf8_decode(line + b, bytes - b, &cp);
+        if (n <= 0) n = 1; /* defensa ante bytes inválidos */
+        b += n;
+        c++;
+    }
+    return b;
+}
+
+/**
+ * @brief Vuelca @p n tramos (::CoffeeSpan, en columnas de carácter) a la línea
+ *        @p lt de la cache, convirtiéndolos a ::Token (en bytes) con su color.
+ *
+ * @param lt        Destino en la cache (se vacía: count=0 al entrar).
+ * @param line      Texto de la línea. @param bytes Longitud en bytes.
+ * @param spans     Tramos en columnas de carácter. @param n Número de tramos.
+ */
+static void spans_to_line_tokens(LineTokens *lt, const char *line, int bytes,
+                                 const CoffeeSpan *spans, int n) {
+    lt->count = 0;
+    for (int i = 0; i < n && lt->count < MAX_TOKENS_PER_LINE; i++) {
+        int b0 = col_to_byte(line, bytes, spans[i].start_col);
+        int b1 = col_to_byte(line, bytes, spans[i].start_col + spans[i].len);
+        Token *t = &lt->tokens[lt->count++];
+        t->col = b0;
+        t->len = (b1 >= b0) ? (b1 - b0) : 0;
+        t->color.r = spans[i].color.r;
+        t->color.g = spans[i].color.g;
+        t->color.b = spans[i].color.b;
+        t->color.a = spans[i].color.a;
+    }
+}
+
+/**
+ * @brief Re-resalta las líneas marcadas como "sucias" usando el resaltador
+ *        REGISTRADO por una extension para el lenguaje del archivo activo.
+ *
+ * El resaltado se cachea por línea (cada @c LineTokens guarda los tramos de una
+ * línea).  Aquí se recorren todas y, las marcadas como sucias por una edición,
+ * se vuelven a resaltar llamando al resaltador del host (por extension de
+ * @c e->filepath).  El estado @c in_block (¿dentro de un comentario de bloque?)
+ * se arrastra de una línea a la siguiente, porque un /​* abierto afecta a las
+ * líneas posteriores.  Si no hay resaltador para esa extension (o no hay host),
+ * las líneas quedan sin tramos (count=0) y el render las pinta en texto plano.
+ *
+ * Los tramos pushed por una extension (set_tokens) NO pasan por esta cache: los
+ * consulta ::render_text_line por línea (tienen prioridad).
+ *
+ * @param e Editor (lexer y buffer activos; @c e->filepath = archivo dibujado).
  */
 static void update_lexer_cache(Editor *e) {
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    /* ¿hay resaltador registrado para la extension de este archivo? */
+    int has_hl = host && ext_host_has_highlighter(host, e->filepath);
     int in_block = 0; /* ¿venimos dentro de un comentario de bloque? */
     for (int li = 0; li < lexer_cache_count(e->lex); li++) {
-        /* línea pendiente de re-resaltar */
-        if (*lexer_cache_dirty_at(e->lex, li)) {
-            char line_buf[LINE_BUF_SZ];
-            /* texto expandido de la línea */
-            get_line_text(e, li, line_buf, sizeof(line_buf));
-            /* tokenizar; devuelve el nuevo estado in_block para la línea
-             * siguiente */
-            in_block =
-                e->hl->tokenize_line(e->hl, line_buf, (int)strlen(line_buf),
-                                     lexer_cache_line(e->lex, li), in_block);
-            *lexer_cache_dirty_at(e->lex, li) = 0; /* ya está limpia */
+        if (!*lexer_cache_dirty_at(e->lex, li)) continue; /* ya limpia */
+        LineTokens *lt = lexer_cache_line(e->lex, li);
+        if (!has_hl) {
+            lt->count = 0; /* sin resaltador: texto plano */
+            *lexer_cache_dirty_at(e->lex, li) = 0;
+            continue;
         }
+        char line_buf[LINE_BUF_SZ];
+        int bytes = get_line_text(e, li, line_buf, sizeof(line_buf));
+        CoffeeSpan spans[MAX_TOKENS_PER_LINE];
+        int out_block = 0;
+        int n = ext_host_highlight_line(host, e->filepath, line_buf, bytes,
+                                        in_block, spans, MAX_TOKENS_PER_LINE,
+                                        &out_block);
+        if (n < 0) n = 0; /* defensa: tratar como sin tramos */
+        spans_to_line_tokens(lt, line_buf, bytes, spans, n);
+        in_block = out_block; /* encadenar el estado de bloque */
+        *lexer_cache_dirty_at(e->lex, li) = 0;
     }
 }
 
@@ -767,13 +831,20 @@ static void draw_seg(Editor *e, const char *line, int b0, int b1, int col0,
 }
 
 /**
- * @brief Dibuja una línea de texto con resaltado de sintaxis por tokens.
+ * @brief Dibuja una línea de texto con el resaltado aportado por las extensiones.
  *
- * Obtiene el texto de la línea y, si tiene tokens cacheados, recorre cada token
- * dibujando: los huecos sin token en color por defecto y cada token en el color
- * de su tipo (@c e->theme.tokens). Todo se ajusta al scroll horizontal (@c
- * scroll_col): las columnas a la izquierda del scroll se recortan. Si la línea
- * no tiene tokens, dibuja el texto plano en color por defecto.
+ * Obtiene el texto de la línea y elige el origen de los tramos coloreados en
+ * este orden de prioridad:
+ *   1. Tramos PUSHED por una extension (set_tokens, p.ej. semantic tokens de un
+ *      LSP) para esta línea del buffer activo: tienen prioridad.
+ *   2. Tramos cacheados por el resaltador SINCRONO registrado para el lenguaje
+ *      del archivo (ver ::update_lexer_cache).
+ *   3. Si no hay ni unos ni otros: texto plano en el color por defecto del tema.
+ *
+ * Recorre los tramos dibujando: los huecos sin tramo en color por defecto y cada
+ * tramo en SU color (decidido por la extension).  Todo se ajusta al scroll
+ * horizontal (@c scroll_col): las columnas a la izquierda del scroll se
+ * recortan.
  *
  * @param e      Editor. @param li Índice de línea. @param y Y de la fila (px).
  * @param text_x X del primer carácter de texto (px).
@@ -784,20 +855,34 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
     int line_bytes = get_line_text(e, li, line_buf, sizeof(line_buf));
     /* centrado vertical en la fila */
     int text_y = y + (e->line_height - e->font_size) / 2;
+    Color def = e->theme.tokens[TOK_DEFAULT]; /* color de texto por defecto */
 
-    LineTokens *lt =
-        (li < lexer_cache_count(e->lex)) ? lexer_cache_line(e->lex, li) : NULL;
+    /* Elegir el origen de los tramos: (1) pushed por extension, (2) cache. */
+    LineTokens pushed; /* almacen local si los tramos vienen pushed */
+    LineTokens *lt = NULL;
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    if (host && ext_host_has_pushed_tokens(host, e->buf)) {
+        CoffeeSpan spans[MAX_TOKENS_PER_LINE];
+        int n = ext_host_line_tokens(host, e->buf, (size_t)li, spans,
+                                     MAX_TOKENS_PER_LINE);
+        if (n >= 0) { /* esta línea tiene tramos pushed (n>=0; 0 = vacía) */
+            spans_to_line_tokens(&pushed, line_buf, line_bytes, spans, n);
+            lt = &pushed;
+        }
+    }
+    if (!lt) /* sin pushed para esta línea: usar la cache del resaltador */
+        lt = (li < lexer_cache_count(e->lex)) ? lexer_cache_line(e->lex, li)
+                                              : NULL;
 
-    /* Sin tokens: dibujar la línea entera en color por defecto. */
+    /* Sin tramos: dibujar la línea entera en color por defecto. */
     if (!lt || lt->count == 0) {
-        draw_seg(e, line_buf, 0, line_bytes, 0, text_x, text_y,
-                 e->theme.tokens[TOK_DEFAULT]);
+        draw_seg(e, line_buf, 0, line_bytes, 0, text_x, text_y, def);
         return;
     }
 
-    /* Con tokens: en orden, los huecos (sin token) en color por defecto y cada
-     * token con el color de su tipo. Los tokens del lexer vienen en BYTES; aquí
-     * se posicionan por COLUMNAS de carácter (draw_seg) para alinear multibyte.
+    /* Con tramos: en orden, los huecos (sin tramo) en color por defecto y cada
+     * tramo con SU color. Los tramos vienen en BYTES; aquí se posicionan por
+     * COLUMNAS de carácter (draw_seg) para alinear multibyte.
      * `drawn` = byte ya cubierto; `col` = su columna de caracteres. */
     int drawn = 0, col = 0;
     for (int ti = 0; ti < lt->count; ti++) {
@@ -808,26 +893,24 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         if (tok_end > line_bytes) tok_end = line_bytes;
         if (tok_start < drawn) tok_start = drawn; /* defensivo: solapes */
 
-        /* hueco antes del token */
+        /* hueco antes del tramo */
         if (drawn < tok_start) {
-            draw_seg(e, line_buf, drawn, tok_start, col, text_x, text_y,
-                     e->theme.tokens[TOK_DEFAULT]);
+            draw_seg(e, line_buf, drawn, tok_start, col, text_x, text_y, def);
             col += count_cols(line_buf, drawn, tok_start);
             drawn = tok_start;
         }
-        /* el token */
+        /* el tramo, con su color */
         if (drawn < tok_end) {
             draw_seg(e, line_buf, drawn, tok_end, col, text_x, text_y,
-                     e->theme.tokens[tok->type]);
+                     tok->color);
             col += count_cols(line_buf, drawn, tok_end);
             drawn = tok_end;
         }
     }
 
-    /* texto restante tras el último token (en color por defecto) */
+    /* texto restante tras el último tramo (en color por defecto) */
     if (drawn < line_bytes)
-        draw_seg(e, line_buf, drawn, line_bytes, col, text_x, text_y,
-                 e->theme.tokens[TOK_DEFAULT]);
+        draw_seg(e, line_buf, drawn, line_bytes, col, text_x, text_y, def);
 }
 
 /**

@@ -29,8 +29,16 @@ extern "C" {
  *      proc_on_data / proc_on_exit / proc_kill) y el tick por frame
  *      (register_tick), todo AL FINAL del struct.  El core gestiona los hilos:
  *      la extension solo recibe los datos/salida del hijo en el hilo principal.
- *      Las extensiones v1/v2 siguen cargando (solo no ven estas funciones). */
-#define COFFEE_ABI_VERSION 3u
+ *      Las extensiones v1/v2 siguen cargando (solo no ven estas funciones).
+ *
+ *  v4: anyadido el sistema de resaltado controlado por extensiones
+ *      (register_highlighter para lenguajes con lexer sincrono, y
+ *      set_tokens / clear_tokens para empujar tramos coloreados de forma
+ *      asincrona, p.ej. semantic tokens de un LSP), todo AL FINAL del struct.
+ *      El core ya NO trae resaltador propio: el coloreado lo aportan las
+ *      extensiones (incluido el lenguaje C, que es una extension nativa
+ *      embebida en el ejecutable).  Las extensiones v1/v2/v3 siguen cargando. */
+#define COFFEE_ABI_VERSION 4u
 
 /** Handle opaco del IDE.  Las extensiones lo reciben y lo pasan de vuelta a
  *  cada funcion del CoffeeApi.  Su layout es privado al IDE (ABI estable). */
@@ -121,6 +129,56 @@ typedef void (*CoffeeProcExitFn)(void *userdata, int exit_code);
 
 /** Callback periodico (hilo principal), invocado una vez por frame. */
 typedef void (*CoffeeTickFn)(void *userdata);
+
+/* ====================  RESALTADO DE SINTAXIS (ABI v4)  ==================== */
+/* El core NO trae resaltador propio: las extensiones aportan el coloreado, con
+ * total libertad de tipos de token y colores.  Hay dos mecanismos:
+ *
+ *   (a) register_highlighter -- resaltador SINCRONO "pull" para lenguajes con
+ *       un lexer (como C).  El core llama a la fn por cada linea visible/sucia
+ *       y la extension devuelve sus tramos coloreados.  El estado de "dentro de
+ *       comentario de bloque" se encadena entre lineas (multilinea).
+ *
+ *   (b) set_tokens / clear_tokens -- push ASINCRONO para fuentes que producen
+ *       los tramos por su cuenta (p.ej. semantic tokens de un servidor LSP).
+ *       La extension fija los tramos de cada linea cuando los tiene; tienen
+ *       PRIORIDAD sobre el resaltador sincrono. */
+
+/**
+ * @brief Un tramo coloreado dentro de una linea (la unidad del resaltado).
+ *
+ * @c start_col y @c len cuentan COLUMNAS DE CARACTER (codepoints), no bytes, de
+ * modo que el texto multibyte (acentos, emojis) queda bien alineado.  @c color
+ * es RGBA libre: cada lenguaje elige su paleta.
+ */
+typedef struct {
+    uint32_t start_col; /**< columna de inicio (0-based, en codepoints) */
+    uint32_t len;       /**< longitud del tramo en codepoints */
+    CoffeeColor color;  /**< color RGBA del tramo */
+} CoffeeSpan;
+
+/**
+ * @brief Resaltador sincrono de una linea (lo registra una extension de lenguaje).
+ *
+ * El core la invoca por cada linea a colorear con el texto UTF-8 de la linea (sin
+ * el '\n').  La extension escribe sus tramos en @p out (hasta @p max_out) y
+ * devuelve cuantos escribio.  Para soportar comentarios de bloque multilinea,
+ * @p in_block_comment indica si la linea EMPIEZA dentro de un bloque, y el bit de
+ * estado de salida se comunica via @p out_block (1 si la linea TERMINA dentro de
+ * un bloque); @p out_block puede ser NULL si el lenguaje no lo necesita.
+ *
+ * @param ud               userdata pasado en register_highlighter.
+ * @param line_utf8        Texto de la linea (UTF-8, sin terminar en NUL garantizado).
+ * @param line_len         Longitud de la linea en BYTES.
+ * @param in_block_comment 1 si la linea empieza dentro de un bloque de comentario.
+ * @param[out] out         Destino de los tramos (puede ser NULL si max_out==0).
+ * @param max_out          Capacidad de @p out en numero de tramos.
+ * @param[out] out_block   Recibe 1 si la linea termina dentro de un bloque (o NULL).
+ * @return Numero de tramos escritos en @p out.
+ */
+typedef int (*CoffeeHighlightFn)(void *ud, const char *line_utf8, int line_len,
+                                 int in_block_comment, CoffeeSpan *out,
+                                 int max_out, int *out_block);
 
 /**
  * @brief API que el IDE expone a las extensiones.
@@ -301,6 +359,30 @@ typedef struct CoffeeApi {
      *  fuera de rango.  Devuelve 1 si el archivo se abrio, 0 si no.  Lo usa, por
      *  ejemplo, go-to-definition de un servidor LSP. */
     int (*goto_location)(CoffeeHost *h, const char *path, int line, int col);
+
+    /* ---- Resaltado de sintaxis (ABI v4) ----
+     * NOTA ABI: punteros anyadidos AL FINAL del struct; las extensiones v1/v2/v3
+     * compiladas contra el layout anterior siguen siendo compatibles (cargan;
+     * solo no ven estas funciones). */
+
+    /** Registra un resaltador SINCRONO @p fn para las extensiones de archivo
+     *  @p exts (cada una incluyendo el punto, p.ej. ".c", ".h"), @p n_exts en
+     *  total.  El core lo invoca por cada linea a colorear de un archivo cuya
+     *  extension coincida.  Devuelve 0 si quedo registrado, !=0 en error. */
+    int (*register_highlighter)(CoffeeHost *h, const char *const *exts,
+                                int n_exts, CoffeeHighlightFn fn, void *ud);
+
+    /** Fija (reemplaza) los tramos coloreados de la linea @p line del BUFFER
+     *  ACTIVO (push asincrono, p.ej. semantic tokens de un LSP).  @p spans son
+     *  @p count tramos en COLUMNAS DE CARACTER; el core COPIA su contenido.  Los
+     *  tramos pushed tienen prioridad sobre el resaltador sincrono.  @p count==0
+     *  limpia los tramos de esa linea. */
+    void (*set_tokens)(CoffeeHost *h, uint32_t line, const CoffeeSpan *spans,
+                       int count);
+
+    /** Descarta TODOS los tramos pushed del BUFFER ACTIVO (vuelve al resaltador
+     *  sincrono / texto plano).  Lo usa una extension al re-analizar el archivo. */
+    void (*clear_tokens)(CoffeeHost *h);
 } CoffeeApi;
 
 /**

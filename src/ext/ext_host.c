@@ -180,6 +180,37 @@ typedef struct {
 } HostDeco;
 
 /**
+ * @brief Un resaltador sincrono registrado por una extension (ABI v4).
+ *
+ * Asocia una funcion de tokenizado a un conjunto de extensiones de archivo
+ * (cada una incluyendo el punto, p.ej. ".c").  El core elige el resaltador por
+ * la extension del archivo abierto y lo invoca por cada linea a colorear.
+ */
+typedef struct {
+    char **exts;         /**< extensiones de archivo (".c", ".h", ...) */
+    size_t n_exts;       /**< numero de extensiones */
+    CoffeeHighlightFn fn;/**< funcion de tokenizado por linea */
+    void *ud;            /**< userdata de la funcion */
+    int owner;           /**< extension dueña (registro por-ext) */
+} HostHighlighter;
+
+/**
+ * @brief Tramos coloreados pushed para una linea de un buffer (set_tokens).
+ *
+ * Se asocian al @c Buffer al que pertenecen, de modo que cada archivo/pestana
+ * lleva los suyos (push asincrono de p.ej. semantic tokens de un LSP).  Tienen
+ * PRIORIDAD sobre el resaltador sincrono.  @c spans es un array heap propiedad
+ * del host (copia del contenido pasado a set_tokens).
+ */
+typedef struct {
+    const Buffer *buffer; /**< buffer al que pertenece (no se libera aqui) */
+    uint32_t line;        /**< linea (0-based) */
+    CoffeeSpan *spans;    /**< tramos (array heap propiedad del host) */
+    int count;            /**< numero de tramos (>=0) */
+    int owner;            /**< extension dueña (registro por-ext) */
+} HostLineTokens;
+
+/**
  * @brief Implementacion concreta del handle opaco @c CoffeeHost.
  *
  * Las extensiones reciben un @c CoffeeHost* y lo pasan de vuelta a cada funcion
@@ -204,6 +235,10 @@ struct CoffeeHost {
     size_t view_count, view_cap;
     HostDeco *decos; /**< decoraciones de linea por-buffer (fondo + gutter) */
     size_t deco_count, deco_cap;
+    HostHighlighter *hls; /**< resaltadores sincronos por extension (ABI v4) */
+    size_t hl_count, hl_cap;
+    HostLineTokens *toks; /**< tramos pushed por-buffer/linea (ABI v4) */
+    size_t tok_count, tok_cap;
 
     /** Indice de la extension que se esta registrando ahora mismo (para
      *  atribuir lo que registre).  -1 cuando no hay registro en curso. */
@@ -614,6 +649,129 @@ static void api_clear_decorations(CoffeeHost *h) {
     }
 }
 
+/* ---- Resaltado de sintaxis (ABI v4) ---- */
+
+/* Compara dos extensiones de archivo ignorando mayusculas/minusculas.  Ambas
+ * incluyen el punto (".c").  Iguales solo si terminan a la vez. */
+static int host_ext_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    for (; *a && *b; ++a, ++b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+    }
+    return *a == *b;
+}
+
+/* Devuelve la extension (incluido el punto) de @p path, o NULL si no tiene. */
+static const char *host_path_ext(const char *path) {
+    if (!path || !path[0]) return NULL;
+    const char *dot = strrchr(path, '.');
+    return (dot && dot[1]) ? dot : NULL;
+}
+
+/* Busca el resaltador registrado para la extension @p ext; NULL si no hay. */
+static HostHighlighter *host_find_highlighter(CoffeeHost *h, const char *ext) {
+    if (!h || !ext) return NULL;
+    for (size_t i = 0; i < h->hl_count; ++i) {
+        HostHighlighter *hl = &h->hls[i];
+        for (size_t k = 0; k < hl->n_exts; ++k)
+            if (host_ext_eq(hl->exts[k], ext)) return hl;
+    }
+    return NULL;
+}
+
+static int api_register_highlighter(CoffeeHost *h, const char *const *exts,
+                                    int n_exts, CoffeeHighlightFn fn, void *ud) {
+    if (!h || !fn || !exts || n_exts <= 0) return -1;
+    if (!host_grow((void **)&h->hls, &h->hl_cap, h->hl_count,
+                   sizeof(HostHighlighter)))
+        return -2;
+    HostHighlighter *hl = &h->hls[h->hl_count];
+    /* copiar el array de extensiones (cada cadena con strdup) */
+    hl->exts = (char **)calloc((size_t)n_exts, sizeof(char *));
+    if (!hl->exts) return -3;
+    hl->n_exts = 0;
+    for (int i = 0; i < n_exts; ++i) {
+        if (!exts[i]) continue;
+        char *cp = host_strdup(exts[i]);
+        if (cp) hl->exts[hl->n_exts++] = cp;
+    }
+    hl->fn = fn;
+    hl->ud = ud;
+    hl->owner = h->registering;
+    h->hl_count++;
+    return 0;
+}
+
+/* Busca los tramos pushed de (buffer, line); -1 si no hay. */
+static int host_find_toks(CoffeeHost *h, const Buffer *buf, uint32_t line) {
+    for (size_t i = 0; i < h->tok_count; ++i)
+        if (h->toks[i].buffer == buf && h->toks[i].line == line)
+            return (int)i;
+    return -1;
+}
+
+/* Elimina la entrada de tramos del indice @p i (swap-remove, libera el array). */
+static void host_toks_remove_at(CoffeeHost *h, size_t i) {
+    free(h->toks[i].spans);
+    h->toks[i] = h->toks[--h->tok_count]; /* swap-remove */
+}
+
+static void api_set_tokens(CoffeeHost *h, uint32_t line, const CoffeeSpan *spans,
+                           int count) {
+    if (!h) return;
+    const Buffer *buf = h->backend.buffer; /* buffer activo */
+    if (!buf) return;
+    if (count < 0) count = 0;
+    int idx = host_find_toks(h, buf, line);
+    /* count==0 = limpiar los tramos de esa linea */
+    if (count == 0) {
+        if (idx >= 0) host_toks_remove_at(h, (size_t)idx);
+        return;
+    }
+    /* copiar los tramos a un array propio del host */
+    CoffeeSpan *copy = (CoffeeSpan *)malloc((size_t)count * sizeof(CoffeeSpan));
+    if (!copy) return;
+    if (spans) memcpy(copy, spans, (size_t)count * sizeof(CoffeeSpan));
+    if (idx >= 0) { /* reemplazar la entrada existente */
+        free(h->toks[idx].spans);
+        h->toks[idx].spans = copy;
+        h->toks[idx].count = count;
+        h->toks[idx].owner = h->registering;
+        return;
+    }
+    if (!host_grow((void **)&h->toks, &h->tok_cap, h->tok_count,
+                   sizeof(HostLineTokens))) {
+        free(copy);
+        return;
+    }
+    HostLineTokens *t = &h->toks[h->tok_count++];
+    t->buffer = buf;
+    t->line = line;
+    t->spans = copy;
+    t->count = count;
+    t->owner = h->registering;
+}
+
+/* clear_tokens: descarta TODOS los tramos pushed del buffer activo por la
+ * extension en curso.  Si no hay extension en curso (registering<0), limpia los
+ * del buffer activo sin filtrar por dueña (uso desde el propio IDE). */
+static void api_clear_tokens(CoffeeHost *h) {
+    if (!h) return;
+    const Buffer *buf = h->backend.buffer;
+    if (!buf) return;
+    for (size_t i = 0; i < h->tok_count;) {
+        int same_owner = (h->registering < 0) ||
+                         (h->toks[i].owner == h->registering);
+        if (h->toks[i].buffer == buf && same_owner)
+            host_toks_remove_at(h, i); /* swap-remove: NO incrementar i */
+        else
+            ++i;
+    }
+}
+
 /* ---- Inter-extension: servicios y dependencias ---- */
 
 static int api_register_service(CoffeeHost *h, const char *name, void *iface) {
@@ -802,6 +960,10 @@ static void host_fill_api(CoffeeHost *h) {
 
     a->workspace_root = api_workspace_root;
     a->goto_location = api_goto_location;
+
+    a->register_highlighter = api_register_highlighter;
+    a->set_tokens = api_set_tokens;
+    a->clear_tokens = api_clear_tokens;
 }
 
 /* ===========================================================================
@@ -874,6 +1036,23 @@ static void host_revoke_owner(CoffeeHost *h, int owner) {
         else
             ++i;
     }
+    /* resaltadores sincronos (ABI v4) */
+    for (size_t i = 0; i < h->hl_count;) {
+        if (h->hls[i].owner == owner) {
+            for (size_t k = 0; k < h->hls[i].n_exts; ++k) free(h->hls[i].exts[k]);
+            free(h->hls[i].exts);
+            h->hls[i] = h->hls[--h->hl_count]; /* swap-remove */
+        } else {
+            ++i;
+        }
+    }
+    /* tramos pushed (ABI v4) */
+    for (size_t i = 0; i < h->tok_count;) {
+        if (h->toks[i].owner == owner)
+            host_toks_remove_at(h, i); /* libera array + swap-remove */
+        else
+            ++i;
+    }
 }
 
 void ext_host_destroy(CoffeeHost *host) {
@@ -905,11 +1084,20 @@ void ext_host_destroy(CoffeeHost *host) {
         free(host->exts[i].dir);
     }
     for (size_t i = 0; i < host->deco_count; ++i) free(host->decos[i].glyph);
+    /* resaltadores + tramos pushed (ABI v4) */
+    for (size_t i = 0; i < host->hl_count; ++i) {
+        for (size_t k = 0; k < host->hls[i].n_exts; ++k)
+            free(host->hls[i].exts[k]);
+        free(host->hls[i].exts);
+    }
+    for (size_t i = 0; i < host->tok_count; ++i) free(host->toks[i].spans);
     free(host->cmds);
     free(host->subs);
     free(host->svcs);
     free(host->views);
     free(host->decos);
+    free(host->hls);
+    free(host->toks);
     free(host->cfgs);
     free(host->exts);
     free(host->ext_dir_cache);
@@ -1011,6 +1199,58 @@ void ext_host_drop_buffer(CoffeeHost *host, const Buffer *buffer) {
         else
             ++i;
     }
+    /* tambien los tramos pushed asociados a ese buffer (ABI v4) */
+    for (size_t i = 0; i < host->tok_count;) {
+        if (host->toks[i].buffer == buffer)
+            host_toks_remove_at(host, i); /* swap-remove: NO incrementar i */
+        else
+            ++i;
+    }
+}
+
+/* ===========================================================================
+ *  Resaltado de sintaxis: accesores que consulta el render (ABI v4)
+ * =========================================================================== */
+
+int ext_host_has_highlighter(CoffeeHost *host, const char *path) {
+    if (!host) return 0;
+    const char *ext = host_path_ext(path);
+    if (!ext) return 0;
+    return host_find_highlighter(host, ext) != NULL;
+}
+
+int ext_host_highlight_line(CoffeeHost *host, const char *path,
+                            const char *line_utf8, int line_len, int in_block,
+                            CoffeeSpan *out, int max_out, int *out_block) {
+    if (out_block) *out_block = 0;
+    if (!host) return -1;
+    const char *ext = host_path_ext(path);
+    if (!ext) return -1;
+    HostHighlighter *hl = host_find_highlighter(host, ext);
+    if (!hl) return -1;
+    return hl->fn(hl->ud, line_utf8, line_len, in_block, out, max_out,
+                  out_block);
+}
+
+int ext_host_line_tokens(CoffeeHost *host, const Buffer *buffer, size_t line,
+                         CoffeeSpan *out, int max_out) {
+    if (!host || !buffer) return -1;
+    int idx = host_find_toks(host, buffer, (uint32_t)line);
+    if (idx < 0) return -1;
+    HostLineTokens *t = &host->toks[idx];
+    int n = t->count;
+    if (out && max_out > 0) {
+        int copy = (n < max_out) ? n : max_out;
+        for (int i = 0; i < copy; ++i) out[i] = t->spans[i];
+    }
+    return n;
+}
+
+int ext_host_has_pushed_tokens(CoffeeHost *host, const Buffer *buffer) {
+    if (!host || !buffer) return 0;
+    for (size_t i = 0; i < host->tok_count; ++i)
+        if (host->toks[i].buffer == buffer) return 1;
+    return 0;
 }
 
 /* ===========================================================================
