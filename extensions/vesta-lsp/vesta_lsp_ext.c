@@ -890,6 +890,550 @@ static void vl_flush_change(VlState *st) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Inspector del ecosistema: comandos que invocan los metodos "vesta/*" sobre */
+/* el .vex activo y vuelcan el resultado formateado al panel inferior.        */
+/* ------------------------------------------------------------------------- */
+
+/* Identificador y titulo del canal del inspector en el panel inferior. */
+#define VESTA_INSP_CHAN "vesta-inspector"
+
+/* Codigos SGR ANSI usados por el formateo del inspector. */
+#define INSP_HEAD   "\x1b[1;36m" /* cabecera: cyan en negrita */
+#define INSP_KEY    "\x1b[36m"   /* clave/etiqueta: cyan */
+#define INSP_WARN   "\x1b[33m"   /* aviso (unsupported/incompatible): amarillo */
+#define INSP_ERR    "\x1b[31m"   /* error: rojo */
+#define INSP_OK     "\x1b[32m"   /* ok / afirmativo: verde */
+#define INSP_DIM    "\x1b[90m"   /* secundario: gris */
+#define INSP_RST    "\x1b[0m"    /* reset */
+
+/**
+ * @brief Contexto que viaja con cada peticion del inspector hasta su callback.
+ *
+ * Como @c lsp_vesta_request no propaga el nombre del metodo a su callback,
+ * adjuntamos aqui el codigo del metodo (para elegir el formateo) y el estado de
+ * la extension.  Se reserva por peticion y se libera al recibir la respuesta.
+ */
+typedef enum {
+    INSP_M_BYTECODE = 0,
+    INSP_M_IR,
+    INSP_M_JITASM,
+    INSP_M_AOTASM,
+    INSP_M_AOTCOMPAT,
+    INSP_M_COMPLEXITY,
+    INSP_M_DIAGRAM,
+    INSP_M_FUNCTIONS,
+    INSP_M_MACROS,
+    INSP_M_COMPTIME
+} InspMethod;
+
+typedef struct {
+    VlState   *st;     /**< estado de la extension. */
+    InspMethod method; /**< que metodo se pidio (selecciona el formateo). */
+    char      *label;  /**< etiqueta legible para la cabecera (heap). */
+} InspReq;
+
+/** Numero (cJSON) -> entero, con valor por defecto si no es numero. */
+static int insp_num(const cJSON *o, const char *key, int dflt) {
+    const cJSON *j = cJSON_GetObjectItemCaseSensitive(o, key);
+    return cJSON_IsNumber(j) ? (int)j->valuedouble : dflt;
+}
+
+/** String (cJSON) -> const char*, con valor por defecto si no es string. */
+static const char *insp_str(const cJSON *o, const char *key, const char *dflt) {
+    const cJSON *j = cJSON_GetObjectItemCaseSensitive(o, key);
+    return cJSON_IsString(j) ? j->valuestring : dflt;
+}
+
+/** Escribe @p text en el canal del inspector (atajo). */
+static void insp_emit(VlState *st, const char *text) {
+    st->api->channel_append(st->host, VESTA_INSP_CHAN, text);
+}
+
+/** Cabecera de seccion: limpia el canal y escribe el titulo + el archivo. */
+static void insp_header(VlState *st, const char *title, VlDoc *doc) {
+    st->api->channel_clear(st->host, VESTA_INSP_CHAN);
+    char buf[1024];
+    snprintf(buf, sizeof buf, INSP_HEAD "== %s ==" INSP_RST "\n", title);
+    insp_emit(st, buf);
+    if (doc && doc->path) {
+        snprintf(buf, sizeof buf, INSP_DIM "%s" INSP_RST "\n\n", doc->path);
+        insp_emit(st, buf);
+    }
+}
+
+/** Vuelca un bloque de texto tal cual al canal (asegurando salto final). */
+static void insp_emit_text_block(VlState *st, const char *text) {
+    if (!text || !text[0]) {
+        insp_emit(st, INSP_DIM "(vacio)" INSP_RST "\n");
+        return;
+    }
+    insp_emit(st, text);
+    size_t n = strlen(text);
+    if (text[n - 1] != '\n') insp_emit(st, "\n");
+}
+
+/* --- Formateadores por metodo (cada uno recibe el "result" del servidor). - */
+
+/** jitAsm / aotAsm: texto del codigo nativo + cabecera de funcion + avisos. */
+static void insp_fmt_text_like(VlState *st, InspMethod m, cJSON *result) {
+    /* jitAsm puede traer { unsupported, reason }; aotAsm { incompatible, reason }. */
+    if (m == INSP_M_JITASM) {
+        cJSON *uns = cJSON_GetObjectItemCaseSensitive(result, "unsupported");
+        if (uns && (cJSON_IsTrue(uns) || cJSON_IsBool(uns))) {
+            char buf[1024];
+            snprintf(buf, sizeof buf,
+                     INSP_WARN "no se pudo compilar a nativo (JIT): %s" INSP_RST
+                               "\n",
+                     insp_str(result, "reason", "(sin motivo)"));
+            insp_emit(st, buf);
+            return;
+        }
+    } else if (m == INSP_M_AOTASM) {
+        cJSON *inc = cJSON_GetObjectItemCaseSensitive(result, "incompatible");
+        if (inc && (cJSON_IsTrue(inc) || cJSON_IsBool(inc))) {
+            char buf[1024];
+            snprintf(buf, sizeof buf,
+                     INSP_WARN "incompatible con AOT: %s" INSP_RST "\n",
+                     insp_str(result, "reason", "(sin motivo)"));
+            insp_emit(st, buf);
+            return;
+        }
+    }
+
+    /* Cabecera de funcion / tamano si el server las trae (jit/aot asm). */
+    const char *fn = insp_str(result, "function", NULL);
+    if (fn) {
+        char buf[512];
+        snprintf(buf, sizeof buf, INSP_KEY "funcion:" INSP_RST " %s", fn);
+        insp_emit(st, buf);
+        cJSON *bytes = cJSON_GetObjectItemCaseSensitive(result, "bytes");
+        if (cJSON_IsNumber(bytes)) {
+            snprintf(buf, sizeof buf, INSP_DIM "  (%d bytes)" INSP_RST,
+                     (int)bytes->valuedouble);
+            insp_emit(st, buf);
+        }
+        insp_emit(st, "\n\n");
+    }
+
+    insp_emit_text_block(st, insp_str(result, "text", NULL));
+}
+
+/** complexity: una linea por funcion (parcial / total / confianza). */
+static void insp_fmt_complexity(VlState *st, cJSON *result) {
+    cJSON *fns = cJSON_GetObjectItemCaseSensitive(result, "functions");
+    if (!cJSON_IsArray(fns) || cJSON_GetArraySize(fns) == 0) {
+        insp_emit(st, INSP_DIM "(sin informacion de complejidad)" INSP_RST "\n");
+        return;
+    }
+    cJSON *f = NULL;
+    cJSON_ArrayForEach(f, fns) {
+        const char *name = insp_str(f, "name", "?");
+        const char *partial = insp_str(f, "partial", "?");
+        const char *total = insp_str(f, "total", "?");
+        const char *conf = insp_str(f, "confidence", NULL);
+        char buf[1024];
+        if (conf)
+            snprintf(buf, sizeof buf,
+                     INSP_KEY "%s" INSP_RST ": parcial=%s  total=%s  " INSP_DIM
+                              "[%s]" INSP_RST "\n",
+                     name, partial, total, conf);
+        else
+            snprintf(buf, sizeof buf,
+                     INSP_KEY "%s" INSP_RST ": parcial=%s  total=%s\n", name,
+                     partial, total);
+        insp_emit(st, buf);
+    }
+}
+
+/** aotCompat: tier + compatible + issues + funciones ok. */
+static void insp_fmt_aotcompat(VlState *st, cJSON *result) {
+    char buf[1280];
+    const char *tier = insp_str(result, "tier", "?");
+    cJSON *jcomp = cJSON_GetObjectItemCaseSensitive(result, "compatible");
+    int compatible = jcomp ? cJSON_IsTrue(jcomp) : 0;
+
+    snprintf(buf, sizeof buf, INSP_KEY "tier:" INSP_RST " %s\n", tier);
+    insp_emit(st, buf);
+    snprintf(buf, sizeof buf, INSP_KEY "compatible:" INSP_RST " %s%s" INSP_RST
+                                       "\n",
+             compatible ? INSP_OK : INSP_ERR, compatible ? "si" : "no");
+    insp_emit(st, buf);
+
+    cJSON *issues = cJSON_GetObjectItemCaseSensitive(result, "issues");
+    int n_issues = cJSON_IsArray(issues) ? cJSON_GetArraySize(issues) : 0;
+    if (n_issues > 0) {
+        snprintf(buf, sizeof buf, "\n" INSP_WARN "problemas (%d):" INSP_RST "\n",
+                 n_issues);
+        insp_emit(st, buf);
+        cJSON *it = NULL;
+        cJSON_ArrayForEach(it, issues) {
+            const char *fn = insp_str(it, "fn_name", "?");
+            int line = insp_num(it, "source_line", 0);
+            const char *op = insp_str(it, "op", "?");
+            const char *reason = insp_str(it, "reason", "");
+            snprintf(buf, sizeof buf,
+                     INSP_WARN "  %s:%d" INSP_RST "  %s -> %s\n", fn, line, op,
+                     reason);
+            insp_emit(st, buf);
+        }
+    } else {
+        insp_emit(st, "\n" INSP_OK "sin problemas" INSP_RST "\n");
+    }
+
+    cJSON *ok = cJSON_GetObjectItemCaseSensitive(result, "ok_functions");
+    if (cJSON_IsArray(ok)) {
+        snprintf(buf, sizeof buf, "\n" INSP_KEY "funciones ok (%d):" INSP_RST
+                                  "\n",
+                 cJSON_GetArraySize(ok));
+        insp_emit(st, buf);
+        cJSON *e = NULL;
+        cJSON_ArrayForEach(e, ok) {
+            if (cJSON_IsString(e)) {
+                snprintf(buf, sizeof buf, "  %s\n", e->valuestring);
+                insp_emit(st, buf);
+            }
+        }
+    } else if (cJSON_IsNumber(ok)) {
+        snprintf(buf, sizeof buf, "\n" INSP_KEY "funciones ok:" INSP_RST
+                                  " %d\n",
+                 (int)ok->valuedouble);
+        insp_emit(st, buf);
+    }
+}
+
+/** functions: "nombre  (linea N)" por funcion. */
+static void insp_fmt_functions(VlState *st, cJSON *result) {
+    cJSON *fns = cJSON_GetObjectItemCaseSensitive(result, "functions");
+    if (!cJSON_IsArray(fns) || cJSON_GetArraySize(fns) == 0) {
+        insp_emit(st, INSP_DIM "(sin funciones)" INSP_RST "\n");
+        return;
+    }
+    cJSON *f = NULL;
+    cJSON_ArrayForEach(f, fns) {
+        const char *name = insp_str(f, "name", "?");
+        int line = insp_num(f, "line", 0);
+        char buf[768];
+        snprintf(buf, sizeof buf, INSP_KEY "%s" INSP_RST "  " INSP_DIM
+                                           "(linea %d)" INSP_RST "\n",
+                 name, line);
+        insp_emit(st, buf);
+    }
+}
+
+/** macroExpand: por expansion el nombre + sitio + el codigo generado; skipped. */
+static void insp_fmt_macros(VlState *st, cJSON *result) {
+    char buf[1536];
+    cJSON *exps = cJSON_GetObjectItemCaseSensitive(result, "expansions");
+    int n_exp = cJSON_IsArray(exps) ? cJSON_GetArraySize(exps) : 0;
+    if (n_exp > 0) {
+        snprintf(buf, sizeof buf, INSP_HEAD "expansiones (%d):" INSP_RST "\n",
+                 n_exp);
+        insp_emit(st, buf);
+        cJSON *e = NULL;
+        cJSON_ArrayForEach(e, exps) {
+            const char *name = insp_str(e, "macro_name", "?");
+            const char *loc = insp_str(e, "call_site_loc", "");
+            snprintf(buf, sizeof buf, "\n" INSP_KEY "%s" INSP_RST " @ %s\n",
+                     name, loc);
+            insp_emit(st, buf);
+            const char *args = insp_str(e, "args", NULL);
+            if (args && args[0]) {
+                snprintf(buf, sizeof buf, INSP_DIM "  args: %s" INSP_RST "\n",
+                         args);
+                insp_emit(st, buf);
+            }
+            insp_emit_text_block(st, insp_str(e, "generated_code", NULL));
+        }
+    } else {
+        insp_emit(st, INSP_DIM "(sin expansiones)" INSP_RST "\n");
+    }
+
+    cJSON *skip = cJSON_GetObjectItemCaseSensitive(result, "skipped");
+    int n_skip = cJSON_IsArray(skip) ? cJSON_GetArraySize(skip) : 0;
+    if (n_skip > 0) {
+        snprintf(buf, sizeof buf, "\n" INSP_WARN "omitidas (%d):" INSP_RST "\n",
+                 n_skip);
+        insp_emit(st, buf);
+        cJSON *s = NULL;
+        cJSON_ArrayForEach(s, skip) {
+            const char *name = insp_str(s, "macro_name", "?");
+            const char *reason = insp_str(s, "reason", "");
+            snprintf(buf, sizeof buf, INSP_WARN "  %s" INSP_RST " -> %s\n", name,
+                     reason);
+            insp_emit(st, buf);
+        }
+    }
+}
+
+/** comptimeValues: "nombre [tipo] = valor" por entrada. */
+static void insp_fmt_comptime(VlState *st, cJSON *result) {
+    cJSON *vals = cJSON_GetObjectItemCaseSensitive(result, "values");
+    if (!cJSON_IsArray(vals) || cJSON_GetArraySize(vals) == 0) {
+        insp_emit(st, INSP_DIM "(sin valores comptime)" INSP_RST "\n");
+        return;
+    }
+    cJSON *v = NULL;
+    cJSON_ArrayForEach(v, vals) {
+        const char *name = insp_str(v, "name", "?");
+        const char *type = insp_str(v, "type_kind", NULL);
+        const char *scope = insp_str(v, "scope", NULL);
+        const char *value = insp_str(v, "value_str", "?");
+        char buf[1280];
+        if (type)
+            snprintf(buf, sizeof buf,
+                     INSP_KEY "%s" INSP_RST " " INSP_DIM "[%s]" INSP_RST
+                              " = %s%s%s\n",
+                     name, type, value, scope ? INSP_DIM "  " : "",
+                     scope ? scope : "");
+        else
+            snprintf(buf, sizeof buf, INSP_KEY "%s" INSP_RST " = %s\n", name,
+                     value);
+        insp_emit(st, buf);
+    }
+}
+
+/** Callback unico del inspector: despacha al formateador segun el metodo. */
+static void insp_on_result(void *ud, cJSON *result, cJSON *error) {
+    InspReq *req = (InspReq *)ud;
+    if (!req) return;
+    VlState *st = req->st;
+
+    if (error) {
+        const char *msg = insp_str(error, "message", NULL);
+        char buf[1024];
+        snprintf(buf, sizeof buf,
+                 "\n" INSP_ERR "el servidor devolvio un error: %s" INSP_RST "\n",
+                 msg ? msg : "(sin detalle)");
+        insp_emit(st, buf);
+    } else if (!result) {
+        insp_emit(st, "\n" INSP_WARN "respuesta vacia del servidor" INSP_RST
+                      "\n");
+    } else {
+        switch (req->method) {
+        case INSP_M_BYTECODE:
+        case INSP_M_IR:
+        case INSP_M_DIAGRAM:
+            insp_emit_text_block(st, insp_str(result, "text", NULL));
+            break;
+        case INSP_M_JITASM:
+        case INSP_M_AOTASM:
+            insp_fmt_text_like(st, req->method, result);
+            break;
+        case INSP_M_AOTCOMPAT:
+            insp_fmt_aotcompat(st, result);
+            break;
+        case INSP_M_COMPLEXITY:
+            insp_fmt_complexity(st, result);
+            break;
+        case INSP_M_FUNCTIONS:
+            insp_fmt_functions(st, result);
+            break;
+        case INSP_M_MACROS:
+            insp_fmt_macros(st, result);
+            break;
+        case INSP_M_COMPTIME:
+            insp_fmt_comptime(st, result);
+            break;
+        default:
+            break;
+        }
+    }
+
+    st->api->request_repaint(st->host);
+    free(req->label);
+    free(req);
+}
+
+/**
+ * @brief Resuelve el documento .vex ACTIVO para una peticion del inspector.
+ *
+ * Devuelve el VlDoc del buffer en pantalla si es .vex y el servidor esta listo;
+ * en caso contrario escribe el motivo en el canal y devuelve NULL.
+ */
+static VlDoc *insp_active_doc_or_warn(VlState *st, const char *title) {
+    const char *path = st->api->current_path(st->host);
+    if (!path || !vl_is_vex(path)) {
+        insp_header(st, title, NULL);
+        insp_emit(st, INSP_WARN "el archivo activo no es un .vex" INSP_RST "\n");
+        st->api->set_status(st->host, "vesta-inspector: el activo no es .vex");
+        return NULL;
+    }
+    if (!st->ready || !st->lsp) {
+        insp_header(st, title, NULL);
+        insp_emit(st, INSP_WARN "el servidor LSP de Vesta no esta listo todavia"
+                                INSP_RST "\n");
+        st->api->set_status(st->host, "vesta-inspector: servidor no listo");
+        return NULL;
+    }
+    VlDoc *doc = vl_get_or_make_doc(st, path);
+    if (!doc || !doc->uri) {
+        insp_header(st, title, NULL);
+        insp_emit(st, INSP_ERR "no se pudo resolver el documento activo" INSP_RST
+                               "\n");
+        return NULL;
+    }
+    return doc;
+}
+
+/**
+ * @brief Lanza una peticion "vesta/*" del inspector sobre el .vex activo.
+ *
+ * Construye params { uri } y le anyade los extras de @p extra (que se consume).
+ * Escribe la cabecera, un aviso "consultando..." y dispara la peticion con un
+ * contexto que selecciona el formateo en la respuesta.
+ */
+static void insp_run(VlState *st, const char *title, const char *method,
+                     InspMethod which, cJSON *extra) {
+    VlDoc *doc = insp_active_doc_or_warn(st, title);
+    if (!doc) {
+        if (extra) cJSON_Delete(extra);
+        return;
+    }
+
+    cJSON *params = cJSON_CreateObject();
+    if (!params) {
+        if (extra) cJSON_Delete(extra);
+        return;
+    }
+    cJSON_AddStringToObject(params, "uri", doc->uri);
+    /* Volcar los pares extra (phase, kind, format, ...) en params. */
+    if (extra) {
+        cJSON *e = extra->child;
+        while (e) {
+            cJSON *nx = e->next;
+            cJSON_DetachItemViaPointer(extra, e);
+            cJSON_AddItemToObject(params, e->string, e);
+            e = nx;
+        }
+        cJSON_Delete(extra);
+    }
+
+    InspReq *req = (InspReq *)calloc(1, sizeof(InspReq));
+    if (!req) {
+        cJSON_Delete(params);
+        return;
+    }
+    req->st = st;
+    req->method = which;
+    req->label = vl_strdup(title);
+
+    insp_header(st, title, doc);
+    insp_emit(st, INSP_DIM "consultando al servidor..." INSP_RST "\n\n");
+    st->api->set_status(st->host, "vesta-inspector: consultando...");
+
+    /* lsp_vesta_request consume params. */
+    lsp_vesta_request(st->lsp, method, params, insp_on_result, req);
+}
+
+/* --- Comandos (uno por vista). --------------------------------------------- */
+
+static void insp_cmd_bytecode(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Bytecode .vel", "vesta/bytecode", INSP_M_BYTECODE,
+             NULL);
+}
+
+static void insp_cmd_ir(CoffeeHost *h, void *ud) {
+    (void)h;
+    cJSON *extra = cJSON_CreateObject();
+    if (extra) cJSON_AddStringToObject(extra, "phase", "post");
+    insp_run((VlState *)ud, "IR (post-opt)", "vesta/ir", INSP_M_IR, extra);
+}
+
+static void insp_cmd_jitasm(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Codigo nativo del JIT", "vesta/jitAsm",
+             INSP_M_JITASM, NULL);
+}
+
+static void insp_cmd_aotasm(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Codigo nativo del AOT", "vesta/aotAsm",
+             INSP_M_AOTASM, NULL);
+}
+
+static void insp_cmd_aotcompat(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Compatibilidad AOT", "vesta/aotCompat",
+             INSP_M_AOTCOMPAT, NULL);
+}
+
+static void insp_cmd_complexity(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Complejidad (Big-O)", "vesta/complexity",
+             INSP_M_COMPLEXITY, NULL);
+}
+
+static void insp_cmd_diagram(CoffeeHost *h, void *ud) {
+    (void)h;
+    cJSON *extra = cJSON_CreateObject();
+    if (extra) {
+        cJSON_AddStringToObject(extra, "kind", "ir-post");
+        cJSON_AddStringToObject(extra, "format", "mermaid");
+    }
+    insp_run((VlState *)ud, "Diagrama (IR post, mermaid)", "vesta/diagram",
+             INSP_M_DIAGRAM, extra);
+}
+
+static void insp_cmd_functions(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Funciones", "vesta/functions", INSP_M_FUNCTIONS,
+             NULL);
+}
+
+static void insp_cmd_macros(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Expansion de macros", "vesta/macroExpand",
+             INSP_M_MACROS, NULL);
+}
+
+static void insp_cmd_comptime(CoffeeHost *h, void *ud) {
+    (void)h;
+    insp_run((VlState *)ud, "Valores comptime", "vesta/comptimeValues",
+             INSP_M_COMPTIME, NULL);
+}
+
+/** Registra el canal, los comandos, sus entradas de menu y un atajo. */
+static void insp_register_commands(VlState *st) {
+    CoffeeHost *h = st->host;
+    const CoffeeApi *api = st->api;
+
+    api->register_output_channel(h, VESTA_INSP_CHAN, "Vesta Inspector");
+
+    struct {
+        const char *id;
+        const char *title;
+        CoffeeCommandFn fn;
+    } CMDS[] = {
+        {"vesta.inspect.bytecode",   "Vesta: ver bytecode .vel",
+         insp_cmd_bytecode},
+        {"vesta.inspect.ir",         "Vesta: ver IR (post-opt)", insp_cmd_ir},
+        {"vesta.inspect.jitasm",     "Vesta: ver codigo nativo del JIT",
+         insp_cmd_jitasm},
+        {"vesta.inspect.aotasm",     "Vesta: ver codigo nativo del AOT",
+         insp_cmd_aotasm},
+        {"vesta.inspect.aotcompat",  "Vesta: compatibilidad AOT",
+         insp_cmd_aotcompat},
+        {"vesta.inspect.complexity", "Vesta: complejidad (Big-O)",
+         insp_cmd_complexity},
+        {"vesta.inspect.diagram",    "Vesta: ver diagrama", insp_cmd_diagram},
+        {"vesta.inspect.functions",  "Vesta: funciones", insp_cmd_functions},
+        {"vesta.inspect.macros",     "Vesta: expansion de macros",
+         insp_cmd_macros},
+        {"vesta.inspect.comptime",   "Vesta: valores comptime",
+         insp_cmd_comptime},
+    };
+
+    for (size_t i = 0; i < sizeof CMDS / sizeof CMDS[0]; ++i) {
+        api->register_command(h, CMDS[i].id, CMDS[i].title, CMDS[i].fn, st);
+        api->add_menu_item(h, "Vesta/Inspector", CMDS[i].id);
+    }
+
+    /* Un atajo de conveniencia para la vista mas usada (bytecode). */
+    api->bind_key(h, "Ctrl+Shift+B", "vesta.inspect.bytecode");
+}
+
+/* ------------------------------------------------------------------------- */
 /* Eventos del IDE.                                                          */
 /* ------------------------------------------------------------------------- */
 
@@ -1146,6 +1690,10 @@ COFFEE_EXTENSION_EXPORT int coffee_extension_register(CoffeeHost *host,
     g_state.svc.server_path = svc_server_path;
     g_state.svc.self = &g_state;
     api->register_service(host, COFFEE_SVC_LSP_NAME, &g_state.svc);
+
+    /* Registrar el inspector del ecosistema: comandos que consultan los metodos
+     * "vesta/*" del servidor y vuelcan el resultado formateado al panel. */
+    insp_register_commands(&g_state);
 
     api->log(host, COFFEE_LOG_INFO, "extension vesta-lsp activada");
     return 0;
