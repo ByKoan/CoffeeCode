@@ -411,9 +411,14 @@ static void vl_on_diagnostics(void *ud, const char *uri, cJSON *diagnostics) {
     }
     if (diagnostics) doc->diagnostics = cJSON_Duplicate(diagnostics, 1);
 
-    /* Si es el documento activo, refrescar la vista. */
+    /* Si es el documento activo, refrescar la vista.  current_path() puede ser
+     * NULL en el instante en que llegan los primeros diagnosticos (apertura por
+     * CLI, antes de poblarse): en ese caso recurrimos al ultimo documento que el
+     * IDE nos notifico abrir (st->last_open). */
     const char *active = st->api->current_path(st->host);
-    if (active && doc->path && strcmp(active, doc->path) == 0) {
+    int is_active = (active && doc->path && strcmp(active, doc->path) == 0) ||
+                    ((!active || !active[0]) && st->last_open == doc);
+    if (is_active) {
         st->api->clear_decorations(st->host);
         vl_apply_decorations(st, doc->diagnostics);
         vl_refresh_problems_channel(st, doc);
