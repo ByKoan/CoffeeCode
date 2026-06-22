@@ -599,7 +599,12 @@ int editor_init(Editor *e, const char *filepath) {
             /* Lenguaje base EMBEBIDO: el C es la unica extension de lenguaje
              * integrada en el ejecutable.  Se registra en proceso (con la misma
              * API que las DLLs) ANTES de cargar las extensiones externas, y
-             * colorea leyendo el tema vivo del editor (&e->theme es estable). */
+             * colorea leyendo el tema vivo del editor (&e->theme es estable).
+             * Primero su entrada en el panel de extensiones (nativa, no
+             * descargable); luego el resaltador. */
+            ext_host_register_builtin(
+                host, "lang-c", "C / C++", "1.0.0", "CoffeeCode",
+                "Resaltado de sintaxis de C/C++ embebido (lenguaje base)");
             coffee_builtin_c_register(host, ext_host_api(host), &e->theme);
             const char *base = SDL_GetBasePath();
             char extdir[1024];

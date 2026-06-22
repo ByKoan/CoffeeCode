@@ -89,6 +89,12 @@ typedef struct VlState {
     CoffeeColor *palette; /**< color por indice de la leyenda (heap), o NULL. */
     int *palette_set;     /**< 1 si el indice tiene color asignado (heap). */
     int palette_n;        /**< numero de entradas (= tamano de la leyenda). */
+
+    /* Inline hints (ghost text): lineas donde pusimos un valor comptime, para
+     * poder limpiarlas antes de re-aplicar tras un nuevo analisis. */
+    size_t *hint_lines;   /**< lineas (0-based) con hint puesto (heap). */
+    size_t hint_count;    /**< numero de hints activos. */
+    size_t hint_cap;      /**< capacidad del array. */
 } VlState;
 
 /* Singleton: el core carga una sola instancia de la extension. */
@@ -98,6 +104,20 @@ static VlState g_state;
  * archivo) refresca el resaltado semantico, cuya rutina vive mas abajo. */
 static void vl_request_semantic_tokens(VlState *st, VlDoc *doc);
 static void vl_build_palette(VlState *st);
+
+/* Indice de lineas del buffer activo (helpers definidos mas abajo).  Se usa
+ * desde vl_apply_decorations para convertir columnas UTF-16 (las del LSP) a
+ * codepoints (las que entiende el render). */
+typedef struct VlLineIndex {
+    const char *text; /**< texto completo (no propio). */
+    size_t len;       /**< longitud en bytes. */
+    size_t *starts;   /**< offset de inicio de cada linea (heap). */
+    int n_lines;      /**< numero de lineas. */
+} VlLineIndex;
+static int vl_line_index_build(VlLineIndex *ix, const char *text, size_t len);
+static void vl_line_index_free(VlLineIndex *ix);
+static void vl_line_text(const VlLineIndex *ix, uint32_t line,
+                         const char **out_ptr, size_t *out_len);
 
 /* ------------------------------------------------------------------------- */
 /* Utilidades.                                                               */
@@ -332,11 +352,21 @@ static const char *vl_sev_text(int sev) {
 static void vl_apply_decorations(VlState *st, cJSON *diags) {
     const CoffeeApi *api = st->api;
     if (!diags) return;
+
+    /* Indexar el buffer activo para convertir columnas UTF-16 (LSP) a
+     * codepoints (las del render).  Solo hace falta para los subrayados de
+     * rango; el gutter/fondo van por linea y no necesitan columnas. */
+    char *text = vl_read_active_buffer(st);
+    VlLineIndex ix;
+    int have_ix = text && vl_line_index_build(&ix, text, strlen(text));
+
     cJSON *d = NULL;
     cJSON_ArrayForEach(d, diags) {
         cJSON *range = cJSON_GetObjectItemCaseSensitive(d, "range");
         cJSON *start = range
                            ? cJSON_GetObjectItemCaseSensitive(range, "start")
+                           : NULL;
+        cJSON *end = range ? cJSON_GetObjectItemCaseSensitive(range, "end")
                            : NULL;
         cJSON *jline = start
                            ? cJSON_GetObjectItemCaseSensitive(start, "line")
@@ -348,11 +378,62 @@ static void vl_apply_decorations(VlState *st, cJSON *diags) {
         cJSON *jsev = cJSON_GetObjectItemCaseSensitive(d, "severity");
         int sev = cJSON_IsNumber(jsev) ? (int)jsev->valuedouble : 1;
 
+        /* gutter + fondo tenue en la linea de inicio (como antes). */
         const char *glyph = (sev == 1) ? "x" : "!";
         api->set_gutter_marker(st->host, (size_t)line, glyph,
                                vl_sev_color(sev));
         api->set_line_background(st->host, (size_t)line, vl_sev_bg(sev));
+
+        /* subrayado ondulado del rango exacto (ABI v5).  Defensivo: si el host
+         * no expone set_range_underline (extension cargada en un IDE mas viejo)
+         * o no hay indice, nos quedamos con gutter+fondo. */
+        if (!api->set_range_underline || !have_ix) continue;
+        cJSON *jsc =
+            start ? cJSON_GetObjectItemCaseSensitive(start, "character") : NULL;
+        cJSON *jel = end ? cJSON_GetObjectItemCaseSensitive(end, "line") : NULL;
+        cJSON *jec =
+            end ? cJSON_GetObjectItemCaseSensitive(end, "character") : NULL;
+        if (!cJSON_IsNumber(jsc) || !cJSON_IsNumber(jel) ||
+            !cJSON_IsNumber(jec))
+            continue;
+        int eline = (int)jel->valuedouble;
+        if (eline < line) continue; /* rango invertido: ignorar */
+        uint32_t su16 = (jsc->valuedouble < 0) ? 0u : (uint32_t)jsc->valuedouble;
+        uint32_t eu16 = (jec->valuedouble < 0) ? 0u : (uint32_t)jec->valuedouble;
+        CoffeeColor col = vl_sev_color(sev);
+
+        if (eline == line) {
+            /* mismo renglon: [su16, eu16) -> codepoints. */
+            const char *lp = NULL;
+            size_t ll = 0;
+            vl_line_text(&ix, (uint32_t)line, &lp, &ll);
+            uint32_t s_cp = vex_utf16_units_to_codepoints(lp, ll, su16);
+            uint32_t e_cp = vex_utf16_units_to_codepoints(lp, ll, eu16);
+            if (e_cp <= s_cp) e_cp = s_cp + 1; /* rango de 0 ancho: marcar 1 col */
+            api->set_range_underline(st->host, (size_t)line, s_cp, e_cp, col);
+        } else {
+            /* rango multilinea: subrayar cada renglon del rango (primera desde
+             * su columna, intermedias enteras, ultima hasta su columna). */
+            for (int ln = line; ln <= eline && ln < ix.n_lines; ++ln) {
+                const char *lp = NULL;
+                size_t ll = 0;
+                vl_line_text(&ix, (uint32_t)ln, &lp, &ll);
+                uint32_t line_cp =
+                    vex_utf16_units_to_codepoints(lp, ll, 0xFFFFFFFFu);
+                uint32_t s_cp =
+                    (ln == line) ? vex_utf16_units_to_codepoints(lp, ll, su16)
+                                 : 0u;
+                uint32_t e_cp =
+                    (ln == eline) ? vex_utf16_units_to_codepoints(lp, ll, eu16)
+                                  : line_cp;
+                if (e_cp <= s_cp) e_cp = s_cp + 1;
+                api->set_range_underline(st->host, (size_t)ln, s_cp, e_cp, col);
+            }
+        }
     }
+
+    if (have_ix) vl_line_index_free(&ix);
+    free(text);
 }
 
 /**
@@ -581,12 +662,7 @@ static void vl_build_palette(VlState *st) {
  * conversion UTF-16 -> codepoints.  Las lineas se separan por '\n'; un '\r'
  * final se excluye del rango (no afecta el conteo de columnas).
  */
-typedef struct {
-    const char *text; /**< texto completo (no propio). */
-    size_t len;       /**< longitud en bytes. */
-    size_t *starts;   /**< offset de inicio de cada linea (heap). */
-    int n_lines;      /**< numero de lineas. */
-} VlLineIndex;
+/* struct VlLineIndex: definida arriba (junto a los prototipos adelantados). */
 
 /** Construye el indice de lineas. Devuelve 1 si ok, 0 si fallo de memoria. */
 static int vl_line_index_build(VlLineIndex *ix, const char *text, size_t len) {
@@ -773,11 +849,76 @@ static void vl_on_semantic_tokens(void *ud, cJSON *result, cJSON *error) {
  * en pantalla (su texto es el que usaremos para convertir columnas).  Requiere
  * servidor listo, leyenda capturada y doc abierto.
  */
+/* Color tenue (ghost) de los inline hints de valores comptime. */
+static const CoffeeColor VL_HINT_COLOR = {130, 130, 130, 255};
+
+/* Limpia los inline hints que pusimos antes (texto vacio = quitar). */
+static void vl_clear_inline_hints(VlState *st) {
+    if (!st->api->set_inline_hint) return;
+    CoffeeColor z = {0, 0, 0, 0};
+    for (size_t i = 0; i < st->hint_count; ++i)
+        st->api->set_inline_hint(st->host, st->hint_lines[i], "", z);
+    st->hint_count = 0;
+}
+
+/* Recuerda una linea con hint para poder limpiarla en el proximo refresco. */
+static void vl_remember_hint_line(VlState *st, size_t line) {
+    if (st->hint_count >= st->hint_cap) {
+        size_t nc = st->hint_cap ? st->hint_cap * 2 : 16;
+        size_t *nb = (size_t *)realloc(st->hint_lines, nc * sizeof(size_t));
+        if (!nb) return;
+        st->hint_lines = nb;
+        st->hint_cap = nc;
+    }
+    st->hint_lines[st->hint_count++] = line;
+}
+
+/* Respuesta de vesta/comptimeValues: muestra los valores de los builtins
+ * (sizeof<T>, kind<T>, ...) como ghost text en su linea. */
+static void vl_on_comptime_hints(void *ud, cJSON *result, cJSON *error) {
+    VlState *st = (VlState *)ud;
+    if (!st || error || !result) return;
+    if (!st->api->set_inline_hint) return;
+    vl_clear_inline_hints(st);
+    cJSON *values = cJSON_GetObjectItemCaseSensitive(result, "values");
+    if (!cJSON_IsArray(values)) return;
+    cJSON *v = NULL;
+    cJSON_ArrayForEach(v, values) {
+        cJSON *bk = cJSON_GetObjectItemCaseSensitive(v, "builtin_kind");
+        cJSON *jl = cJSON_GetObjectItemCaseSensitive(v, "line");
+        cJSON *vs = cJSON_GetObjectItemCaseSensitive(v, "value_str");
+        if (!cJSON_IsString(bk) || bk->valuestring[0] == '\0') continue;
+        if (!cJSON_IsNumber(jl) || jl->valuedouble < 1.0) continue;
+        if (!cJSON_IsString(vs)) continue;
+        size_t line0 = (size_t)(jl->valuedouble - 1.0); /* 1-based -> 0-based */
+        char buf[160];
+        snprintf(buf, sizeof(buf), "= %s", vs->valuestring);
+        st->api->set_inline_hint(st->host, line0, buf, VL_HINT_COLOR);
+        vl_remember_hint_line(st, line0);
+    }
+    st->api->request_repaint(st->host);
+}
+
+/* Pide al servidor los valores comptime del .vex activo y los muestra inline. */
+static void vl_refresh_inline_hints(VlState *st) {
+    if (!st->ready || !st->lsp || !st->api->set_inline_hint) return;
+    const char *path = st->api->current_path(st->host);
+    if (!path || !vl_is_vex(path)) return;
+    VlDoc *doc = vl_find_doc_by_path(st, path);
+    if (!doc || !doc->open) return;
+    cJSON *params = cJSON_CreateObject();
+    if (!params) return;
+    cJSON_AddStringToObject(params, "uri", doc->uri);
+    lsp_vesta_request(st->lsp, "vesta/comptimeValues", params,
+                      vl_on_comptime_hints, st);
+}
+
 static void vl_request_semantic_tokens(VlState *st, VlDoc *doc) {
     if (!st->ready || !st->lsp || !doc || !doc->open) return;
     if (!st->palette || st->palette_n <= 0) return;
     if (!vl_doc_is_active(st, doc)) return;
     lsp_semantic_tokens_full(st->lsp, doc->uri, vl_on_semantic_tokens, st);
+    vl_refresh_inline_hints(st); /* + valores comptime como ghost text */
 }
 
 /* ------------------------------------------------------------------------- */

@@ -187,6 +187,9 @@ int render_ext_gutter_marker(Editor *e, int li, int gutter_x, int y) {
     return 1;
 }
 
+/* render_text_underlines (squiggles de diagnostico) vive en render.c, junto a
+ * los helpers col_to_byte / count_cols que alinean las columnas con el texto. */
+
 /* ===========================================================================
  *  render_ext_panel: el panel de extensiones del IDE (marketplace de cargadas)
  * =========================================================================== */
@@ -251,10 +254,11 @@ void render_ext_panel(Editor *e) {
     size_t n = host ? ext_host_count(host) : 0;
     int any = 0;
     for (size_t i = 0; i < n; ++i) {
-        const char *id = NULL, *dir = NULL;
-        int active = 0;
-        if (!ext_host_info(host, i, &id, NULL, &dir, &active)) continue;
+        const char *id = NULL, *name = NULL, *dir = NULL, *version = NULL;
+        int active = 0, is_builtin = 0;
+        if (!ext_host_info(host, i, &id, &name, &dir, &active)) continue;
         if (!active || !id) continue; /* saltar slots libres */
+        ext_host_info_meta(host, i, &version, NULL, NULL, &is_builtin);
         any = 1;
 
         int row_y = cy;
@@ -263,29 +267,40 @@ void render_ext_panel(Editor *e) {
         fill_rect(r, panel_x + EXT_PAD, row_y, panel_w - 2 * EXT_PAD,
                   EXT_ROW_H - 4);
 
-        /* nombre (id) de la extension */
-        char label[64];
+        /* nombre legible (+ version si la hay) de la extension */
+        char full[96];
+        if (version && version[0])
+            snprintf(full, sizeof(full), "%s  v%s", name ? name : id, version);
+        else
+            snprintf(full, sizeof(full), "%s", name ? name : id);
+        char label[96];
         int char_w = (e->char_w > 0 ? e->char_w : 8);
         int max_chars = (panel_w - 2 * EXT_PAD - 8) / char_w;
-        ext_truncate(label, sizeof(label), id, max_chars);
+        ext_truncate(label, sizeof(label), full, max_chars);
         draw_text_c(e, label, panel_x + 2 * EXT_PAD, row_y + 4,
                     e->theme.ftree_txt_dir);
 
-        /* estado "activa" + botones recargar / descargar */
-        draw_text_c(e, "activa", panel_x + 2 * EXT_PAD, row_y + 4 + e->font_size,
-                    e->theme.ftree_txt_file);
+        if (is_builtin) {
+            /* nativa embebida: sin DLL, no se puede recargar ni descargar. */
+            draw_text_c(e, "nativa (integrada)", panel_x + 2 * EXT_PAD,
+                        row_y + 4 + e->font_size, e->theme.ftree_txt_file);
+        } else {
+            /* estado "activa" + botones recargar / descargar */
+            draw_text_c(e, "activa", panel_x + 2 * EXT_PAD,
+                        row_y + 4 + e->font_size, e->theme.ftree_txt_file);
 
-        int btn_y = row_y + 4 + e->font_size;
-        Rect rel = {panel_x + panel_w - EXT_PAD - 2 * EXT_BTN_W - 6, btn_y,
-                    EXT_BTN_W, EXT_BTN_H};
-        Rect unl = {panel_x + panel_w - EXT_PAD - EXT_BTN_W, btn_y, EXT_BTN_W,
-                    EXT_BTN_H};
-        ui_button(e, UI_ID_NONE, rel, "recargar", &e->theme.style_button,
-                  UI_NORMAL);
-        ui_put_idx(&e->ui, UI_LIST_EXT_RELOAD, (int)i, rel);
-        ui_button(e, UI_ID_NONE, unl, "descargar", &e->theme.style_button,
-                  UI_NORMAL);
-        ui_put_idx(&e->ui, UI_LIST_EXT_UNLOAD, (int)i, unl);
+            int btn_y = row_y + 4 + e->font_size;
+            Rect rel = {panel_x + panel_w - EXT_PAD - 2 * EXT_BTN_W - 6, btn_y,
+                        EXT_BTN_W, EXT_BTN_H};
+            Rect unl = {panel_x + panel_w - EXT_PAD - EXT_BTN_W, btn_y, EXT_BTN_W,
+                        EXT_BTN_H};
+            ui_button(e, UI_ID_NONE, rel, "recargar", &e->theme.style_button,
+                      UI_NORMAL);
+            ui_put_idx(&e->ui, UI_LIST_EXT_RELOAD, (int)i, rel);
+            ui_button(e, UI_ID_NONE, unl, "descargar", &e->theme.style_button,
+                      UI_NORMAL);
+            ui_put_idx(&e->ui, UI_LIST_EXT_UNLOAD, (int)i, unl);
+        }
 
         cy += EXT_ROW_H;
         if (cy > panel_y + panel_h - EXT_ROW_H) break; /* lleno */

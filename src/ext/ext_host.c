@@ -141,9 +141,16 @@ typedef struct {
 /** @brief Estado de una extension cargada. */
 typedef struct {
     char *id;          /**< id del manifiesto */
-    char *dir;         /**< directorio de la extension (copia) */
-    coffee_dll_t dll;  /**< handle de la DLL */
+    char *dir;         /**< directorio de la extension (copia; NULL si builtin) */
+    coffee_dll_t dll;  /**< handle de la DLL (NULL si es nativa embebida) */
     int active;        /**< 1 si registrada; 0 si su slot quedo libre */
+    /* Metadata visible para el panel de extensiones (cualquiera puede ser NULL).
+     * La rellenan el manifiesto (DLLs) o ext_host_register_builtin (nativas). */
+    char *name;        /**< nombre legible (cae al id si no se dio) */
+    char *version;     /**< version ("1.0", "0.1.0"...) */
+    char *author;      /**< autor */
+    char *description; /**< descripcion corta */
+    int is_builtin;    /**< 1 = nativa embebida (sin DLL, no descargable) */
 } HostExtension;
 
 /** @brief Una vista registrada por una extension (panel/overlay/statusbar). */
@@ -166,8 +173,10 @@ typedef struct {
  * linea de marcador de gutter.  Un @c bg con los cuatro componentes a 0
  * (alfa incluido) significa "quitar" (set_line_background con bg.a==0). */
 typedef enum {
-    HOST_DECO_LINE_BG = 0, /**< fondo de la linea */
-    HOST_DECO_GUTTER       /**< marcador en el gutter (glifo + color) */
+    HOST_DECO_LINE_BG = 0,      /**< fondo de la linea */
+    HOST_DECO_GUTTER,           /**< marcador en el gutter (glifo + color) */
+    HOST_DECO_RANGE_UNDERLINE,  /**< subrayado de un rango de columnas (squiggle) */
+    HOST_DECO_INLINE_HINT       /**< texto fantasma al final de la linea (ghost) */
 } HostDecoKind;
 
 typedef struct {
@@ -176,6 +185,8 @@ typedef struct {
     HostDecoKind kind;    /**< tipo de decoracion */
     CoffeeColor color;    /**< color (fondo o del marcador) */
     char *glyph;          /**< glifo del gutter (NULL para fondo de linea) */
+    uint32_t start_col;   /**< rango: columna inicial (codepoints; underline) */
+    uint32_t end_col;     /**< rango: columna final exclusiva (underline) */
     int owner;            /**< extension dueña (registro por-ext) */
 } HostDeco;
 
@@ -626,11 +637,59 @@ static int api_set_gutter_marker(CoffeeHost *h, size_t line, const char *glyph,
 }
 static int api_set_inline_hint(CoffeeHost *h, size_t line, const char *text,
                                CoffeeColor color) {
-    (void)h;
-    (void)line;
-    (void)text;
-    (void)color;
-    return -1; /* hints inline: fase posterior */
+    if (!h) return -1;
+    const Buffer *buf = h->backend.buffer; /* buffer activo */
+    if (!buf) return -1;
+    int idx = host_find_deco(h, buf, line, HOST_DECO_INLINE_HINT);
+    if (!text || !text[0]) { /* texto vacio = quitar el hint de esa linea */
+        if (idx >= 0) host_deco_remove_at(h, (size_t)idx);
+        return 0;
+    }
+    if (idx >= 0) { /* actualizar el existente */
+        free(h->decos[idx].glyph);
+        h->decos[idx].glyph = host_strdup(text);
+        h->decos[idx].color = color;
+        h->decos[idx].owner = h->registering;
+        return 0;
+    }
+    if (!host_grow((void **)&h->decos, &h->deco_cap, h->deco_count,
+                   sizeof(HostDeco)))
+        return -3;
+    HostDeco *d = &h->decos[h->deco_count++];
+    d->buffer = buf;
+    d->line = line;
+    d->kind = HOST_DECO_INLINE_HINT;
+    d->color = color;
+    d->glyph = host_strdup(text); /* texto del hint (se libera en remove) */
+    d->start_col = 0;
+    d->end_col = 0;
+    d->owner = h->registering;
+    return 0;
+}
+/* Subrayado de rango (squiggle).  A diferencia del fondo/gutter, PERMITE varios
+ * en la misma linea (varios diagnosticos solapando lineas), asi que SIEMPRE
+ * agrega una entrada nueva (no actualiza existentes).  La extension hace
+ * clear_decorations antes de re-aplicar, por lo que no se acumulan entre
+ * re-analisis. */
+static int api_set_range_underline(CoffeeHost *h, size_t line, uint32_t start_col,
+                                   uint32_t end_col, CoffeeColor color) {
+    if (!h) return -1;
+    const Buffer *buf = h->backend.buffer; /* buffer activo */
+    if (!buf) return -1;
+    if (end_col <= start_col) return -1; /* rango vacio: nada que subrayar */
+    if (!host_grow((void **)&h->decos, &h->deco_cap, h->deco_count,
+                   sizeof(HostDeco)))
+        return -3;
+    HostDeco *d = &h->decos[h->deco_count++];
+    d->buffer = buf;
+    d->line = line;
+    d->kind = HOST_DECO_RANGE_UNDERLINE;
+    d->color = color;
+    d->glyph = NULL;
+    d->start_col = start_col;
+    d->end_col = end_col;
+    d->owner = h->registering;
+    return 0;
 }
 /* clear_decorations: quita TODAS las decoraciones del buffer activo puestas por
  * la extension en curso.  Si no hay extension en curso (registering<0), limpia
@@ -931,6 +990,7 @@ static void host_fill_api(CoffeeHost *h) {
     a->set_gutter_marker = api_set_gutter_marker;
     a->set_inline_hint = api_set_inline_hint;
     a->clear_decorations = api_clear_decorations;
+    a->set_range_underline = api_set_range_underline;
 
     a->register_service = api_register_service;
     a->get_service = api_get_service;
@@ -1150,9 +1210,21 @@ int ext_host_info(CoffeeHost *host, size_t idx, const char **id,
     if (!host || idx >= host->ext_count) return 0;
     HostExtension *he = &host->exts[idx];
     if (id) *id = he->id;
-    if (name) *name = he->id; /* hoy no hay campo "name" separado en el manifiesto */
+    if (name) *name = he->name ? he->name : he->id; /* cae al id si no hay name */
     if (dir) *dir = he->dir;
     if (active) *active = he->active;
+    return 1;
+}
+
+int ext_host_info_meta(CoffeeHost *host, size_t idx, const char **version,
+                       const char **author, const char **description,
+                       int *is_builtin) {
+    if (!host || idx >= host->ext_count) return 0;
+    HostExtension *he = &host->exts[idx];
+    if (version) *version = he->version;
+    if (author) *author = he->author;
+    if (description) *description = he->description;
+    if (is_builtin) *is_builtin = he->is_builtin;
     return 1;
 }
 
@@ -1189,6 +1261,36 @@ int ext_host_gutter_marker(CoffeeHost *host, const Buffer *buffer, size_t line,
     if (out_glyph) *out_glyph = host->decos[idx].glyph;
     if (out_color) *out_color = host->decos[idx].color;
     return 1;
+}
+
+int ext_host_inline_hint(CoffeeHost *host, const Buffer *buffer, size_t line,
+                         const char **out_text, CoffeeColor *out_color) {
+    if (!host || !buffer) return 0;
+    int idx = host_find_deco(host, buffer, line, HOST_DECO_INLINE_HINT);
+    if (idx < 0) return 0;
+    if (out_text) *out_text = host->decos[idx].glyph;
+    if (out_color) *out_color = host->decos[idx].color;
+    return 1;
+}
+
+int ext_host_range_underlines(CoffeeHost *host, const Buffer *buffer, size_t line,
+                              CoffeeUnderline *out, int max) {
+    if (!host || !buffer || !out || max <= 0) return 0;
+    int n = 0;
+    /* Puede haber varios subrayados en la misma linea: los recolectamos todos
+     * (hasta @p max).  O(deco_count) por linea visible; el numero de decos es
+     * pequeno (los diagnosticos del archivo activo). */
+    for (size_t i = 0; i < host->deco_count && n < max; ++i) {
+        HostDeco *d = &host->decos[i];
+        if (d->buffer != buffer || d->line != line ||
+            d->kind != HOST_DECO_RANGE_UNDERLINE)
+            continue;
+        out[n].start_col = d->start_col;
+        out[n].end_col = d->end_col;
+        out[n].color = d->color;
+        ++n;
+    }
+    return n;
 }
 
 void ext_host_drop_buffer(CoffeeHost *host, const Buffer *buffer) {
@@ -1271,6 +1373,10 @@ typedef struct {
     unsigned abi;
     char **deps; /**< array de ids de dependencia */
     size_t dep_count;
+    char *name;        /**< nombre legible (opcional) */
+    char *version;     /**< version (opcional) */
+    char *author;      /**< autor (opcional) */
+    char *description; /**< descripcion (opcional) */
 } HostManifest;
 
 static void manifest_free(HostManifest *m) {
@@ -1279,6 +1385,10 @@ static void manifest_free(HostManifest *m) {
     free(m->entry);
     for (size_t i = 0; i < m->dep_count; ++i) free(m->deps[i]);
     free(m->deps);
+    free(m->name);
+    free(m->version);
+    free(m->author);
+    free(m->description);
     memset(m, 0, sizeof(*m));
 }
 
@@ -1368,6 +1478,18 @@ static int manifest_read(CoffeeHost *h, const char *dir, HostManifest *out) {
             out->entry = host_strdup(trim_value(val));
         } else if (strcmp(key, "abi") == 0) {
             out->abi = (unsigned)strtoul(trim_value(val), NULL, 10);
+        } else if (strcmp(key, "name") == 0) {
+            free(out->name);
+            out->name = host_strdup(trim_value(val));
+        } else if (strcmp(key, "version") == 0) {
+            free(out->version);
+            out->version = host_strdup(trim_value(val));
+        } else if (strcmp(key, "author") == 0) {
+            free(out->author);
+            out->author = host_strdup(trim_value(val));
+        } else if (strcmp(key, "description") == 0) {
+            free(out->description);
+            out->description = host_strdup(trim_value(val));
         } else if (strcmp(key, "dependencies") == 0) {
             /* el valor puede ser "[...]"; recortar los corchetes */
             char *lb = strchr(val, '[');
@@ -1404,6 +1526,46 @@ static int host_find_ext(CoffeeHost *h, const char *id) {
             strcmp(h->exts[i].id, id) == 0)
             return (int)i;
     return -1;
+}
+
+/* Libera las cadenas de un slot de extension y lo resetea (deja el slot libre).
+ * NO cierra la DLL: el llamante se ocupa de coffee_dll_close (load/unload tienen
+ * politicas distintas sobre cuando cerrarla). */
+static void host_ext_clear(HostExtension *he) {
+    free(he->id);
+    free(he->dir);
+    free(he->name);
+    free(he->version);
+    free(he->author);
+    free(he->description);
+    he->id = he->dir = he->name = NULL;
+    he->version = he->author = he->description = NULL;
+    he->dll = NULL;
+    he->active = 0;
+    he->is_builtin = 0;
+}
+
+int ext_host_register_builtin(CoffeeHost *host, const char *id, const char *name,
+                              const char *version, const char *author,
+                              const char *description) {
+    if (!host || !id) return -1;
+    if (host_find_ext(host, id) >= 0) return -2; /* ya hay una con ese id */
+    if (!host_grow((void **)&host->exts, &host->ext_cap, host->ext_count,
+                   sizeof(HostExtension)))
+        return -3;
+    int idx = (int)host->ext_count++;
+    HostExtension *he = &host->exts[idx];
+    memset(he, 0, sizeof(*he));
+    he->id = host_strdup(id);
+    he->dir = NULL;  /* sin directorio: vive dentro del ejecutable */
+    he->dll = NULL;  /* sin DLL: codigo nativo embebido */
+    he->active = 1;
+    he->name = name ? host_strdup(name) : NULL;
+    he->version = version ? host_strdup(version) : NULL;
+    he->author = author ? host_strdup(author) : NULL;
+    he->description = description ? host_strdup(description) : NULL;
+    he->is_builtin = 1; /* no descargable: el panel no muestra recargar/descargar */
+    return 0;
 }
 
 int ext_host_load(CoffeeHost *host, const char *dir) {
@@ -1469,6 +1631,11 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
     he->dir = host_strdup(dir);
     he->dll = dll;
     he->active = 1;
+    he->name = m.name ? host_strdup(m.name) : NULL;
+    he->version = m.version ? host_strdup(m.version) : NULL;
+    he->author = m.author ? host_strdup(m.author) : NULL;
+    he->description = m.description ? host_strdup(m.description) : NULL;
+    he->is_builtin = 0;
 
     /* invocar el registro de la extension con el indice activo */
     host->registering = idx;
@@ -1482,12 +1649,7 @@ int ext_host_load(CoffeeHost *host, const char *dir) {
         /* revertir lo que hubiera registrado + liberar el slot */
         host_revoke_owner(host, idx);
         coffee_dll_close(dll);
-        free(he->id);
-        free(he->dir);
-        he->active = 0;
-        he->id = NULL;
-        he->dir = NULL;
-        he->dll = NULL;
+        host_ext_clear(he);
         host->ext_count--; /* solo valido por ser el ultimo slot */
         manifest_free(&m);
         return -8;
@@ -1506,6 +1668,14 @@ int ext_host_unload(CoffeeHost *host, const char *id) {
         return -2;
     }
     HostExtension *he = &host->exts[idx];
+
+    /* las extensiones nativas embebidas no se pueden descargar: su codigo vive
+     * en el ejecutable (no hay DLL que cerrar ni modulo que reemplazar). */
+    if (he->is_builtin) {
+        host_set_error(host, "la extension nativa '%s' no se puede descargar",
+                       id);
+        return -3;
+    }
 
     /* invocar deactivate opcional ANTES de revocar/cerrar */
     CoffeeExtensionUnregisterFn deact =
@@ -1526,12 +1696,7 @@ int ext_host_unload(CoffeeHost *host, const char *id) {
      * pesado (hilos, atexit) puede abortar en su DLL_PROCESS_DETACH. */
     if (!host->shutting_down)
         coffee_dll_close(he->dll);
-    free(he->id);
-    free(he->dir);
-    he->id = NULL;
-    he->dir = NULL;
-    he->dll = NULL;
-    he->active = 0;
+    host_ext_clear(he);
 
     return 0;
 }

@@ -29,8 +29,11 @@ void editor_detach_float(Editor *e, int fi) {
     if (h < 150) h = 150;
 
     /* crear la ventana del SO + su renderer.  Si SDL falla, conservar el flotante
-     * (no se pierde el grupo) y salir. */
-    SDL_Window *win = SDL_CreateWindow("CoffeeCode", w, h, SDL_WINDOW_RESIZABLE);
+     * (no se pierde el grupo) y salir.  SDL_WINDOW_TRANSPARENT habilita el alfa
+     * por pixel igual que la ventana principal, para que el modo de fondo
+     * (transparente / color / imagen) se vea tambien en la ventana desprendida. */
+    SDL_Window *win = SDL_CreateWindow("CoffeeCode", w, h,
+                                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT);
     if (!win) return;
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
     if (!ren) {

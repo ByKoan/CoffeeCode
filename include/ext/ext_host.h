@@ -170,6 +170,21 @@ void ext_host_emit(CoffeeHost *host, CoffeeEventType event, const void *data);
 /** @brief 1 si la extension @p id esta cargada y activa, 0 si no. */
 int ext_host_has(CoffeeHost *host, const char *id);
 
+/**
+ * @brief Registra una extension NATIVA embebida (sin DLL) en la lista del host.
+ *
+ * Para lenguajes/funciones compiladas dentro del ejecutable (p.ej. el resaltador
+ * de C base).  Crea una entrada visible en el panel de extensiones con la misma
+ * metadata que una DLL, pero marcada como builtin: no se puede descargar ni
+ * recargar (su codigo vive en el .exe).  Cualquier puntero puede ser NULL salvo
+ * @p id.
+ *
+ * @return 0 ok, -1 args invalidos, -2 ya existe ese id, -3 sin memoria.
+ */
+int ext_host_register_builtin(CoffeeHost *host, const char *id, const char *name,
+                              const char *version, const char *author,
+                              const char *description);
+
 /* ===========================================================================
  *  Introspeccion: listar las extensiones cargadas para el panel de
  *  extensiones del IDE (el "marketplace de cargadas").
@@ -189,13 +204,26 @@ size_t ext_host_count(CoffeeHost *host);
  * @param host   Host.
  * @param idx    Indice de slot en [0, ext_host_count).
  * @param[out] id     Id del manifiesto (o NULL si el slot esta libre).
- * @param[out] name   Nombre legible (hoy = id; reservado para un campo futuro).
- * @param[out] dir    Directorio de la extension.
+ * @param[out] name   Nombre legible del manifiesto (cae al id si no se dio).
+ * @param[out] dir    Directorio de la extension (NULL si es nativa embebida).
  * @param[out] active 1 si la extension esta activa, 0 si el slot esta libre.
  * @return 1 si @p idx es un slot valido, 0 si esta fuera de rango.
  */
 int ext_host_info(CoffeeHost *host, size_t idx, const char **id,
                   const char **name, const char **dir, int *active);
+
+/**
+ * @brief Metadata extra de la extension del slot @p idx (para el panel).
+ *
+ * Rellena los punteros de salida no-NULL con version, autor, descripcion y si la
+ * extension es nativa embebida (builtin).  Cualquiera puede quedar NULL si el
+ * manifiesto no lo declaro.  Cadenas propiedad del host.
+ *
+ * @return 1 si @p idx es valido, 0 si esta fuera de rango.
+ */
+int ext_host_info_meta(CoffeeHost *host, size_t idx, const char **version,
+                       const char **author, const char **description,
+                       int *is_builtin);
 
 /* ===========================================================================
  *  Vistas registradas: el render del IDE las dibuja.
@@ -249,6 +277,38 @@ int ext_host_line_background(CoffeeHost *host, const Buffer *buffer, size_t line
  */
 int ext_host_gutter_marker(CoffeeHost *host, const Buffer *buffer, size_t line,
                            const char **out_glyph, CoffeeColor *out_color);
+
+/** @brief Un subrayado de rango (squiggle) recuperado del host. */
+typedef struct CoffeeUnderline {
+    uint32_t start_col;  /**< columna inicial (codepoints) */
+    uint32_t end_col;    /**< columna final exclusiva (codepoints) */
+    CoffeeColor color;   /**< color del trazo (RGBA) */
+} CoffeeUnderline;
+
+/**
+ * @brief Recolecta los subrayados de rango de la linea @p line del buffer.
+ *
+ * Pensada para el render: una linea puede tener VARIOS subrayados (varios
+ * diagnosticos).  Rellena @p out con hasta @p max y devuelve cuantos.
+ *
+ * @return Numero de subrayados escritos en @p out (0 si la linea no tiene).
+ */
+int ext_host_range_underlines(CoffeeHost *host, const Buffer *buffer, size_t line,
+                              CoffeeUnderline *out, int max);
+
+/**
+ * @brief Texto fantasma (inline hint) al final de la linea @p line del buffer.
+ *
+ * Lo pone una extension con @c set_inline_hint para mostrar valores calculados
+ * (p.ej. el resultado de @c sizeof<T> en compile-time) en color tenue, sin
+ * modificar el texto del documento.
+ *
+ * @param[out] out_text  Texto del hint (propiedad del host).  Puede ser NULL.
+ * @param[out] out_color Color del hint.  Puede ser NULL.
+ * @return 1 si la linea tiene un inline hint, 0 si no.
+ */
+int ext_host_inline_hint(CoffeeHost *host, const Buffer *buffer, size_t line,
+                         const char **out_text, CoffeeColor *out_color);
 
 /**
  * @brief Descarta TODAS las decoraciones asociadas a @p buffer.

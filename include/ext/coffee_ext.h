@@ -38,7 +38,7 @@ extern "C" {
  *      El core ya NO trae resaltador propio: el coloreado lo aportan las
  *      extensiones (incluido el lenguaje C, que es una extension nativa
  *      embebida en el ejecutable).  Las extensiones v1/v2/v3 siguen cargando. */
-#define COFFEE_ABI_VERSION 4u
+#define COFFEE_ABI_VERSION 5u
 
 /** Handle opaco del IDE.  Las extensiones lo reciben y lo pasan de vuelta a
  *  cada funcion del CoffeeApi.  Su layout es privado al IDE (ABI estable). */
@@ -383,6 +383,18 @@ typedef struct CoffeeApi {
     /** Descarta TODOS los tramos pushed del BUFFER ACTIVO (vuelve al resaltador
      *  sincrono / texto plano).  Lo usa una extension al re-analizar el archivo. */
     void (*clear_tokens)(CoffeeHost *h);
+
+    /* ---- Decoracion de rango (ABI v5) ----
+     * NOTA ABI: puntero anyadido AL FINAL del struct; las extensiones v1..v4
+     * siguen siendo compatibles (cargan; solo no ven esta funcion). */
+
+    /** Decoracion: subrayado ondulado bajo el rango [@p start_col, @p end_col)
+     *  de columnas (CODEPOINTS, como CoffeeSpan) de la linea @p line del BUFFER
+     *  ACTIVO.  Pensado para diagnosticos del LSP (rojo=error, ambar=warning).
+     *  Pueden coexistir VARIOS en la misma linea.  Se limpian con
+     *  clear_decorations.  Devuelve 0 si ok, !=0 en error. */
+    int (*set_range_underline)(CoffeeHost *h, size_t line, uint32_t start_col,
+                               uint32_t end_col, CoffeeColor color);
 } CoffeeApi;
 
 /**
