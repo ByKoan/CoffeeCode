@@ -27,12 +27,26 @@
  * @param e          Editor.
  * @param dirty_line Primera línea que hay que volver a resaltar.
  */
+/**
+ * @brief Notifica a las extensiones que el buffer activo cambio.
+ *
+ * Emite COFFEE_EVENT_BUFFER_CHANGED al host de extensiones (opaco, en
+ * e->ext_host).  Lo consumen, por ejemplo, los clientes LSP para re-analizar el
+ * documento (con su propio debounce).  No hace nada si no hay host cargado.
+ */
+static void notify_buffer_changed(Editor *e) {
+    if (e->ext_host)
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_BUFFER_CHANGED,
+                      NULL);
+}
+
 static void after_edit(Editor *e, int dirty_line) {
     editor_update_lexer(e, dirty_line);
     editor_ensure_visible(e);
     e->modified = 1;
     e->needs_redraw = 1;
     editor_cursor_blink_reset(e); /* cursor siempre visible tras editar */
+    notify_buffer_changed(e);     /* avisar a las extensiones (p.ej. LSP) */
 }
 
 /**
@@ -417,6 +431,7 @@ void do_delete(Editor *e) {
     editor_update_lexer(e, e->cursor_line);
     e->modified = 1;
     e->needs_redraw = 1;
+    notify_buffer_changed(e); /* avisar a las extensiones (p.ej. LSP) */
 }
 
 /* ── Selección global ───────────────────────────────────────────────────────
