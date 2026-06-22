@@ -21,6 +21,9 @@ struct LspClient {
 
     LspDiagnosticsFn on_diag;/**< Callback de publishDiagnostics.         */
     void *diag_ud;           /**< Dato de usuario para @c on_diag.        */
+
+    char **legend;           /**< tokenTypes de semanticTokens (heap), o NULL. */
+    int legend_n;            /**< Numero de entradas en @c legend.         */
 };
 
 /* --- Helpers de construccion de objetos LSP ------------------------------ */
@@ -53,11 +56,59 @@ static cJSON *make_doc_pos_params(const char *uri, int line, int col) {
 
 /* --- Callbacks internos -------------------------------------------------- */
 
-/** Respuesta de "initialize": envia "initialized" y dispara on_ready. */
+/**
+ * @brief Captura la leyenda de semantic tokens del result de initialize.
+ *
+ * Navega result.capabilities.semanticTokensProvider.legend.tokenTypes y, si es
+ * un array de strings, lo copia a c->legend (cada nombre en heap).  Si el
+ * servidor no anuncia leyenda, deja c->legend en NULL.  Idempotente: libera una
+ * leyenda previa antes de sobreescribir.
+ */
+static void capture_semantic_legend(LspClient *c, cJSON *result) {
+    if (!result) return;
+    cJSON *caps = cJSON_GetObjectItemCaseSensitive(result, "capabilities");
+    if (!caps) return;
+    cJSON *prov =
+        cJSON_GetObjectItemCaseSensitive(caps, "semanticTokensProvider");
+    if (!prov) return;
+    cJSON *legend = cJSON_GetObjectItemCaseSensitive(prov, "legend");
+    if (!legend) return;
+    cJSON *types = cJSON_GetObjectItemCaseSensitive(legend, "tokenTypes");
+    if (!cJSON_IsArray(types)) return;
+
+    int n = cJSON_GetArraySize(types);
+    if (n <= 0) return;
+
+    char **arr = (char **)calloc((size_t)n, sizeof(char *));
+    if (!arr) return;
+
+    int count = 0;
+    cJSON *t = NULL;
+    cJSON_ArrayForEach(t, types) {
+        const char *s = cJSON_IsString(t) ? t->valuestring : "";
+        size_t len = strlen(s) + 1;
+        char *copy = (char *)malloc(len);
+        if (copy) memcpy(copy, s, len);
+        arr[count++] = copy; /* puede ser NULL si malloc fallo (se trata seguro) */
+    }
+
+    /* Liberar una leyenda anterior (re-initialize). */
+    if (c->legend) {
+        for (int i = 0; i < c->legend_n; ++i) free(c->legend[i]);
+        free(c->legend);
+    }
+    c->legend = arr;
+    c->legend_n = count;
+}
+
+/** Respuesta de "initialize": guarda la leyenda, envia "initialized" y dispara
+ *  on_ready. */
 static void on_initialize_response(void *ud, cJSON *result, cJSON *error) {
-    (void)result;
     (void)error;
     LspClient *c = (LspClient *)ud;
+    /* Capturar la leyenda de semantic tokens antes de marcar listo, para que
+     * on_ready ya pueda construir su mapa indice -> color. */
+    capture_semantic_legend(c, result);
     /* Notificar "initialized" (params objeto vacio, como exige el protocolo). */
     jsonrpc_notify(c->rpc, "initialized", cJSON_CreateObject());
     if (c->on_ready) c->on_ready(c->ready_ud);
@@ -94,7 +145,16 @@ void lsp_feed(LspClient *c, const char *bytes, size_t len) {
 void lsp_destroy(LspClient *c) {
     if (!c) return;
     jsonrpc_destroy(c->rpc);
+    if (c->legend) {
+        for (int i = 0; i < c->legend_n; ++i) free(c->legend[i]);
+        free(c->legend);
+    }
     free(c);
+}
+
+const char *const *lsp_semantic_legend(LspClient *c, int *out_n) {
+    if (out_n) *out_n = c ? c->legend_n : 0;
+    return c ? (const char *const *)c->legend : NULL;
 }
 
 void lsp_initialize(LspClient *c, const char *root_uri, LspReadyFn on_ready,

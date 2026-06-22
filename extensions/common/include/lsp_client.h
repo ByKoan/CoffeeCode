@@ -114,6 +114,25 @@ void lsp_completion(LspClient *c, const char *uri, int line, int col,
 void lsp_semantic_tokens_full(LspClient *c, const char *uri, LspResultFn cb,
                               void *ud);
 
+/**
+ * @brief Devuelve la leyenda de tipos de semantic tokens anunciada por el
+ *        servidor en su respuesta de @c initialize.
+ *
+ * El cliente captura el array
+ * @c result.capabilities.semanticTokensProvider.legend.tokenTypes y lo guarda;
+ * cada entrada es el nombre LSP del tipo (p.ej. "keyword", "type", "string") y
+ * su POSICION en el array es el indice numerico que aparece en el campo
+ * @c tokenType de cada quinteto de @c semanticTokens/full.  Asi el consumidor
+ * mapea indice -> color sin asumir un orden fijo.
+ *
+ * @param c     Cliente LSP.
+ * @param[out] out_n Recibe el numero de tipos de la leyenda (puede ser NULL).
+ * @return Array de @c const char* (propiedad del cliente, valido hasta
+ *         lsp_destroy) con @c *out_n entradas, o NULL si el servidor no
+ *         anuncio leyenda todavia.
+ */
+const char *const *lsp_semantic_legend(LspClient *c, int *out_n);
+
 /* --- Peticiones custom del ecosistema Vesta ------------------------------ */
 
 /**

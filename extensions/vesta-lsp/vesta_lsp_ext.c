@@ -29,6 +29,7 @@
 
 #include "lsp_client.h"
 #include "svc_lsp.h"
+#include "vex_semtokens.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,10 +84,20 @@ typedef struct VlState {
     int dirty_frames;     /**< frames restantes antes de enviar. */
 
     CoffeeSvcLsp svc;     /**< vtable del servicio publicado. */
+
+    /* Resaltado semantico: paleta indexada por tokenType de la leyenda. */
+    CoffeeColor *palette; /**< color por indice de la leyenda (heap), o NULL. */
+    int *palette_set;     /**< 1 si el indice tiene color asignado (heap). */
+    int palette_n;        /**< numero de entradas (= tamano de la leyenda). */
 } VlState;
 
 /* Singleton: el core carga una sola instancia de la extension. */
 static VlState g_state;
+
+/* Declaracion adelantada: el handler de diagnosticos (definido antes en el
+ * archivo) refresca el resaltado semantico, cuya rutina vive mas abajo. */
+static void vl_request_semantic_tokens(VlState *st, VlDoc *doc);
+static void vl_build_palette(VlState *st);
 
 /* ------------------------------------------------------------------------- */
 /* Utilidades.                                                               */
@@ -414,6 +425,11 @@ static void vl_reapply_active(VlState *st) {
     if (doc) {
         vl_apply_decorations(st, doc->diagnostics);
         vl_refresh_problems_channel(st, doc);
+        /* Al volver a un .vex ya abierto, el resaltado del buffer anterior se
+         * descarta (clear_tokens) y re-pedimos los tokens de este (su texto es
+         * el que ahora esta activo para convertir columnas). */
+        api->clear_tokens(st->host);
+        vl_request_semantic_tokens(st, doc);
     } else {
         api->channel_clear(st->host, VESTA_LSP_CHAN_PROB);
     }
@@ -448,7 +464,320 @@ static void vl_on_diagnostics(void *ud, const char *uri, cJSON *diagnostics) {
         st->api->clear_decorations(st->host);
         vl_apply_decorations(st, doc->diagnostics);
         vl_refresh_problems_channel(st, doc);
+        /* publishDiagnostics llega tras cada (re)analisis del servidor: es el
+         * momento natural para refrescar el resaltado semantico del activo, con
+         * el mismo debounce que dispara el didChange (sin peticiones extra). */
+        vl_request_semantic_tokens(st, doc);
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Resaltado semantico (semantic tokens del servidor -> set_tokens).         */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * @brief Color de la paleta de Vex para un nombre de tokenType de la leyenda.
+ *
+ * Paleta fija estilo editor oscuro, legible y consistente.  El mapeo es por
+ * NOMBRE LSP (no por indice), porque la leyenda la decide el servidor; asi un
+ * reordenamiento de la leyenda no descoloca los colores.  Los tipos de
+ * "identificador comun" (variable/parameter/property/namespace/enumMember) se
+ * dejan en el color de texto normal: devolvemos 0 y el llamante NO les empuja
+ * tramo, de modo que esas zonas salen con el color por defecto del editor.
+ *
+ * @param name  Nombre LSP del tokenType (p.ej. "keyword").
+ * @param[out] out  Recibe el color RGBA si procede colorear.
+ * @return 1 si el tipo se colorea (out valido), 0 si se deja en texto normal.
+ */
+static int vl_palette_color_for(const char *name, CoffeeColor *out) {
+    if (!name || !name[0] || !out) return 0;
+
+    static const struct {
+        const char *n;
+        uint8_t r, g, b;
+    } MAP[] = {
+        /* Palabras clave / modificadores: malva. */
+        {"keyword",       197, 134, 192},
+        {"modifier",      197, 134, 192},
+        /* Tipos / clases / structs / enums / interfaces / type params: turquesa. */
+        {"type",           78, 201, 176},
+        {"class",          78, 201, 176},
+        {"struct",         78, 201, 176},
+        {"enum",           78, 201, 176},
+        {"interface",      78, 201, 176},
+        {"typeParameter",  78, 201, 176},
+        /* Funciones / metodos: amarillo suave. */
+        {"function",      220, 220, 170},
+        {"method",        220, 220, 170},
+        /* Macros: azul claro. */
+        {"macro",          86, 156, 214},
+        /* Literales de texto: naranja terroso. */
+        {"string",        206, 145, 120},
+        /* Numeros: verde claro. */
+        {"number",        181, 206, 168},
+        /* Comentarios: verde apagado. */
+        {"comment",       106, 153,  85},
+        /* Operadores: gris claro. */
+        {"operator",      212, 212, 212},
+    };
+
+    for (size_t i = 0; i < sizeof MAP / sizeof MAP[0]; ++i) {
+        if (strcmp(MAP[i].n, name) == 0) {
+            out->r = MAP[i].r;
+            out->g = MAP[i].g;
+            out->b = MAP[i].b;
+            out->a = 255;
+            return 1;
+        }
+    }
+    /* variable/parameter/property/namespace/enumMember y cualquier otro: texto
+     * normal (sin tramo). */
+    return 0;
+}
+
+/**
+ * @brief Construye la paleta indexada (tokenType de la leyenda -> color).
+ *
+ * Lee la leyenda capturada por el cliente LSP y, por cada indice, resuelve su
+ * color por nombre con vl_palette_color_for.  Idempotente: libera una paleta
+ * previa.  Si la leyenda no esta disponible, deja la paleta vacia (el resaltado
+ * semantico queda inactivo y el .vex sale plano).
+ */
+static void vl_build_palette(VlState *st) {
+    /* Liberar paleta anterior (re-initialize). */
+    free(st->palette);
+    free(st->palette_set);
+    st->palette = NULL;
+    st->palette_set = NULL;
+    st->palette_n = 0;
+
+    int n = 0;
+    const char *const *legend = lsp_semantic_legend(st->lsp, &n);
+    if (!legend || n <= 0) return;
+
+    st->palette = (CoffeeColor *)calloc((size_t)n, sizeof(CoffeeColor));
+    st->palette_set = (int *)calloc((size_t)n, sizeof(int));
+    if (!st->palette || !st->palette_set) {
+        free(st->palette);
+        free(st->palette_set);
+        st->palette = NULL;
+        st->palette_set = NULL;
+        return;
+    }
+    st->palette_n = n;
+    for (int i = 0; i < n; ++i) {
+        CoffeeColor c;
+        if (legend[i] && vl_palette_color_for(legend[i], &c)) {
+            st->palette[i] = c;
+            st->palette_set[i] = 1;
+        }
+    }
+}
+
+/**
+ * @brief Indice de inicios de linea (offsets en bytes) del texto del buffer.
+ *
+ * Permite resolver el texto de una linea N por (offset[N], offset[N+1]) para la
+ * conversion UTF-16 -> codepoints.  Las lineas se separan por '\n'; un '\r'
+ * final se excluye del rango (no afecta el conteo de columnas).
+ */
+typedef struct {
+    const char *text; /**< texto completo (no propio). */
+    size_t len;       /**< longitud en bytes. */
+    size_t *starts;   /**< offset de inicio de cada linea (heap). */
+    int n_lines;      /**< numero de lineas. */
+} VlLineIndex;
+
+/** Construye el indice de lineas. Devuelve 1 si ok, 0 si fallo de memoria. */
+static int vl_line_index_build(VlLineIndex *ix, const char *text, size_t len) {
+    ix->text = text;
+    ix->len = len;
+    ix->starts = NULL;
+    ix->n_lines = 0;
+
+    /* Contar lineas (numero de '\n' + 1). */
+    int lines = 1;
+    for (size_t i = 0; i < len; ++i)
+        if (text[i] == '\n') lines++;
+
+    ix->starts = (size_t *)malloc((size_t)lines * sizeof(size_t));
+    if (!ix->starts) return 0;
+    ix->n_lines = lines;
+
+    int li = 0;
+    ix->starts[li++] = 0;
+    for (size_t i = 0; i < len && li < lines; ++i)
+        if (text[i] == '\n') ix->starts[li++] = i + 1;
+    return 1;
+}
+
+static void vl_line_index_free(VlLineIndex *ix) {
+    free(ix->starts);
+    ix->starts = NULL;
+    ix->n_lines = 0;
+}
+
+/** Devuelve (ptr, len_bytes) del texto de la linea @p line (sin '\n' ni '\r'). */
+static void vl_line_text(const VlLineIndex *ix, uint32_t line,
+                         const char **out_ptr, size_t *out_len) {
+    *out_ptr = NULL;
+    *out_len = 0;
+    if ((int)line >= ix->n_lines) return;
+    size_t start = ix->starts[line];
+    size_t end = ((int)line + 1 < ix->n_lines) ? ix->starts[line + 1] : ix->len;
+    /* Excluir el '\n' terminador y un posible '\r' previo. */
+    if (end > start && ix->text[end - 1] == '\n') end--;
+    if (end > start && ix->text[end - 1] == '\r') end--;
+    *out_ptr = ix->text + start;
+    *out_len = end - start;
+}
+
+/**
+ * @brief Empuja al editor un lote de tokens de codepoint agrupados por linea.
+ *
+ * Asume que @p toks viene ORDENADO por linea (lo esta: el decode acumula deltas
+ * monotonos).  Recorre por tramos de la misma linea, construye un array de
+ * CoffeeSpan y lo entrega con set_tokens(line, ...).  Las lineas sin token no se
+ * tocan (quedan en color por defecto).  El llamante ya hizo clear_tokens.
+ */
+static void vl_push_tokens(VlState *st, const VexSemTokenCp *toks, int n) {
+    const CoffeeApi *api = st->api;
+    /* Buffer reutilizable de spans por linea (crece segun haga falta). */
+    CoffeeSpan stack_spans[256];
+    CoffeeSpan *spans = stack_spans;
+    int spans_cap = (int)(sizeof stack_spans / sizeof stack_spans[0]);
+    CoffeeSpan *heap_spans = NULL;
+
+    int i = 0;
+    while (i < n) {
+        uint32_t line = toks[i].line;
+        int j = i;
+        int cnt = 0;
+        /* Contar cuantos tokens consecutivos van en esta misma linea. */
+        while (j < n && toks[j].line == line) {
+            j++;
+            cnt++;
+        }
+        /* Asegurar capacidad. */
+        if (cnt > spans_cap) {
+            CoffeeSpan *nb =
+                (CoffeeSpan *)realloc(heap_spans, (size_t)cnt * sizeof(CoffeeSpan));
+            if (!nb) {
+                /* Sin memoria: saltar esta linea (degradacion suave). */
+                i = j;
+                continue;
+            }
+            heap_spans = nb;
+            spans = heap_spans;
+            spans_cap = cnt;
+        }
+        int w = 0;
+        for (int k = i; k < j; ++k) {
+            if (toks[k].len_cp == 0) continue; /* tramo vacio: omitir. */
+            spans[w].start_col = toks[k].start_cp;
+            spans[w].len = toks[k].len_cp;
+            spans[w].color = st->palette[toks[k].type];
+            w++;
+        }
+        if (w > 0) api->set_tokens(st->host, line, spans, w);
+        i = j;
+    }
+    free(heap_spans);
+}
+
+/** Resultado de semanticTokens/full: decodifica y empuja al editor. */
+static void vl_on_semantic_tokens(void *ud, cJSON *result, cJSON *error) {
+    VlState *st = (VlState *)ud;
+    if (!st || error || !result) return;
+    if (!st->palette || st->palette_n <= 0) return; /* sin leyenda: nada. */
+
+    /* El resultado puede ser null (sin tokens) o { data: [...] }. */
+    cJSON *jdata = cJSON_GetObjectItemCaseSensitive(result, "data");
+    if (!cJSON_IsArray(jdata)) return;
+
+    int count = cJSON_GetArraySize(jdata);
+    if (count <= 0) {
+        /* Documento sin tokens: limpiar lo que hubiera. */
+        st->api->clear_tokens(st->host);
+        st->api->request_repaint(st->host);
+        return;
+    }
+
+    /* Copiar el array plano de uint32 (cJSON guarda numbers como double). */
+    uint32_t *data = (uint32_t *)malloc((size_t)count * sizeof(uint32_t));
+    if (!data) return;
+    int di = 0;
+    cJSON *e = NULL;
+    cJSON_ArrayForEach(e, jdata) {
+        double v = cJSON_IsNumber(e) ? e->valuedouble : 0.0;
+        if (v < 0) v = 0;
+        data[di++] = (uint32_t)v;
+    }
+
+    /* Descodificar a tokens absolutos (en unidades UTF-16). */
+    int n_tok = vex_semtokens_decode(data, (size_t)count, NULL, 0);
+    if (n_tok <= 0) {
+        free(data);
+        return;
+    }
+    VexSemToken *toks = (VexSemToken *)malloc((size_t)n_tok * sizeof(VexSemToken));
+    if (!toks) {
+        free(data);
+        return;
+    }
+    vex_semtokens_decode(data, (size_t)count, toks, n_tok);
+    free(data);
+
+    /* Indexar las lineas del buffer activo para convertir columnas. */
+    char *text = vl_read_active_buffer(st);
+    VlLineIndex ix;
+    int have_ix = text && vl_line_index_build(&ix, text, strlen(text));
+
+    /* Convertir cada token a columnas de codepoint, descartando los que apuntan
+     * a un tipo sin color (identificador comun -> texto normal). */
+    VexSemTokenCp *cps =
+        (VexSemTokenCp *)malloc((size_t)n_tok * sizeof(VexSemTokenCp));
+    if (!cps) {
+        free(toks);
+        if (have_ix) vl_line_index_free(&ix);
+        free(text);
+        return;
+    }
+    int m = 0;
+    for (int i = 0; i < n_tok; ++i) {
+        if (toks[i].type >= (uint32_t)st->palette_n ||
+            !st->palette_set[toks[i].type])
+            continue; /* tipo sin color asignado: dejar texto normal. */
+        const char *lp = NULL;
+        size_t ll = 0;
+        if (have_ix) vl_line_text(&ix, toks[i].line, &lp, &ll);
+        vex_semtoken_to_cp(&toks[i], lp, ll, &cps[m]);
+        m++;
+    }
+
+    /* Reemplazar el resaltado previo y empujar el nuevo por linea. */
+    st->api->clear_tokens(st->host);
+    if (m > 0) vl_push_tokens(st, cps, m);
+    st->api->request_repaint(st->host);
+
+    free(cps);
+    free(toks);
+    if (have_ix) vl_line_index_free(&ix);
+    free(text);
+}
+
+/**
+ * @brief Pide los semantic tokens del documento ACTIVO si es @p doc.
+ *
+ * Solo el buffer activo es legible, asi que solo pedimos tokens del doc que esta
+ * en pantalla (su texto es el que usaremos para convertir columnas).  Requiere
+ * servidor listo, leyenda capturada y doc abierto.
+ */
+static void vl_request_semantic_tokens(VlState *st, VlDoc *doc) {
+    if (!st->ready || !st->lsp || !doc || !doc->open) return;
+    if (!st->palette || st->palette_n <= 0) return;
+    if (!vl_doc_is_active(st, doc)) return;
+    lsp_semantic_tokens_full(st->lsp, doc->uri, vl_on_semantic_tokens, st);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -471,6 +800,9 @@ static void vl_send_did_open(VlState *st, VlDoc *doc) {
         doc->open = 1;
         doc->pending_open = 0;
         free(text);
+        /* Pedir el resaltado inicial sin esperar a una edicion (el servidor
+         * responde con los semantic tokens del texto recien abierto). */
+        vl_request_semantic_tokens(st, doc);
     } else {
         /* No es el buffer en pantalla: abrir cuando vuelva a ser el activo. */
         doc->pending_open = 1;
@@ -486,6 +818,10 @@ static void vl_on_ready(void *ud) {
                             "\x1b[32m[vesta-lsp] servidor listo (initialize ok)"
                             "\x1b[0m\n");
     st->api->set_status(st->host, "vesta-lsp: servidor listo");
+
+    /* Construir la paleta de resaltado desde la leyenda anunciada por el
+     * servidor en su respuesta de initialize (indice de tokenType -> color). */
+    vl_build_palette(st);
 
     /* Abrir los documentos ya conocidos (registrados antes de estar listo). */
     for (VlDoc *d = st->docs; d; d = d->next)
@@ -841,6 +1177,12 @@ COFFEE_EXTENSION_EXPORT void coffee_extension_unregister(CoffeeHost *host) {
         d = nx;
     }
     st->docs = NULL;
+
+    free(st->palette);
+    free(st->palette_set);
+    st->palette = NULL;
+    st->palette_set = NULL;
+    st->palette_n = 0;
 
     free(st->server_path);
     st->server_path = NULL;

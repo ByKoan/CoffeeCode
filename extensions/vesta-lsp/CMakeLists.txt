@@ -14,7 +14,12 @@
 
 # El target se crea a mano (no con add_coffee_extension) para poder enlazar el
 # SDK comun antes de finalizar la extension.
-add_library(coffee_vesta_lsp SHARED "${CMAKE_CURRENT_SOURCE_DIR}/vesta_lsp_ext.c")
+add_library(coffee_vesta_lsp SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/vesta_lsp_ext.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vex_semtokens.c")
+
+# El header del modulo de descodificacion (vex_semtokens.h) vive junto al .c.
+target_include_directories(coffee_vesta_lsp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # SDK comun (JSON-RPC / LSP).  Sus headers publicos (lsp_client.h, svc_lsp.h,
 # cJSON.h) llegan via target_include_directories PUBLIC del propio SDK.

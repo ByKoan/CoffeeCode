@@ -174,6 +174,16 @@ if(COFFEE_BUILD_EXTENSIONS)
         target_link_libraries(test_ext_common PRIVATE coffee_ext_common)
     endif()
 
+    # --- semantic tokens: descodificacion pura (delta + UTF-16->codepoints) ---
+    # Test headless del modulo vex_semtokens de la extension vesta-lsp: no usa
+    # SDL, ni el host, ni el SDK comun; solo el .c puro + su header.  Verifica el
+    # acumulado de los quintetos DELTA del LSP y la conversion de columnas
+    # UTF-16 a codepoints (lo que el editor necesita para CoffeeSpan).
+    add_coffee_test(test_ext_semtokens ext/test_ext_semtokens.c
+        "${CMAKE_SOURCE_DIR}/extensions/vesta-lsp/vex_semtokens.c")
+    target_include_directories(test_ext_semtokens PRIVATE
+        "${CMAKE_SOURCE_DIR}/extensions/vesta-lsp")
+
     add_coffee_test(test_ext_host ext/test_ext_host.c
         "${CMAKE_SOURCE_DIR}/src/ext/ext_host.c"
         "${CMAKE_SOURCE_DIR}/src/buffer/buffer.c"
