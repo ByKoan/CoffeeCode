@@ -1642,9 +1642,12 @@ void render_hover_popup(Editor *e) {
                             if (irr[q].line != ln) continue;
                             int hyy = by + (hrows + row) * lh;
                             draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
+                            /* El op IR empieza tras el canalon de flechas (en
+                             * code_col), dejando el canalon libre para que las
+                             * lineas verticales de las flechas no lo pisen. */
                             draw_code_line(e, irr[q].text,
                                            (int)strlen(irr[q].text),
-                                           asm_x + 3 * cw, hyy);
+                                           asm_x + code_col * cw, hyy);
                             if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                             h->gb_right_n = row + 1;
                             ++row;
