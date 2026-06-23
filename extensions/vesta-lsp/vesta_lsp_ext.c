@@ -1891,6 +1891,14 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                                24;
                 }
             }
+            cJSON *jirid =
+                cJSON_GetObjectItemCaseSensitive(result, "ir_by_id");
+            if (cJSON_IsObject(jirid)) {
+                cJSON *en = NULL;
+                cJSON_ArrayForEach(en, jirid)
+                    cap += (cJSON_IsString(en) ? strlen(en->valuestring) : 0) +
+                           24;
+            }
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1909,9 +1917,14 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                     }
                 }
                 cJSON_ArrayForEach(it, jal) {
-                    o += snprintf(gb + o, cap - o, "A\x1f%d\x1f%s\x1f%s\n",
+                    cJSON *jiid =
+                        cJSON_GetObjectItemCaseSensitive(it, "ir_id");
+                    unsigned iid =
+                        cJSON_IsNumber(jiid) ? (unsigned)jiid->valuedouble
+                                             : 0xFFFFFFFFu;
+                    o += snprintf(gb + o, cap - o, "A\x1f%d\x1f%s\x1f%u\x1f%s\n",
                                   insp_num(it, "line", 0),
-                                  insp_str(it, "addr", ""),
+                                  insp_str(it, "addr", ""), iid,
                                   insp_str(it, "text", ""));
                 }
                 /* Filas del stack frame (debug-info): el render las pinta en
@@ -1937,6 +1950,15 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                                 o += snprintf(gb + o, cap - o, "I\x1f%s\x1f%s\n",
                                               ln->string, op->valuestring);
                         }
+                    }
+                }
+                /* Mapa op-IR exacta: J\x1f<ir_id>\x1f<op IR> */
+                if (cJSON_IsObject(jirid)) {
+                    cJSON *en = NULL;
+                    cJSON_ArrayForEach(en, jirid) {
+                        if (cJSON_IsString(en))
+                            o += snprintf(gb + o, cap - o, "J\x1f%s\x1f%s\n",
+                                          en->string, en->valuestring);
                     }
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);

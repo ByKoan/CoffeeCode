@@ -1287,14 +1287,33 @@ void render_hover_popup(Editor *e) {
             p = nl + 1;
         }
     } else if (content[0] == 0x1D) {
-        /* Vista "Godbolt" correlada (solo-LSP): DOS columnas -- fuente (izq)
-         * y nativo (der) -- con separador vertical y cross-highlight POR LINEA
-         * al pasar el raton: al apuntar una linea fuente se resaltan TODAS sus
-         * instrucciones (y viceversa), con barra de acento a la izquierda de
-         * las filas correladas.  Encoding por fila "kind \x1f ...":
-         * 'H'=stats, 'S'=fuente (\x1f linea \x1f texto), 'A'=instruccion
-         * (\x1f linea \x1f addr \x1f texto).  La col. fuente NO scrollea (es
-         * corta); la col. nativo (larga) usa h->scroll. */
+        /* =====================================================================
+         * VISTA DE CODIGO CORRELADO ("Godbolt") -- CAPACIDAD GENERICA DEL HOST.
+         *
+         * Este renderer NO es de ninguna extension: dibuja lo que describa el
+         * payload (codificado por sentinelas) que CUALQUIER extension manda via
+         * set_hover_tab.  Una extension que produzca este formato obtiene gratis
+         * dos columnas correladas (fuente | asm), cross-highlight por linea,
+         * flechas de control de flujo, banda de stack frame y correlacion con
+         * una representacion intermedia -- sin tocar el render.
+         *
+         * CONTRATO DEL PAYLOAD (1 fila por linea; campos separados por 0x1F):
+         *   byte 0 = 0x1D, luego '\n'.
+         *   H \x1f <texto cabecera>                         estadisticas
+         *   S \x1f <linea> \x1f <texto>                     linea de fuente
+         *   A \x1f <linea> \x1f <addr> \x1f <ir_id> \x1f <texto>   instr. asm
+         *       (<addr> vacio = no-nativo p.ej. bytecode; <ir_id> = id de la op
+         *        IR que la genero, o 4294967295 = sintetica)
+         *   F \x1f <label> \x1f <kind> \x1f <size> \x1f <nombre>   slot de frame
+         *       (kind: retaddr|saved|local|reserved)
+         *   I \x1f <linea> \x1f <op IR>                     IR por linea
+         *   J \x1f <ir_id> \x1f <op IR>                     IR por id (exacta)
+         *
+         * Las CAPACIDADES (flechas, frame, modos de correlacion IR) son
+         * genericas y se gobiernan por Settings host-globales (hover_arrows /
+         * hover_frame / hover_notes / hover_ir_mode) compartidos por todas las
+         * extensiones; el toggle es el componente generico ui_toggle.  La col.
+         * fuente NO scrollea (es corta); la nativa usa h->scroll. */
         size_t clen = strlen(content);
         char *cp = (char *)malloc(clen + 1);
         if (cp) {
@@ -1306,6 +1325,7 @@ void render_hover_popup(Editor *e) {
                 int line;
                 const char *a;
                 const char *b;
+                int ir_id; /* op IR exacta (modo IR=exacto); -1 = sintetica */
             } GbRow;
             typedef struct {
                 const char *label;
@@ -1321,9 +1341,10 @@ void render_hover_popup(Editor *e) {
             GbRow *asml = (GbRow *)malloc(sizeof(GbRow) * cap);
             FrRow *frm = (FrRow *)malloc(sizeof(FrRow) * cap);
             IrRow *irr = (IrRow *)malloc(sizeof(IrRow) * cap);
-            int ns = 0, na = 0, nf = 0, nir = 0;
+            IrRow *jrr = (IrRow *)malloc(sizeof(IrRow) * cap); /* mapa exacto: line=id */
+            int ns = 0, na = 0, nf = 0, nir = 0, njr = 0;
             const char *hdr = NULL;
-            if (src && asml && frm && irr) {
+            if (src && asml && frm && irr && jrr) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1353,9 +1374,14 @@ void render_hover_popup(Editor *e) {
                             src[ns].b = NULL;
                             ++ns;
                         } else if (kind == 'A') {
+                            /* A\x1f linea \x1f addr \x1f ir_id \x1f texto */
                             asml[na].line = atoi(c1);
                             asml[na].a = c2 ? c2 : "";
-                            asml[na].b = c3 ? c3 : "";
+                            asml[na].ir_id =
+                                c3 ? (int)strtoul(c3, NULL, 10) : -1;
+                            if ((unsigned)asml[na].ir_id == 0xFFFFFFFFu)
+                                asml[na].ir_id = -1;
+                            asml[na].b = c4 ? c4 : "";
                             ++na;
                         } else if (kind == 'F') {
                             /* F\x1f label \x1f kind \x1f size \x1f name */
@@ -1369,6 +1395,12 @@ void render_hover_popup(Editor *e) {
                             irr[nir].line = atoi(c1);
                             irr[nir].text = c2 ? c2 : "";
                             ++nir;
+                        } else if (kind == 'J') {
+                            /* J\x1f ir_id \x1f op IR (mapa exacto) */
+                            jrr[njr].line =
+                                c1 ? (int)strtoul(c1, NULL, 10) : -1;
+                            jrr[njr].text = c2 ? c2 : "";
+                            ++njr;
                         }
                     }
                     if (!nl) break;
@@ -1624,7 +1656,9 @@ void render_hover_popup(Editor *e) {
                 int skip = h->scroll < 0 ? 0 : h->scroll;
                 int row = 0;
                 int grp = (e->settings.hover_ir_mode == 1);
+                int exa = (e->settings.hover_ir_mode == 4);
                 int prev_grp_line = -1;
+                int prev_exa_id = -2;
                 /* Fila VISUAL de cada asm (para que las flechas sigan alineadas
                  * aunque el modo grupo intercale cabeceras IR).  -1 = no
                  * visible este frame. */
@@ -1653,6 +1687,28 @@ void render_hover_popup(Editor *e) {
                             ++row;
                         }
                         if (row >= body_rows) break;
+                    }
+                    /* Modo IR=exacto: cabecera con la op IR EXACTA antes del
+                     * primer asm de cada cambio de ir_id (correlacion 1:1). */
+                    if (exa && asml[i].ir_id >= 0 &&
+                        asml[i].ir_id != prev_exa_id) {
+                        prev_exa_id = asml[i].ir_id;
+                        const char *opt = NULL;
+                        for (int q = 0; q < njr; ++q)
+                            if (jrr[q].line == asml[i].ir_id) {
+                                opt = jrr[q].text;
+                                break;
+                            }
+                        if (opt && row < body_rows) {
+                            int hyy = by + (hrows + row) * lh;
+                            draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
+                            draw_code_line(e, opt, (int)strlen(opt),
+                                           asm_x + code_col * cw, hyy);
+                            if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
+                            h->gb_right_n = row + 1;
+                            ++row;
+                            if (row >= body_rows) break;
+                        }
                     }
                     int yy = by + (hrows + row) * lh;
                     int is_sel = (ln != 0 && ln == sel_line);
@@ -1819,6 +1875,7 @@ void render_hover_popup(Editor *e) {
             free(asml);
             free(frm);
             free(irr);
+            free(jrr);
             free(cp);
         }
     } else if (h->active_tab == 0) {
