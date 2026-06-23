@@ -1342,9 +1342,11 @@ void render_hover_popup(Editor *e) {
             FrRow *frm = (FrRow *)malloc(sizeof(FrRow) * cap);
             IrRow *irr = (IrRow *)malloc(sizeof(IrRow) * cap);
             IrRow *jrr = (IrRow *)malloc(sizeof(IrRow) * cap); /* mapa exacto: line=id */
+            /* Nombres de bloque por indice (etiquetas que dividen el asm). */
+            const char **blkname = (const char **)calloc(cap, sizeof(char *));
             int ns = 0, na = 0, nf = 0, nir = 0, njr = 0;
             const char *hdr = NULL;
-            if (src && asml && frm && irr && jrr) {
+            if (src && asml && frm && irr && jrr && blkname) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1401,6 +1403,10 @@ void render_hover_popup(Editor *e) {
                                 c1 ? (int)strtoul(c1, NULL, 10) : -1;
                             jrr[njr].text = c2 ? c2 : "";
                             ++njr;
+                        } else if (kind == 'B') {
+                            /* B\x1f indice \x1f nombre de bloque */
+                            int bi = c1 ? atoi(c1) : -1;
+                            if (bi >= 0 && bi < cap) blkname[bi] = c2 ? c2 : "";
                         }
                     }
                     if (!nl) break;
@@ -1670,6 +1676,7 @@ void render_hover_popup(Editor *e) {
                 int exa = (e->settings.hover_ir_mode == 4);
                 int prev_grp_line = -1;
                 int prev_exa_id = -2;
+                int prev_block = -1; /* etiqueta de bloque (divide el asm) */
                 /* Banda zebra por grupo IR: la cabecera y SU asm comparten el
                  * mismo tinte, alternando por grupo -> deja claro que asm
                  * pertenece a que op IR (arriba/abajo). */
@@ -1683,6 +1690,30 @@ void render_hover_popup(Editor *e) {
                 int last_vis_idx = skip - 1;
                 for (int i = skip; i < na && row < body_rows; ++i) {
                     int ln = asml[i].line;
+                    /* Etiqueta de bloque (nativo): divide el asm por bloque IR.
+                     * El bloque se deriva del ir_id (parte alta).  Es estructural
+                     * y se muestra en todos los modos. */
+                    if (is_native && asml[i].ir_id >= 0) {
+                        int blk = asml[i].ir_id / 65536;
+                        if (blk != prev_block) {
+                            prev_block = blk;
+                            const char *bn = (blk < cap) ? blkname[blk] : NULL;
+                            if (bn && bn[0] && row < body_rows) {
+                                int byy = by + (hrows + row) * lh;
+                                char lbl[96];
+                                snprintf(lbl, sizeof lbl, "%s:", bn);
+                                draw_text(e, lbl, asm_x, byy, 0xC8, 0xA0, 0x66);
+                                set_color(r, 0x44, 0x40, 0x38, 0xFF);
+                                fill_rect(r, sepx + 1, byy + lh - 2,
+                                          (x + w - 1) - (sepx + 1), 1);
+                                if (row < HOVER_GB_ROWS)
+                                    h->gb_right_lines[row] = ln;
+                                h->gb_right_n = row + 1;
+                                ++row;
+                                if (row >= body_rows) break;
+                            }
+                        }
+                    }
                     /* Modo IR=grupo: cabecera(s) IR antes del 1er asm de cada
                      * grupo de linea. */
                     if (grp && ln != 0 && ln != prev_grp_line) {
@@ -1915,6 +1946,7 @@ void render_hover_popup(Editor *e) {
             free(frm);
             free(irr);
             free(jrr);
+            free(blkname);
             free(cp);
         }
     } else if (h->active_tab == 0) {

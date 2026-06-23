@@ -1899,6 +1899,14 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                     cap += (cJSON_IsString(en) ? strlen(en->valuestring) : 0) +
                            24;
             }
+            cJSON *jbn =
+                cJSON_GetObjectItemCaseSensitive(result, "block_names");
+            if (cJSON_IsArray(jbn)) {
+                cJSON *bnm = NULL;
+                cJSON_ArrayForEach(bnm, jbn)
+                    cap += (cJSON_IsString(bnm) ? strlen(bnm->valuestring) : 0) +
+                           24;
+            }
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1959,6 +1967,18 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                         if (cJSON_IsString(en))
                             o += snprintf(gb + o, cap - o, "J\x1f%s\x1f%s\n",
                                           en->string, en->valuestring);
+                    }
+                }
+                /* Nombres de bloque: B\x1f<indice>\x1f<nombre> (etiquetas que
+                 * dividen el contenido en el asm nativo). */
+                if (cJSON_IsArray(jbn)) {
+                    int bi = 0;
+                    cJSON *bnm = NULL;
+                    cJSON_ArrayForEach(bnm, jbn) {
+                        if (cJSON_IsString(bnm))
+                            o += snprintf(gb + o, cap - o, "B\x1f%d\x1f%s\n", bi,
+                                          bnm->valuestring);
+                        ++bi;
                     }
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);
