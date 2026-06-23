@@ -1313,12 +1313,17 @@ void render_hover_popup(Editor *e) {
                 int size;
                 const char *name;
             } FrRow;
+            typedef struct {
+                int line;
+                const char *text;
+            } IrRow;
             GbRow *src = (GbRow *)malloc(sizeof(GbRow) * cap);
             GbRow *asml = (GbRow *)malloc(sizeof(GbRow) * cap);
             FrRow *frm = (FrRow *)malloc(sizeof(FrRow) * cap);
-            int ns = 0, na = 0, nf = 0;
+            IrRow *irr = (IrRow *)malloc(sizeof(IrRow) * cap);
+            int ns = 0, na = 0, nf = 0, nir = 0;
             const char *hdr = NULL;
-            if (src && asml && frm) {
+            if (src && asml && frm && irr) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1359,6 +1364,11 @@ void render_hover_popup(Editor *e) {
                             frm[nf].size = c3 ? atoi(c3) : 0;
                             frm[nf].name = c4 ? c4 : "";
                             ++nf;
+                        } else if (kind == 'I') {
+                            /* I\x1f linea \x1f op IR */
+                            irr[nir].line = atoi(c1);
+                            irr[nir].text = c2 ? c2 : "";
+                            ++nir;
                         }
                     }
                     if (!nl) break;
@@ -1392,6 +1402,17 @@ void render_hover_popup(Editor *e) {
                     if (frame_h > maxf) frame_h = maxf;
                     body_rows -= frame_h;
                     if (body_rows < 1) { body_rows = 1; frame_h = rows - hrows - 1; }
+                }
+                /* Modo IR "panel" (2): banda inferior con las ops IR de la
+                 * linea activa (apuntada/fijada). */
+                int ir_h = 0;
+                if (e->settings.hover_ir_mode == 2 && nir > 0) {
+                    ir_h = 6; /* titulo + hasta 5 ops */
+                    int maxi = body_rows / 3;
+                    if (maxi < 2) maxi = 2;
+                    if (ir_h > maxi) ir_h = maxi;
+                    body_rows -= ir_h;
+                    if (body_rows < 1) body_rows = 1;
                 }
 
                 /* --- Construir flechas de salto -----------------------------
@@ -1695,10 +1716,33 @@ void render_hover_popup(Editor *e) {
                     free(arw);
                 }
 
+                /* Banda IR (modo panel=2): ops IR de la linea activa
+                 * (fijada por click, o apuntada por el raton). */
+                if (ir_h > 0) {
+                    int al = (sel_line > 0) ? sel_line : hover_line;
+                    int iy0 = by + (hrows + body_rows) * lh;
+                    set_color_c(r, e->theme.col_tabbar_sep);
+                    fill_rect(r, x + 1, iy0 + 1, w - 2, 1);
+                    char title[64];
+                    if (al > 0)
+                        snprintf(title, sizeof title, "IR (linea %d)", al);
+                    else
+                        snprintf(title, sizeof title, "IR (apunta una linea)");
+                    draw_text(e, title, body_x, iy0 + 3, 0x88, 0x8C, 0x99);
+                    int shown = ir_h - 1, drawn = 0;
+                    for (int i = 0; i < nir && drawn < shown; ++i) {
+                        if (al <= 0 || irr[i].line != al) continue;
+                        int yy = iy0 + (1 + drawn) * lh + 3;
+                        draw_text(e, irr[i].text, body_x + 2 * cw, yy, 0x9A,
+                                  0xB6, 0xD8);
+                        ++drawn;
+                    }
+                }
+
                 /* Banda inferior: stack frame (debug-info).  Una fila por
                  * slot: label  [kind]  sz=N  nombre.  Color segun kind. */
                 if (frame_h > 0) {
-                    int fy0 = by + (hrows + body_rows) * lh;
+                    int fy0 = by + (hrows + body_rows + ir_h) * lh;
                     /* Separador horizontal + titulo. */
                     set_color_c(r, e->theme.col_tabbar_sep);
                     fill_rect(r, x + 1, fy0 + 1, w - 2, 1);
@@ -1724,6 +1768,7 @@ void render_hover_popup(Editor *e) {
             free(src);
             free(asml);
             free(frm);
+            free(irr);
             free(cp);
         }
     } else if (h->active_tab == 0) {

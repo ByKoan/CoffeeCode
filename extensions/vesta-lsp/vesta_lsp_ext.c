@@ -1879,6 +1879,18 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                     strlen(insp_str(it, "label", "")) +
                     strlen(insp_str(it, "name", "")) +
                     strlen(insp_str(it, "kind", "")) + 40;
+            cJSON *jirbl =
+                cJSON_GetObjectItemCaseSensitive(result, "ir_by_line");
+            if (cJSON_IsObject(jirbl)) {
+                cJSON *ln = NULL;
+                cJSON_ArrayForEach(ln, jirbl) {
+                    cJSON *op = NULL;
+                    cJSON_ArrayForEach(op, ln)
+                        cap += (cJSON_IsString(op) ? strlen(op->valuestring)
+                                                   : 0) +
+                               24;
+                }
+            }
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1913,6 +1925,18 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                                       insp_str(it, "kind", ""),
                                       insp_num(it, "size", 0),
                                       insp_str(it, "name", ""));
+                    }
+                }
+                /* Filas de correlacion IR<->linea: I\x1f<linea>\x1f<op IR> */
+                if (cJSON_IsObject(jirbl)) {
+                    cJSON *ln = NULL;
+                    cJSON_ArrayForEach(ln, jirbl) {
+                        cJSON *op = NULL;
+                        cJSON_ArrayForEach(op, ln) {
+                            if (cJSON_IsString(op))
+                                o += snprintf(gb + o, cap - o, "I\x1f%s\x1f%s\n",
+                                              ln->string, op->valuestring);
+                        }
                     }
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);
