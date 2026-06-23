@@ -1424,8 +1424,28 @@ void render_hover_popup(Editor *e) {
                 int src_cols = avail * sp / 100;
                 if (src_cols < 6) src_cols = 6;
                 if (src_cols > avail - 6) src_cols = avail - 6;
-                int sepx = body_x + src_cols * cw + cw / 2;
-                int asm_x = body_x + (src_cols + 2) * cw;
+                /* Modo IR=3col: tres columnas fuente | IR | asm.  En 2-col,
+                 * src_cols puede ser ancho; en 3-col lo acotamos para dejar
+                 * sitio a la columna IR central. */
+                int col3 = (e->settings.hover_ir_mode == 3);
+                int sepx, asm_x, sep2x = -1, ir_x = -1, ir_cols = 0;
+                if (col3) {
+                    if (src_cols > avail / 3) src_cols = avail / 3;
+                    if (src_cols < 6) src_cols = 6;
+                    int rest = avail - src_cols - 4; /* -4 separadores */
+                    if (rest < 8) rest = 8;
+                    ir_cols = rest * 45 / 100;
+                    if (ir_cols < 6) ir_cols = 6;
+                    sepx = body_x + src_cols * cw + cw / 2;
+                    ir_x = body_x + (src_cols + 2) * cw;
+                    sep2x = ir_x + ir_cols * cw + cw / 2;
+                    asm_x = sep2x + cw + cw / 2;
+                } else {
+                    sepx = body_x + src_cols * cw + cw / 2;
+                    asm_x = body_x + (src_cols + 2) * cw;
+                }
+                /* Borde izquierdo de la columna asm (sep2x en 3-col). */
+                int asm_sep = col3 ? sep2x : sepx;
                 int hrows = hdr ? 1 : 0;
                 int body_rows = rows - hrows;
                 if (body_rows < 1) body_rows = 1;
@@ -1607,6 +1627,11 @@ void render_hover_popup(Editor *e) {
                                                 : e->theme.col_tabbar_sep);
                 fill_rect(r, sepx, body_y0, h->gb_split_drag ? 2 : 1,
                           body_h - 2);
+                /* 2o separador (modo 3col) entre la columna IR y la asm. */
+                if (col3) {
+                    set_color_c(r, e->theme.col_tabbar_sep);
+                    fill_rect(r, sep2x, body_y0, 1, body_h - 2);
+                }
 
                 /* Linea .vex bajo el raton (hover, en cualquier columna). */
                 int hover_line = -1;
@@ -1615,6 +1640,9 @@ void render_hover_popup(Editor *e) {
                     int vr = (h->last_my - body_top) / lh;
                     if (h->last_mx < sepx) {
                         if (vr >= 0 && vr < ns) hover_line = src[vr].line;
+                    } else if (col3 && h->last_mx < sep2x) {
+                        /* columna IR central: cada fila es una op por linea */
+                        if (vr >= 0 && vr < nir) hover_line = irr[vr].line;
                     } else {
                         int ai = (h->scroll < 0 ? 0 : h->scroll) + vr;
                         if (ai >= 0 && ai < na) hover_line = asml[ai].line;
@@ -1667,6 +1695,31 @@ void render_hover_popup(Editor *e) {
                     if (i + 1 > h->gb_left_n) h->gb_left_n = i + 1;
                 }
 
+                /* Columna IR central (modo 3col): lista de ops IR por linea,
+                 * resaltadas si su linea coincide con la apuntada/fijada. */
+                if (col3) {
+                    int irw = sep2x - (ir_x - cw); /* ancho de la banda IR */
+                    for (int i = 0; i < nir && i < body_rows; ++i) {
+                        int yy = by + (hrows + i) * lh;
+                        int ln = irr[i].line;
+                        int is_sel = (ln != 0 && ln == sel_line);
+                        int is_hov = (ln != 0 && ln == hover_line);
+                        if (is_sel || is_hov) {
+                            if (is_sel) {
+                                set_color_c(r, e->theme.col_tab_active);
+                                fill_rect(r, sepx + 1, yy - 1, irw, lh);
+                            }
+                            set_color_c(r, e->theme.col_tab_accent);
+                            fill_rect(r, sepx + 1, yy - 1, is_sel ? 3 : 2, lh);
+                        }
+                        char pre[16];
+                        snprintf(pre, sizeof pre, "L%-4d", ln);
+                        draw_text(e, pre, ir_x, yy, 0x6C, 0xB0, 0xE0);
+                        draw_code_line(e, irr[i].text, (int)strlen(irr[i].text),
+                                       ir_x + 5 * cw, yy);
+                    }
+                }
+
                 /* Columna nativo (scrollable) -- con resaltado de sintaxis.
                  * `row` es la fila VISUAL (en modo IR=grupo se intercalan
                  * cabeceras IR, que tambien consumen filas). */
@@ -1704,8 +1757,8 @@ void render_hover_popup(Editor *e) {
                                 snprintf(lbl, sizeof lbl, "%s:", bn);
                                 draw_text(e, lbl, asm_x, byy, 0xC8, 0xA0, 0x66);
                                 set_color(r, 0x44, 0x40, 0x38, 0xFF);
-                                fill_rect(r, sepx + 1, byy + lh - 2,
-                                          (x + w - 1) - (sepx + 1), 1);
+                                fill_rect(r, asm_sep + 1, byy + lh - 2,
+                                          (x + w - 1) - (asm_sep + 1), 1);
                                 if (row < HOVER_GB_ROWS)
                                     h->gb_right_lines[row] = ln;
                                 h->gb_right_n = row + 1;
@@ -1724,8 +1777,8 @@ void render_hover_popup(Editor *e) {
                             int hyy = by + (hrows + row) * lh;
                             if (ir_par) {
                                 set_color(r, 0x26, 0x2B, 0x35, 0xFF);
-                                fill_rect(r, sepx + 1, hyy - 1,
-                                          (x + w - 1) - (sepx + 1), lh);
+                                fill_rect(r, asm_sep + 1, hyy - 1,
+                                          (x + w - 1) - (asm_sep + 1), lh);
                             }
                             draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
                             /* El op IR empieza tras el canalon de flechas (en
@@ -1756,8 +1809,8 @@ void render_hover_popup(Editor *e) {
                             int hyy = by + (hrows + row) * lh;
                             if (ir_par) {
                                 set_color(r, 0x26, 0x2B, 0x35, 0xFF);
-                                fill_rect(r, sepx + 1, hyy - 1,
-                                          (x + w - 1) - (sepx + 1), lh);
+                                fill_rect(r, asm_sep + 1, hyy - 1,
+                                          (x + w - 1) - (asm_sep + 1), lh);
                             }
                             draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
                             draw_code_line(e, opt, (int)strlen(opt),
@@ -1771,11 +1824,11 @@ void render_hover_popup(Editor *e) {
                     int yy = by + (hrows + row) * lh;
                     int is_sel = (ln != 0 && ln == sel_line);
                     int is_hov = (ln != 0 && ln == hover_line);
-                    int rw = (x + w - 1) - (sepx + 1);
+                    int rw = (x + w - 1) - (asm_sep + 1);
                     /* Banda zebra del grupo IR (mismo tinte que su cabecera). */
                     if ((grp || exa) && ir_par && !is_sel) {
                         set_color(r, 0x26, 0x2B, 0x35, 0xFF);
-                        fill_rect(r, sepx + 1, yy - 1, rw, lh);
+                        fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
                     }
                     /* Caja AGRUPADA del run contiguo (igual que la col. fuente). */
                     if (is_sel || is_hov) {
@@ -1786,14 +1839,14 @@ void render_hover_popup(Editor *e) {
                                        : -999;
                         if (is_sel) {
                             set_color_c(r, e->theme.col_tab_active);
-                            fill_rect(r, sepx + 1, yy - 1, rw, lh);
+                            fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
                         }
                         set_color_c(r, e->theme.col_tab_accent);
-                        fill_rect(r, sepx + 1, yy - 1, is_sel ? 3 : 2, lh);
+                        fill_rect(r, asm_sep + 1, yy - 1, is_sel ? 3 : 2, lh);
                         if (is_sel) {
-                            if (prev != bl) fill_rect(r, sepx + 1, yy - 1, rw, 1);
+                            if (prev != bl) fill_rect(r, asm_sep + 1, yy - 1, rw, 1);
                             if (next != bl)
-                                fill_rect(r, sepx + 1, yy + lh - 2, rw, 1);
+                                fill_rect(r, asm_sep + 1, yy + lh - 2, rw, 1);
                         }
                     }
                     char pre[16];
