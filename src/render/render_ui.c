@@ -1392,6 +1392,92 @@ void render_hover_popup(Editor *e) {
                     if (body_rows < 1) { body_rows = 1; frame_h = rows - hrows - 1; }
                 }
 
+                /* --- Construir flechas de salto -----------------------------
+                 * Nativo (JIT/AOT): destino por 0xADDR contra la columna addr.
+                 * Bytecode (.vel): destino por ETIQUETA (jmp/cmpjmp/decjnz
+                 * <label> -> fila "<label>:").  Se construyen ANTES del render
+                 * para reservar el canalon y desplazar el codigo. */
+                int is_native = (na > 0 && asml[0].a && asml[0].a[0]);
+                typedef struct { int from, to, lane; } GbArrow;
+                GbArrow *arw = (GbArrow *)malloc(sizeof(GbArrow) * (na + 1));
+                int narw = 0;
+                if (arw) {
+                    for (int i = 0; i < na; ++i) {
+                        const char *t = asml[i].b;
+                        if (!t || !t[0]) continue;
+                        int to = -1;
+                        if (is_native) {
+                            if (t[0] != 'j') continue; /* solo j* (no call) */
+                            const char *hx = strstr(t, "0x");
+                            if (!hx) continue;
+                            long tgt = strtol(hx + 2, NULL, 16);
+                            for (int k = 0; k < na; ++k)
+                                if (asml[k].a && asml[k].a[0] &&
+                                    strtol(asml[k].a, NULL, 16) == tgt) {
+                                    to = k;
+                                    break;
+                                }
+                        } else {
+                            /* jmp / jmp.jXX / cmpjmp.cc / decjnz <label> */
+                            if (strncmp(t, "jmp", 3) != 0 &&
+                                strncmp(t, "cmpjmp", 6) != 0 &&
+                                strncmp(t, "decjnz", 6) != 0)
+                                continue;
+                            int L = (int)strlen(t), e2 = L;
+                            while (e2 > 0 && (t[e2 - 1] == ' ' || t[e2 - 1] == '\t'))
+                                --e2;
+                            int b2 = e2;
+                            while (b2 > 0 && t[b2 - 1] != ' ' && t[b2 - 1] != '\t' &&
+                                   t[b2 - 1] != ',')
+                                --b2;
+                            int ll = e2 - b2;
+                            if (ll <= 0 || ll > 126) continue;
+                            char lbl[128];
+                            memcpy(lbl, t + b2, ll);
+                            lbl[ll] = 0;
+                            for (int k = 0; k < na; ++k) {
+                                const char *bt = asml[k].b;
+                                if (!bt) continue;
+                                while (*bt == ' ' || *bt == '\t') ++bt;
+                                size_t bl2 = strlen(bt);
+                                if (bl2 == (size_t)ll + 1 && bt[bl2 - 1] == ':' &&
+                                    strncmp(bt, lbl, ll) == 0) {
+                                    to = k;
+                                    break;
+                                }
+                            }
+                        }
+                        if (to < 0 || to == i) continue;
+                        arw[narw].from = i;
+                        arw[narw].to = to;
+                        arw[narw].lane = 0;
+                        ++narw;
+                    }
+                    for (int a = 0; a < narw; ++a) { /* carriles greedy */
+                        int lane = 0, clash = 1;
+                        int a0 = arw[a].from < arw[a].to ? arw[a].from : arw[a].to;
+                        int a1 = arw[a].from < arw[a].to ? arw[a].to : arw[a].from;
+                        while (clash && lane < 4) {
+                            clash = 0;
+                            for (int b = 0; b < a; ++b) {
+                                if (arw[b].lane != lane) continue;
+                                int b0 = arw[b].from < arw[b].to ? arw[b].from
+                                                                 : arw[b].to;
+                                int b1 = arw[b].from < arw[b].to ? arw[b].to
+                                                                 : arw[b].from;
+                                if (!(a1 < b0 || b1 < a0)) { clash = 1; break; }
+                            }
+                            if (clash) ++lane;
+                        }
+                        arw[a].lane = lane;
+                    }
+                }
+                /* Layout: canalon de flechas (gw columnas) entre el prefijo
+                 * (Lnnn[+offset]) y el codigo, solo si hay flechas. */
+                int gw = (narw > 0) ? 4 : 0;
+                int code_col = (is_native ? 11 : 5) + gw; /* col. del codigo */
+                int gx = asm_x + (is_native ? 11 : 5) * cw; /* base del canalon */
+
                 /* Publicar geometria + estado godbolt para el input (click-
                  * select de linea + arrastre del separador). */
                 h->gb_active = 1;
@@ -1501,17 +1587,15 @@ void render_hover_popup(Editor *e) {
                     draw_text(e, pre, asm_x, yy, 0x6C, 0xB0, 0xE0);
                     /* Columna +offset solo si hay addr (JIT/AOT); el bytecode
                      * no tiene offset de byte -> el codigo va justo tras Lnnn. */
-                    int code_x;
                     if (asml[i].a && asml[i].a[0]) {
                         char ab[24];
                         snprintf(ab, sizeof ab, "+%s", asml[i].a);
                         draw_text(e, ab, asm_x + 5 * cw, yy, 0x70, 0x74, 0x80);
-                        /* +14: deja un canalon de ~3 columnas (cols 11-13)
-                         * para las flechas de salto sin pisar el codigo. */
-                        code_x = asm_x + 14 * cw;
-                    } else {
-                        code_x = asm_x + 5 * cw;
                     }
+                    /* code_col incluye el canalon de flechas (gw cols) cuando
+                     * lo hay; igual para nativo (tras Lnnn+offset) y bytecode
+                     * (tras Lnnn). */
+                    int code_x = asm_x + code_col * cw;
                     /* Nativo (JIT/AOT, con offset) -> coloreado x86; bytecode
                      * (.vel, sin offset) -> sintaxis Vex. */
                     if (asml[i].a && asml[i].a[0])
@@ -1523,57 +1607,11 @@ void render_hover_popup(Editor *e) {
                     h->gb_right_n = row + 1;
                 }
 
-                /* --- Flechas de salto (estilo IDA/Ghidra) ------------------
-                 * Para cada jmp/jcc con destino 0xADDR dentro de la funcion,
-                 * dibuja un conector vertical en el canalon (entre +offset y el
-                 * codigo) desde el salto hasta su destino, con cabeza de flecha.
-                 * Se acentua si el salto o el destino estan en la linea .vex
-                 * apuntada/fijada.  Solo nativo (el bytecode no trae 0xADDR). */
-                typedef struct { int from, to, lane; } GbArrow;
-                GbArrow *arw = (GbArrow *)malloc(sizeof(GbArrow) * (na + 1));
-                int narw = 0;
+                /* --- Dibujar flechas de salto (construidas arriba) ---------
+                 * Conector vertical en el canalon desde el salto hasta su
+                 * destino, con cabeza de flecha; acento si el salto o el
+                 * destino estan en la linea .vex apuntada/fijada. */
                 if (arw) {
-                    for (int i = 0; i < na; ++i) {
-                        const char *t = asml[i].b;
-                        if (!t || t[0] != 'j') continue; /* solo j* (no call) */
-                        const char *hx = strstr(t, "0x");
-                        if (!hx) continue;
-                        long tgt = strtol(hx + 2, NULL, 16);
-                        int to = -1;
-                        for (int k = 0; k < na; ++k) {
-                            if (asml[k].a && asml[k].a[0] &&
-                                strtol(asml[k].a, NULL, 16) == tgt) {
-                                to = k;
-                                break;
-                            }
-                        }
-                        if (to < 0) continue;
-                        arw[narw].from = i;
-                        arw[narw].to = to;
-                        arw[narw].lane = 0;
-                        ++narw;
-                    }
-                    /* Asignacion de carriles (greedy): un salto que se solapa
-                     * con otro del mismo carril sube de carril (max 4). */
-                    for (int a = 0; a < narw; ++a) {
-                        int lane = 0, clash = 1;
-                        int a0 = arw[a].from < arw[a].to ? arw[a].from : arw[a].to;
-                        int a1 = arw[a].from < arw[a].to ? arw[a].to : arw[a].from;
-                        while (clash && lane < 4) {
-                            clash = 0;
-                            for (int b = 0; b < a; ++b) {
-                                if (arw[b].lane != lane) continue;
-                                int b0 = arw[b].from < arw[b].to ? arw[b].from
-                                                                 : arw[b].to;
-                                int b1 = arw[b].from < arw[b].to ? arw[b].to
-                                                                 : arw[b].from;
-                                if (!(a1 < b0 || b1 < a0)) { clash = 1; break; }
-                            }
-                            if (clash) ++lane;
-                        }
-                        arw[a].lane = lane;
-                    }
-                    int gx = asm_x + 11 * cw; /* canalon entre +offset y codigo */
                     for (int a = 0; a < narw; ++a) {
                         int fr = arw[a].from, to = arw[a].to;
                         int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;
