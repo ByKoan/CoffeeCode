@@ -1344,6 +1344,22 @@ static void insp_fmt_text_like(VlState *st, InspMethod m, cJSON *result) {
                      head, addr, tx);
             insp_emit(st, buf);
         }
+        /* Stack frame (debug-info): slots, offset, tamano y que valor/var. */
+        cJSON *frame = cJSON_GetObjectItemCaseSensitive(result, "frame");
+        if (cJSON_IsArray(frame) && cJSON_GetArraySize(frame) > 0) {
+            insp_emit(st, "\n" INSP_KEY
+                          "--- stack frame (offset | tam | clase | valor) ---"
+                          INSP_RST "\n");
+            cJSON *f = NULL;
+            cJSON_ArrayForEach(f, frame) {
+                char buf[512];
+                snprintf(buf, sizeof buf,
+                         INSP_DIM "%-10s" INSP_RST " sz=%-3d %-8s %s\n",
+                         insp_str(f, "label", ""), insp_num(f, "size", 0),
+                         insp_str(f, "kind", ""), insp_str(f, "name", ""));
+                insp_emit(st, buf);
+            }
+        }
         return;
     }
 
@@ -1856,6 +1872,13 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
             cJSON_ArrayForEach(it, jal) cap +=
                 strlen(insp_str(it, "text", "")) +
                 strlen(insp_str(it, "addr", "")) + 32;
+            cJSON *jframe =
+                cJSON_GetObjectItemCaseSensitive(result, "frame");
+            if (cJSON_IsArray(jframe))
+                cJSON_ArrayForEach(it, jframe) cap +=
+                    strlen(insp_str(it, "label", "")) +
+                    strlen(insp_str(it, "name", "")) +
+                    strlen(insp_str(it, "kind", "")) + 40;
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1878,6 +1901,19 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                                   insp_num(it, "line", 0),
                                   insp_str(it, "addr", ""),
                                   insp_str(it, "text", ""));
+                }
+                /* Filas del stack frame (debug-info): el render las pinta en
+                 * una banda inferior.  Formato:
+                 *   F\x1f<label>\x1f<kind>\x1f<size>\x1f<name>\n */
+                if (cJSON_IsArray(jframe)) {
+                    cJSON_ArrayForEach(it, jframe) {
+                        o += snprintf(gb + o, cap - o,
+                                      "F\x1f%s\x1f%s\x1f%d\x1f%s\n",
+                                      insp_str(it, "label", ""),
+                                      insp_str(it, "kind", ""),
+                                      insp_num(it, "size", 0),
+                                      insp_str(it, "name", ""));
+                    }
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);
                 free(gb);

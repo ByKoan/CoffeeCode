@@ -1179,11 +1179,18 @@ void render_hover_popup(Editor *e) {
                 const char *a;
                 const char *b;
             } GbRow;
+            typedef struct {
+                const char *label;
+                const char *kind;
+                int size;
+                const char *name;
+            } FrRow;
             GbRow *src = (GbRow *)malloc(sizeof(GbRow) * cap);
             GbRow *asml = (GbRow *)malloc(sizeof(GbRow) * cap);
-            int ns = 0, na = 0;
+            FrRow *frm = (FrRow *)malloc(sizeof(FrRow) * cap);
+            int ns = 0, na = 0, nf = 0;
             const char *hdr = NULL;
-            if (src && asml) {
+            if (src && asml && frm) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1193,13 +1200,18 @@ void render_hover_popup(Editor *e) {
                     char *f1 = strchr(p, 0x1F);
                     if (f1) {
                         *f1 = 0;
-                        char *c1 = f1 + 1, *c2 = NULL, *c3 = NULL;
+                        char *c1 = f1 + 1, *c2 = NULL, *c3 = NULL, *c4 = NULL;
                         char *f2 = strchr(c1, 0x1F);
                         if (f2) {
                             *f2 = 0;
                             c2 = f2 + 1;
                             char *f3 = strchr(c2, 0x1F);
-                            if (f3) { *f3 = 0; c3 = f3 + 1; }
+                            if (f3) {
+                                *f3 = 0;
+                                c3 = f3 + 1;
+                                char *f4 = strchr(c3, 0x1F);
+                                if (f4) { *f4 = 0; c4 = f4 + 1; }
+                            }
                         }
                         if (kind == 'H') hdr = c1;
                         else if (kind == 'S') {
@@ -1212,6 +1224,13 @@ void render_hover_popup(Editor *e) {
                             asml[na].a = c2 ? c2 : "";
                             asml[na].b = c3 ? c3 : "";
                             ++na;
+                        } else if (kind == 'F') {
+                            /* F\x1f label \x1f kind \x1f size \x1f name */
+                            frm[nf].label = c1 ? c1 : "";
+                            frm[nf].kind = c2 ? c2 : "";
+                            frm[nf].size = c3 ? atoi(c3) : 0;
+                            frm[nf].name = c4 ? c4 : "";
+                            ++nf;
                         }
                     }
                     if (!nl) break;
@@ -1235,6 +1254,17 @@ void render_hover_popup(Editor *e) {
                 int body_rows = rows - hrows;
                 if (body_rows < 1) body_rows = 1;
                 int body_top = by + hrows * lh;
+                /* Reservar una banda inferior para el stack frame (titulo +
+                 * filas), sin comerse mas de 1/3 del cuerpo. */
+                int frame_h = 0;
+                if (nf > 0) {
+                    frame_h = nf + 1; /* +1 titulo */
+                    int maxf = body_rows / 3;
+                    if (maxf < 2) maxf = 2;
+                    if (frame_h > maxf) frame_h = maxf;
+                    body_rows -= frame_h;
+                    if (body_rows < 1) { body_rows = 1; frame_h = rows - hrows - 1; }
+                }
 
                 /* Publicar geometria + estado godbolt para el input (click-
                  * select de linea + arrastre del separador). */
@@ -1359,9 +1389,36 @@ void render_hover_popup(Editor *e) {
                     if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                     h->gb_right_n = row + 1;
                 }
+
+                /* Banda inferior: stack frame (debug-info).  Una fila por
+                 * slot: label  [kind]  sz=N  nombre.  Color segun kind. */
+                if (frame_h > 0) {
+                    int fy0 = by + (hrows + body_rows) * lh;
+                    /* Separador horizontal + titulo. */
+                    set_color_c(r, e->theme.col_tabbar_sep);
+                    fill_rect(r, x + 1, fy0 + 1, w - 2, 1);
+                    draw_text(e, "stack frame", body_x, fy0 + 3, 0x88, 0x8C,
+                              0x99);
+                    int shown = frame_h - 1; /* filas de datos visibles */
+                    for (int i = 0; i < nf && i < shown; ++i) {
+                        int yy = fy0 + (1 + i) * lh + 3;
+                        const char *k = frm[i].kind;
+                        /* color por kind: saved/retaddr=azul, local=verde,
+                         * reserved=gris. */
+                        int cr = 0x80, cg = 0x86, cb = 0x90; /* reserved */
+                        if (strcmp(k, "local") == 0) { cr = 0x9E; cg = 0xD0; cb = 0x7A; }
+                        else if (strcmp(k, "saved") == 0) { cr = 0x6C; cg = 0xB0; cb = 0xE0; }
+                        else if (strcmp(k, "retaddr") == 0) { cr = 0xD0; cg = 0xA0; cb = 0x6C; }
+                        char fb[256];
+                        snprintf(fb, sizeof fb, "%-10s %-8s sz=%-3d %s",
+                                 frm[i].label, k, frm[i].size, frm[i].name);
+                        draw_text(e, fb, body_x, yy, cr, cg, cb);
+                    }
+                }
             }
             free(src);
             free(asml);
+            free(frm);
             free(cp);
         }
     } else if (h->active_tab == 0) {
