@@ -378,7 +378,8 @@ static char *hover_decode_plain(const char *c) {
             memcpy(line, p, cpy);
             line[cpy] = 0;
             char kind = line[0];
-            char *f1 = strchr(line, 0x1F), *c1 = NULL, *c2 = NULL, *c3 = NULL;
+            char *f1 = strchr(line, 0x1F), *c1 = NULL, *c2 = NULL, *c3 = NULL,
+                 *c4 = NULL;
             if (f1) {
                 *f1 = 0;
                 c1 = f1 + 1;
@@ -387,7 +388,12 @@ static char *hover_decode_plain(const char *c) {
                     *f2 = 0;
                     c2 = f2 + 1;
                     char *f3 = strchr(c2, 0x1F);
-                    if (f3) { *f3 = 0; c3 = f3 + 1; }
+                    if (f3) {
+                        *f3 = 0;
+                        c3 = f3 + 1;
+                        char *f4 = strchr(c3, 0x1F);
+                        if (f4) { *f4 = 0; c4 = f4 + 1; }
+                    }
                 }
             }
             if (kind == 'H')
@@ -396,12 +402,13 @@ static char *hover_decode_plain(const char *c) {
                 o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  %s\n",
                               c1 ? c1 : "", c2 ? c2 : "");
             else if (kind == 'A') {
+                /* A = linea \x1f addr \x1f ir_id \x1f texto */
                 if (c2 && c2[0])
                     o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  +%-5s  %s\n",
-                                  c1 ? c1 : "", c2, c3 ? c3 : "");
+                                  c1 ? c1 : "", c2, c4 ? c4 : "");
                 else
                     o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  %s\n",
-                                  c1 ? c1 : "", c3 ? c3 : "");
+                                  c1 ? c1 : "", c4 ? c4 : "");
             }
             if (!nl) break;
             p = nl + 1;
