@@ -1489,11 +1489,9 @@ void render_hover_popup(Editor *e) {
                 h->gb_left_n = 0;
                 h->gb_right_n = 0;
 
-                /* Cabecera de stats. */
-                if (hdr) draw_text(e, hdr, body_x, by, 0x88, 0x8C, 0x99);
-                /* Barra de toggles de opciones de vista (componente generico
-                 * ui_toggle; valores host-globales en Settings).  Derecha de la
-                 * cabecera, de derecha a izquierda. */
+                /* Barra de toggles (derecha) + cabecera de stats (izquierda,
+                 * recortada para no solaparse con los chips).  ui_toggle es el
+                 * componente generico; valores host-globales en Settings. */
                 {
                     static const char *kIrName[5] = {"IR:off", "IR:grupo",
                                                      "IR:panel", "IR:3col",
@@ -1507,15 +1505,32 @@ void render_hover_popup(Editor *e) {
                         {UI_HOVER_OPT_ARROWS, "flechas",
                          e->settings.hover_arrows},
                     };
-                    int tx = x + w - pad;
+                    /* 1) posiciones (derecha -> izquierda). */
+                    int chip_x[4], tx = x + w - pad;
                     for (int ti = 0; ti < 4; ++ti) {
                         int tw = 0, th = 0;
                         TTF_GetStringSize(e->font, tg[ti].l, 0, &tw, &th);
                         int chipw = tw + cw + 4;
                         tx -= chipw + 4;
-                        ui_toggle(e, tg[ti].id, tx, by - 1, tg[ti].l,
-                                  tg[ti].on);
+                        chip_x[ti] = tx;
                     }
+                    int chips_left = chip_x[3]; /* el mas a la izquierda */
+                    /* 2) cabecera recortada hasta antes de los chips. */
+                    if (hdr) {
+                        int maxc = (chips_left - body_x) / cw - 1;
+                        if (maxc < 0) maxc = 0;
+                        char hb[256];
+                        int hl = (int)strlen(hdr);
+                        if (hl > maxc) hl = maxc;
+                        if (hl > 255) hl = 255;
+                        memcpy(hb, hdr, hl);
+                        hb[hl] = 0;
+                        draw_text(e, hb, body_x, by, 0x88, 0x8C, 0x99);
+                    }
+                    /* 3) chips. */
+                    for (int ti = 0; ti < 4; ++ti)
+                        ui_toggle(e, tg[ti].id, chip_x[ti], by - 1, tg[ti].l,
+                                  tg[ti].on);
                 }
                 /* Separador vertical (resaltado si se esta arrastrando). */
                 set_color_c(r, h->gb_split_drag ? e->theme.col_tab_accent
