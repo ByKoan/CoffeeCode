@@ -38,7 +38,7 @@ extern "C" {
  *      El core ya NO trae resaltador propio: el coloreado lo aportan las
  *      extensiones (incluido el lenguaje C, que es una extension nativa
  *      embebida en el ejecutable).  Las extensiones v1/v2/v3 siguen cargando. */
-#define COFFEE_ABI_VERSION 5u
+#define COFFEE_ABI_VERSION 7u
 
 /** Handle opaco del IDE.  Las extensiones lo reciben y lo pasan de vuelta a
  *  cada funcion del CoffeeApi.  Su layout es privado al IDE (ABI estable). */
@@ -51,8 +51,19 @@ typedef enum {
     COFFEE_EVENT_BUFFER_CHANGED,/**< el buffer activo cambio; data = NULL */
     COFFEE_EVENT_CURSOR_MOVED,  /**< cursor movido;     data = NULL */
     COFFEE_EVENT_TAB_SWITCH,    /**< cambio de pestana; data = NULL */
-    COFFEE_EVENT_SHUTDOWN       /**< el IDE se cierra; libera recursos aqui */
+    COFFEE_EVENT_SHUTDOWN,      /**< el IDE se cierra; libera recursos aqui */
+    /* ABI v7: el raton se ha detenido sobre un identificador del texto
+     * (mouse-rest).  data = const CoffeeHoverPos* (linea/columna 0-based en
+     * CODEPOINTS del buffer activo).  La extension puede pedir info y abrir un
+     * popup de hover con show_hover. */
+    COFFEE_EVENT_TEXT_HOVER
 } CoffeeEventType;
+
+/** Posicion de texto de un hover (data del evento COFFEE_EVENT_TEXT_HOVER). */
+typedef struct CoffeeHoverPos {
+    uint32_t line; /**< linea 0-based */
+    uint32_t col;  /**< columna 0-based en codepoints */
+} CoffeeHoverPos;
 
 /** Severidad para CoffeeApi::log. */
 typedef enum {
@@ -395,6 +406,42 @@ typedef struct CoffeeApi {
      *  clear_decorations.  Devuelve 0 si ok, !=0 en error. */
     int (*set_range_underline)(CoffeeHost *h, size_t line, uint32_t start_col,
                                uint32_t end_col, CoffeeColor color);
+
+    /* ---- Hints inline en columna (ABI v6) ----
+     * NOTA ABI: punteros anyadidos AL FINAL del struct; las extensiones v1..v5
+     * siguen siendo compatibles. */
+
+    /** Inserta un texto fantasma (ghost) ANTES de la columna @p col (CODEPOINTS)
+     *  de la linea @p line del BUFFER ACTIVO, empujando el codigo a su derecha.
+     *  A diferencia de set_inline_hint (que va al final de la linea), permite
+     *  VARIOS hints en columnas intermedias de la misma linea (p.ej. nombres de
+     *  parametros antes de cada argumento de una llamada).  Se limpian con
+     *  clear_inline_hints.  Devuelve 0 si ok, !=0 en error. */
+    int (*set_inline_hint_at)(CoffeeHost *h, size_t line, uint32_t col,
+                              const char *text, CoffeeColor color);
+
+    /** Quita TODOS los hints inline (los de set_inline_hint y los de
+     *  set_inline_hint_at) del BUFFER ACTIVO puestos por la extension en curso. */
+    void (*clear_inline_hints)(CoffeeHost *h);
+
+    /* ---- Popup de hover con pestanas (ABI v7) ----
+     * NOTA ABI: punteros anyadidos AL FINAL del struct; las extensiones v1..v6
+     * siguen siendo compatibles.  Pensado para mostrar info de un simbolo
+     * (doc/firma + IR/bytecode/JIT/AOT) al detenerse el raton sobre el. */
+
+    /** Abre (o reemplaza) el popup de hover en el ancla del ultimo evento
+     *  COFFEE_EVENT_TEXT_HOVER, con @p n_tabs pestanas tituladas @p tab_names.
+     *  El contenido de cada pestana empieza vacio ("cargando"); se rellena con
+     *  set_hover_tab.  Devuelve 0 si ok. */
+    int (*show_hover)(CoffeeHost *h, const char *const *tab_names, int n_tabs);
+
+    /** Fija el contenido (texto monoespaciado, multilinea) de la pestana
+     *  @p tab_index del popup de hover abierto.  Permite carga perezosa
+     *  (rellenar cada pestana cuando llega su respuesta del LSP). */
+    int (*set_hover_tab)(CoffeeHost *h, int tab_index, const char *content);
+
+    /** Cierra el popup de hover si esta abierto. */
+    void (*hide_hover)(CoffeeHost *h);
 } CoffeeApi;
 
 /**

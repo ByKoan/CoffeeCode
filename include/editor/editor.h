@@ -122,6 +122,54 @@ typedef struct {
      * render/ui_hit.h) y el input la consulta con ui_hit(UI_FIND_*). */
 } FindBar;
 
+/* Popup de hover con pestanas (info de un simbolo: doc/IR/bytecode/JIT/AOT).
+ * Lo abre una extension (p.ej. el LSP de Vex) con show_hover tras detenerse el
+ * raton sobre un identificador (COFFEE_EVENT_TEXT_HOVER). */
+#define HOVER_MAX_TABS 8
+/* Max filas visibles mapeadas en la vista godbolt (fila -> linea .vex). */
+#define HOVER_GB_ROWS 256
+typedef struct HoverPopup {
+    int visible;                 /* 1 = abierto */
+    int anchor_x, anchor_y;      /* ancla en px (celda de texto del hover) */
+    int anchor_line, anchor_col; /* posicion de texto (0-based, codepoints) */
+    char *tab_names[HOVER_MAX_TABS];   /* titulos (heap) */
+    char *tab_content[HOVER_MAX_TABS]; /* contenido (heap); NULL = cargando */
+    int n_tabs;
+    int active_tab;
+    int scroll; /* scroll vertical del contenido (en lineas) */
+    int rect_x, rect_y, rect_w, rect_h; /* geometria (px): posicion + tamano */
+    int needs_place;  /* 1 = recolocar desde el ancla en el proximo render */
+    int dragging;     /* 1 = el usuario lo esta moviendo (barra de titulo) */
+    int resizing;     /* 1 = el usuario lo esta redimensionando (esquina) */
+    int drag_off_x, drag_off_y; /* offset raton-popup al empezar a mover */
+    /* deteccion de mouse-rest (el raton parado dispara el evento) */
+    int last_mx, last_my;      /* ultima posicion conocida del raton */
+    uint32_t last_move_ms;     /* SDL_GetTicks del ultimo movimiento */
+    int rest_fired;            /* 1 = ya disparamos el evento en este reposo */
+    /* -- Vista "Godbolt" correlada (pestanas JIT/AOT/Bytecode): dos columnas
+     * fuente|nativo con cross-highlight por linea.  El render rellena la
+     * geometria + el mapeo fila-visible -> linea .vex para que el input pueda
+     * (a) seleccionar una linea al click y (b) arrastrar el separador. */
+    int gb_active;        /* 1 = la pestana activa es una vista godbolt (0x1D) */
+    int gb_sepx;          /* x (px) del separador entre columnas */
+    int gb_body_top;      /* y (px) de la primera fila del cuerpo */
+    int gb_lh;            /* alto de fila usado (px) */
+    int gb_split_pct;     /* ancho de la col. fuente en % (20..75); 0 = default */
+    int gb_split_drag;    /* 1 = arrastrando el separador */
+    int gb_sel_line;      /* linea .vex fijada al click (-1 = ninguna) */
+    int gb_left_n, gb_right_n;          /* filas visibles por columna */
+    int gb_left_lines[HOVER_GB_ROWS];   /* linea .vex de cada fila izq (fuente) */
+    int gb_right_lines[HOVER_GB_ROWS];  /* linea .vex de cada fila der (asm) */
+    /* -- Pestana IR unica con selector de sub-vistas (contenido 0x1C):
+     * lado-a-lado / unificado.  El render dibuja una fila selectora arriba y
+     * el input alterna ir_submode al clicarla. */
+    int ir_active;     /* 1 = la pestana activa es la vista IR multi (0x1C) */
+    int ir_submode;    /* 0 = lado a lado, 1 = unificado */
+    int ir_sel_y;      /* y (px) de la fila selectora */
+    int ir_sel_mid;    /* x (px) frontera entre los dos botones */
+    int ir_sel_x0, ir_sel_x1; /* extension x clicable de la fila selectora */
+} HoverPopup;
+
 /* -- Estado global del editor --------------------------------------------- */
 /* Lleva tag (struct Editor) para que otras cabeceras puedan declararla hacia
  * delante sin arrastrar esta (que incluye SDL). */
@@ -157,6 +205,12 @@ typedef struct Editor {
     EditorTab tabs[MAX_TABS]; /* archivos abiertos (array fijo)         */
     int tab_count;            /* nº de pestañas abiertas                */
     int active_tab;           /* índice de la pestaña activa            */
+    int tab_scroll;           /* índice de la 1ª pestaña visible en la  */
+                              /* barra global (scroll horizontal de     */
+                              /* pestañas cuando no caben todas)         */
+    int tab_scroll_seen;      /* última activa para la que se autoajustó */
+                              /* el scroll (init -1): permite rodar la   */
+                              /* rueda sin que el auto-scroll la repita  */
 
     /* -- división del editor (árbol de dock) --------------------------------
      * Con dock.leaf_count==1 (estado por defecto) el editor se comporta
@@ -246,6 +300,9 @@ typedef struct Editor {
     int enc_popup;        /* 1 = popup de codificación abierto          */
     int enc_popup_mode;   /* 0 = reabrir con, 1 = guardar como          */
     int enc_popup_scroll; /* primera fila visible de la lista           */
+
+    /* popup de hover con pestanas (info de simbolo del LSP) */
+    HoverPopup hover;
 
     /* paleta de colores activa (preset según settings.theme; ver
      * render/theme.h) */
@@ -433,6 +490,16 @@ void editor_run(Editor *e);
  * el bucle multi-ventana (app_run) para
  * correrlas por CADA ventana; editor_run la usa para la suya. */
 void editor_frame_tasks(Editor *e);
+
+/* Cierra el popup de hover (libera sus pestanas). */
+void editor_hover_hide(Editor *e);
+/* Devuelve (heap; el caller libera) el texto plano de la pestana activa del
+ * popup de hover, decodificando los formatos internos (godbolt/diff/IR) para
+ * copiarlo al portapapeles.  NULL si no hay contenido. */
+char *hover_copy_active_text(HoverPopup *h);
+/* Comprueba por frame si el raton lleva parado sobre texto y, de ser asi,
+ * dispara COFFEE_EVENT_TEXT_HOVER (la extension abre el popup). */
+void editor_hover_tick(Editor *e);
 
 /* Inicializa @p e como ventana SECUNDARIA de @p primary: crea su PROPIO
  * SDL_Window/SDL_Renderer del tamano (@p w,@p h) y COMPARTE por puntero los

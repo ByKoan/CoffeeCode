@@ -635,12 +635,26 @@ static int api_set_gutter_marker(CoffeeHost *h, size_t line, const char *glyph,
     d->owner = h->registering;
     return 0;
 }
+/* Busca una INLINE_HINT "al final de la linea" (start_col==UINT32_MAX) de la
+ * linea @p line del buffer @p buf.  Devuelve su indice o -1. */
+static int host_find_end_hint(CoffeeHost *h, const Buffer *buf, size_t line) {
+    for (size_t i = 0; i < h->deco_count; ++i) {
+        HostDeco *d = &h->decos[i];
+        if (d->buffer == buf && d->line == line &&
+            d->kind == HOST_DECO_INLINE_HINT && d->start_col == UINT32_MAX)
+            return (int)i;
+    }
+    return -1;
+}
+
 static int api_set_inline_hint(CoffeeHost *h, size_t line, const char *text,
                                CoffeeColor color) {
     if (!h) return -1;
     const Buffer *buf = h->backend.buffer; /* buffer activo */
     if (!buf) return -1;
-    int idx = host_find_deco(h, buf, line, HOST_DECO_INLINE_HINT);
+    /* "al final de la linea" se marca con start_col == UINT32_MAX para no
+     * confundirlo con los hints de columna (set_inline_hint_at). */
+    int idx = host_find_end_hint(h, buf, line);
     if (!text || !text[0]) { /* texto vacio = quitar el hint de esa linea */
         if (idx >= 0) host_deco_remove_at(h, (size_t)idx);
         return 0;
@@ -661,10 +675,68 @@ static int api_set_inline_hint(CoffeeHost *h, size_t line, const char *text,
     d->kind = HOST_DECO_INLINE_HINT;
     d->color = color;
     d->glyph = host_strdup(text); /* texto del hint (se libera en remove) */
-    d->start_col = 0;
+    d->start_col = UINT32_MAX;    /* sentinela: al final de la linea */
     d->end_col = 0;
     d->owner = h->registering;
     return 0;
+}
+
+/* set_inline_hint_at: hint en una columna intermedia.  PERMITE varios por linea
+ * (uno por argumento de una llamada), asi que SIEMPRE agrega (no actualiza).  La
+ * extension hace clear_inline_hints antes de re-aplicar. */
+static int api_set_inline_hint_at(CoffeeHost *h, size_t line, uint32_t col,
+                                  const char *text, CoffeeColor color) {
+    if (!h) return -1;
+    const Buffer *buf = h->backend.buffer;
+    if (!buf) return -1;
+    if (!text || !text[0]) return 0;
+    if (col == UINT32_MAX) col = 0; /* reservado para "al final"; reasignar */
+    if (!host_grow((void **)&h->decos, &h->deco_cap, h->deco_count,
+                   sizeof(HostDeco)))
+        return -3;
+    HostDeco *d = &h->decos[h->deco_count++];
+    d->buffer = buf;
+    d->line = line;
+    d->kind = HOST_DECO_INLINE_HINT;
+    d->color = color;
+    d->glyph = host_strdup(text);
+    d->start_col = col; /* columna (codepoints) donde insertar */
+    d->end_col = 0;
+    d->owner = h->registering;
+    return 0;
+}
+
+/* --- Popup de hover (ABI v7): delegan en los hooks del backend (Editor) --- */
+static int api_show_hover(CoffeeHost *h, const char *const *names, int n) {
+    if (!h || !h->backend.show_hover) return -1;
+    h->backend.show_hover(h->backend.ud, names, n);
+    return 0;
+}
+static int api_set_hover_tab(CoffeeHost *h, int index, const char *content) {
+    if (!h || !h->backend.set_hover_tab) return -1;
+    h->backend.set_hover_tab(h->backend.ud, index, content);
+    return 0;
+}
+static void api_hide_hover(CoffeeHost *h) {
+    if (!h || !h->backend.hide_hover) return;
+    h->backend.hide_hover(h->backend.ud);
+}
+
+/* clear_inline_hints: quita TODAS las INLINE_HINT del buffer activo puestas por
+ * la extension en curso (si registering<0, sin filtrar por dueña). */
+static void api_clear_inline_hints(CoffeeHost *h) {
+    if (!h) return;
+    const Buffer *buf = h->backend.buffer;
+    if (!buf) return;
+    for (size_t i = 0; i < h->deco_count;) {
+        HostDeco *d = &h->decos[i];
+        int same_owner =
+            (h->registering < 0) || (d->owner == h->registering);
+        if (d->buffer == buf && d->kind == HOST_DECO_INLINE_HINT && same_owner)
+            host_deco_remove_at(h, i); /* swap-remove: NO incrementar i */
+        else
+            ++i;
+    }
 }
 /* Subrayado de rango (squiggle).  A diferencia del fondo/gutter, PERMITE varios
  * en la misma linea (varios diagnosticos solapando lineas), asi que SIEMPRE
@@ -991,6 +1063,11 @@ static void host_fill_api(CoffeeHost *h) {
     a->set_inline_hint = api_set_inline_hint;
     a->clear_decorations = api_clear_decorations;
     a->set_range_underline = api_set_range_underline;
+    a->set_inline_hint_at = api_set_inline_hint_at;
+    a->clear_inline_hints = api_clear_inline_hints;
+    a->show_hover = api_show_hover;
+    a->set_hover_tab = api_set_hover_tab;
+    a->hide_hover = api_hide_hover;
 
     a->register_service = api_register_service;
     a->get_service = api_get_service;
@@ -1271,6 +1348,26 @@ int ext_host_inline_hint(CoffeeHost *host, const Buffer *buffer, size_t line,
     if (out_text) *out_text = host->decos[idx].glyph;
     if (out_color) *out_color = host->decos[idx].color;
     return 1;
+}
+
+int ext_host_inline_hints(CoffeeHost *host, const Buffer *buffer, size_t line,
+                          CoffeeInlineHint *out, int max) {
+    if (!host || !buffer || !out || max <= 0) return 0;
+    int n = 0;
+    /* Puede haber varios hints en la misma linea (uno por argumento + el "al
+     * final"): los recolectamos todos hasta @p max.  O(deco_count) por linea
+     * visible; el numero de decos es pequeno. */
+    for (size_t i = 0; i < host->deco_count && n < max; ++i) {
+        HostDeco *d = &host->decos[i];
+        if (d->buffer != buffer || d->line != line ||
+            d->kind != HOST_DECO_INLINE_HINT)
+            continue;
+        out[n].text = d->glyph;
+        out[n].color = d->color;
+        out[n].col = d->start_col; /* UINT32_MAX = al final de la linea */
+        ++n;
+    }
+    return n;
 }
 
 int ext_host_range_underlines(CoffeeHost *host, const Buffer *buffer, size_t line,

@@ -106,6 +106,7 @@ typedef enum {
                            indexado por número de grupo (0 o 1).            */
     UI_LIST_BG_THUMB,     /**< Celda (miniatura) de la galeria de fondos, por indice. */
     UI_LIST_BG_THUMB_DEL, /**< Boton "x" de quitar de cada celda, por indice.        */
+    UI_LIST_HOVER_TAB,    /**< Pestana del popup de hover, por indice.               */
     UI_LIST_COUNT
 } UiList;
 

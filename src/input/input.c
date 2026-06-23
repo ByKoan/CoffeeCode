@@ -454,6 +454,25 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
         return;
     }
 
+    /* Popup de hover abierto: ESC lo cierra. */
+    if (e->hover.visible && key == SDLK_ESCAPE) {
+        editor_hover_hide(e);
+        return;
+    }
+
+    /* Popup de hover: Ctrl+C copia el texto de la pestana activa al
+     * portapapeles (decodificando los formatos internos godbolt/diff/IR a
+     * texto plano legible). */
+    if (e->hover.visible && key == SDLK_C &&
+        (SDL_GetModState() & SDL_KMOD_CTRL)) {
+        char *txt = hover_copy_active_text(&e->hover);
+        if (txt) {
+            SDL_SetClipboardText(txt);
+            free(txt);
+        }
+        return;
+    }
+
     /* Popup de codificación abierto: ESC lo cierra. */
     if (e->enc_popup && key == SDLK_ESCAPE) {
         e->enc_popup = 0;
@@ -605,6 +624,9 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->float_dock_zone = DOCK_DZ_NONE;
             e->float_drag = -1;      /* fin del arrastre de un flotante         */
             e->float_resizing = 0;
+            e->hover.dragging = 0;   /* fin del arrastre del popup de hover      */
+            e->hover.resizing = 0;
+            e->hover.gb_split_drag = 0; /* fin del arrastre del separador godbolt */
         }
         break;
     case SDL_EVENT_MOUSE_MOTION: on_mouse_motion(e, ev); break;

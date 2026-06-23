@@ -16,6 +16,7 @@
 #include "render_internal.h"
 #include "ui.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ── Menú "Archivo" ─────────────────────────────────────────────────────────
@@ -364,6 +365,20 @@ static int draw_tab(Editor *e, int index, int tx, int bar_y, int bar_h) {
     return draw_tab_active(e, index, tx, bar_y, bar_h, index == e->active_tab);
 }
 
+/** Mide (sin dibujar) el ancho que ocupara la pestana @p index, con la misma
+ *  formula que ::draw_tab_active.  Lo usa el scroll de la barra de pestanas. */
+static int measure_tab_w(Editor *e, int index) {
+    EditorTab *t = &e->tabs[index];
+    const char *name =
+        last_path_component(t->filepath[0] ? t->filepath : "Sin título");
+    int name_w = 0, name_h = 0;
+    TTF_GetStringSize(e->font, name, 0, &name_w, &name_h);
+    int tab_w = name_w + TAB_CLOSE_W + TAB_PAD * 2 + TAB_TEXT_EXTRA;
+    if (tab_w < TAB_MIN_W) tab_w = TAB_MIN_W;
+    if (tab_w > TAB_MAX_W) tab_w = TAB_MAX_W;
+    return tab_w;
+}
+
 /**
  * @brief Dibuja la barra de pestañas completa y el botón "+" de nueva pestaña.
  *
@@ -385,25 +400,91 @@ void render_tabbar(Editor *e) {
     fill_rect(r, 0, bar_y + bar_h - 1, e->win_w, 1); /* separador inferior */
 
     /* empezar tras el panel lateral (o su botón si está cerrado) */
-    int tx = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    int tabs_start = e->ftree.open ? e->ftree.width : FTREE_TOGGLE_BTN_W;
+    /* el botón "+" queda FIJO a la derecha (siempre accesible aunque haya
+     * muchas pestañas y haya que hacer scroll). */
+    int new_x = e->win_w - TAB_NEW_BTN_W;
+    int avail = new_x - tabs_start; /* ancho visible para las pestañas */
+
     /* la barra global solo se dibuja sin division; muestra las pestanas de la
      * unica hoja del dock.  Si hay flotantes, sus pestanas viven en otro grupo y
      * NO deben aparecer aqui (las dibuja su propio flotante). */
     int dock_group = (e->dock.node_count > 0 && e->dock.root >= 0)
                          ? e->dock.nodes[e->dock.root].group_id
                          : 0;
+
+    /* Índices de las pestañas que van en ESTA barra (las del dock_group, o
+     * todas si no hay flotantes), en orden. */
+    int vis[MAX_TABS];
+    int nvis = 0;
     for (int i = 0; i < e->tab_count; i++) {
         if (e->float_count > 0 && e->tabs[i].group != dock_group)
-            continue; /* pestana de un flotante: no en la barra global */
-        tx += draw_tab(e, i, tx, bar_y, bar_h); /* cada pestaña avanza tx */
+            continue;
+        vis[nvis++] = i;
     }
 
-    /* Botón + (nueva pestaña), justo después de la última */
-    chrome_fill_bg(e, e->theme.col_tabbar_bg, tx, bar_y, TAB_NEW_BTN_W, bar_h);
-    draw_text_c(e, "+", tx + 7, bar_y + (bar_h - e->font_size) / 2,
+    if (nvis == 0) { /* sin pestañas en esta barra: solo el "+" */
+        e->tab_scroll = 0;
+        chrome_fill_bg(e, e->theme.col_tabbar_bg, tabs_start, bar_y,
+                       TAB_NEW_BTN_W, bar_h);
+        draw_text_c(e, "+", tabs_start + 7, bar_y + (bar_h - e->font_size) / 2,
+                    e->theme.txt_tab_new);
+        ui_put(&e->ui, UI_TAB_NEW,
+               (Rect){tabs_start, bar_y, TAB_NEW_BTN_W, bar_h});
+        return;
+    }
+
+    /* Posición (en vis[]) de la primera visible según e->tab_scroll (índice
+     * global): el primer vis cuyo índice >= tab_scroll. */
+    int scroll_pos = nvis - 1;
+    for (int k = 0; k < nvis; k++)
+        if (vis[k] >= e->tab_scroll) { scroll_pos = k; break; }
+    if (scroll_pos < 0) scroll_pos = 0;
+
+    /* Auto-scroll para que la pestaña activa quede visible, PERO solo cuando la
+     * activa cambió desde el último ajuste: así la rueda permite explorar otras
+     * pestañas sin que el scroll vuelva a saltar a la activa cada frame. */
+    int act_pos = -1;
+    for (int k = 0; k < nvis; k++)
+        if (vis[k] == e->active_tab) { act_pos = k; break; }
+    if (act_pos >= 0 && e->active_tab != e->tab_scroll_seen) {
+        if (act_pos < scroll_pos) {
+            scroll_pos = act_pos; /* activa a la izquierda: traerla al inicio */
+        } else {
+            /* avanzar la primera visible hasta que la activa quepa a la dcha */
+            while (scroll_pos < act_pos) {
+                int sum = 0;
+                for (int k = scroll_pos; k <= act_pos; k++)
+                    sum += measure_tab_w(e, vis[k]);
+                if (sum <= avail) break;
+                scroll_pos++;
+            }
+        }
+        e->tab_scroll_seen = e->active_tab;
+    }
+    if (scroll_pos < 0) scroll_pos = 0;
+    if (scroll_pos > nvis - 1) scroll_pos = nvis - 1;
+    e->tab_scroll = vis[scroll_pos]; /* persistir como índice global */
+
+    /* Recortar el dibujo de las pestañas a su franja (no invadir el "+"). */
+    SDL_Rect clip = {tabs_start, bar_y, avail > 0 ? avail : 0, bar_h};
+    SDL_SetRenderClipRect(r, &clip);
+    int tx = tabs_start;
+    for (int k = scroll_pos; k < nvis; k++) {
+        int w = measure_tab_w(e, vis[k]);
+        if (tx + w > new_x && k > scroll_pos)
+            break; /* no cabe entera (al menos la 1ª se dibuja, recortada) */
+        tx += draw_tab(e, vis[k], tx, bar_y, bar_h);
+        if (tx >= new_x) break;
+    }
+    SDL_SetRenderClipRect(r, NULL);
+
+    /* Botón "+" (nueva pestaña), fijo a la derecha. */
+    chrome_fill_bg(e, e->theme.col_tabbar_bg, new_x, bar_y, TAB_NEW_BTN_W,
+                   bar_h);
+    draw_text_c(e, "+", new_x + 7, bar_y + (bar_h - e->font_size) / 2,
                 e->theme.txt_tab_new);
-    /* registrar el botón "+" para el hit-test */
-    ui_put(&e->ui, UI_TAB_NEW, (Rect){tx, bar_y, TAB_NEW_BTN_W, bar_h});
+    ui_put(&e->ui, UI_TAB_NEW, (Rect){new_x, bar_y, TAB_NEW_BTN_W, bar_h});
 }
 
 void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
@@ -628,6 +709,761 @@ void render_enc_popup(Editor *e) {
     Rect lb = {x, y + hdr_h, w, list_h};
     ui_list(e, lb, UI_ENC_LIST, UI_LIST_ENC, ENC_COUNT, row_h,
             &e->enc_popup_scroll, (int)e->encoding, enc_row, NULL);
+}
+
+/* Numero de filas de contenido visibles del popup de hover. */
+#define HOVER_BODY_ROWS 16
+
+/* --- Resaltado ligero del contenido del popup (IR / bytecode / asm) --- */
+static int hv_id_ch(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '.';
+}
+static int hv_id_start(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+           c == '.';
+}
+static int hv_is_type(const char *s) {
+    static const char *T[] = {
+        "i8",   "i16",     "i32",     "i64",  "u8",      "u16",
+        "u32",  "u64",     "f32",     "f64",  "ptr",     "void",
+        "bool", "byte",    "word",    "dword","qword",   "xmmword",
+        "ymmword", "zmmword", 0};
+    for (int i = 0; T[i]; ++i)
+        if (strcmp(s, T[i]) == 0) return 1;
+    return 0;
+}
+static int hv_is_reg(const char *s) {
+    static const char *R[] = {
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
+        "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "ax",
+        "bx",  "cx",  "dx",  "al",  "bl",  "cl",  "dl",  "cs",  "ds",
+        "es",  "fs",  "gs",  "ss",  0};
+    for (int i = 0; R[i]; ++i)
+        if (strcmp(s, R[i]) == 0) return 1;
+    size_t n = strlen(s);
+    if (n >= 2 && s[0] == 'r' && s[1] >= '0' && s[1] <= '9') return 1;
+    if (n >= 4 && (strncmp(s, "xmm", 3) == 0 || strncmp(s, "ymm", 3) == 0 ||
+                   strncmp(s, "zmm", 3) == 0))
+        return 1;
+    return 0;
+}
+/* Dibuja una linea de codigo (IR/bytecode/asm) con tokens coloreados. */
+static void draw_code_line(Editor *e, const char *line, int n, int x, int y) {
+    int cw = e->char_w > 0 ? e->char_w : 8;
+    int i = 0, first_id = 0, after_eq = 0;
+    /* Linea de diff (pestana IR): "- " eliminado por el optimizador (rojo),
+     * "+ " generado (verde).  Se pinta la linea entera de su color. */
+    if (n >= 2 && line[1] == ' ' && (line[0] == '-' || line[0] == '+')) {
+        char buf[2048];
+        int L = n;
+        if (L > 2047) L = 2047;
+        memcpy(buf, line, L);
+        buf[L] = 0;
+        if (line[0] == '-')
+            draw_text(e, buf, x, y, 0xD0, 0x6A, 0x6A); /* rojo: eliminado */
+        else
+            draw_text(e, buf, x, y, 0x7A, 0xC0, 0x7A); /* verde: generado */
+        return;
+    }
+    while (i < n) {
+        char c = line[i];
+        /* comentario hasta fin de linea (// de IR/C o ; de asm) */
+        if ((c == '/' && i + 1 < n && line[i + 1] == '/') || c == ';') {
+            char buf[1024];
+            int L = n - i;
+            if (L > 1023) L = 1023;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            draw_text(e, buf, x + i * cw, y, 0x6A, 0x99, 0x55);
+            return;
+        }
+        if (c == ' ' || c == '\t') { i++; continue; }
+        /* numero (decimal o 0xHEX, con signo) */
+        if ((c >= '0' && c <= '9') ||
+            (c == '-' && i + 1 < n && line[i + 1] >= '0' && line[i + 1] <= '9')) {
+            int j = i + 1;
+            while (j < n && (hv_id_ch(line[j]) || line[j] == 'x' ||
+                             line[j] == 'X'))
+                j++;
+            char buf[64];
+            int L = j - i;
+            if (L > 63) L = 63;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            draw_text(e, buf, x + i * cw, y, 0xB5, 0xCE, 0xA8);
+            i = j;
+            continue;
+        }
+        /* valor SSA del IR: %name */
+        if (c == '%') {
+            int j = i + 1;
+            while (j < n && hv_id_ch(line[j])) j++;
+            char buf[64];
+            int L = j - i;
+            if (L > 63) L = 63;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            draw_text(e, buf, x + i * cw, y, 0xDC, 0xDC, 0xAA);
+            i = j;
+            continue;
+        }
+        /* identificador: tipo / registro / op-mnemonico / normal */
+        if (hv_id_start(c)) {
+            int j = i + 1;
+            while (j < n && hv_id_ch(line[j])) j++;
+            char buf[64];
+            int L = j - i;
+            if (L > 63) L = 63;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            int rr = 0xCC, gg = 0xCC, bb = 0xD4;
+            if (hv_is_type(buf)) {
+                rr = 0x4E; gg = 0xC9; bb = 0xB0; /* turquesa */
+            } else if (hv_is_reg(buf)) {
+                rr = 0xE0; gg = 0x6C; bb = 0x75; /* coral */
+            } else if (!first_id || after_eq) {
+                rr = 0xC5; gg = 0x86; bb = 0xC0; /* malva: op/mnemonico */
+            }
+            draw_text(e, buf, x + i * cw, y, rr, gg, bb);
+            first_id = 1;
+            after_eq = 0;
+            i = j;
+            continue;
+        }
+        /* puntuacion / otro: un caracter en color por defecto */
+        {
+            char buf[2] = {c, 0};
+            draw_text(e, buf, x + i * cw, y, 0x9A, 0x9A, 0xA6);
+            if (c == '=') after_eq = 1;
+            i++;
+        }
+    }
+}
+
+/* ----------------------------------------------------------------------------
+ * Renderer minimo de Markdown + HTML 1.0 para la pestana Doc del hover.
+ * Soporta INLINE: **negrita** / *cursiva* / `codigo` / [texto](url) y los tags
+ * <b> <strong> <i> <em> <code> y entidades &lt; &gt; &amp; &quot; &#39;.  Los
+ * marcadores se consumen (no ocupan columna); el resto se dibuja con el color
+ * del estilo activo.  El nivel de BLOQUE (cabeceras #, vinetas, fences ```,
+ * <h1>, <li>, <pre>, <br>) lo maneja render_doc_body por linea.
+ * -------------------------------------------------------------------------- */
+static void draw_md_inline(Editor *e, const char *s, int n, int x, int y,
+                           int base_r, int base_g, int base_b) {
+    int cw = e->char_w > 0 ? e->char_w : 8;
+    int col = 0, i = 0;
+    int bold = 0, ital = 0, code = 0, link = 0;
+    while (i < n) {
+        char c = s[i];
+        /* Entidad HTML: &nombre; -> caracter. */
+        if (c == '&') {
+            const char *rep = NULL;
+            if (n - i >= 4 && strncmp(s + i, "&lt;", 4) == 0) { rep = "<"; i += 4; }
+            else if (n - i >= 4 && strncmp(s + i, "&gt;", 4) == 0) { rep = ">"; i += 4; }
+            else if (n - i >= 5 && strncmp(s + i, "&amp;", 5) == 0) { rep = "&"; i += 5; }
+            else if (n - i >= 6 && strncmp(s + i, "&quot;", 6) == 0) { rep = "\""; i += 6; }
+            else if (n - i >= 5 && strncmp(s + i, "&#39;", 5) == 0) { rep = "'"; i += 5; }
+            if (rep) {
+                int rr = bold ? 0xFF : (code ? 0x9E : (link ? 0x6C : base_r));
+                int gg = bold ? 0xFF : (code ? 0xD0 : (link ? 0xB0 : base_g));
+                int bb = bold ? 0xFF : (code ? 0x8A : (link ? 0xE0 : base_b));
+                char buf[2] = {rep[0], 0};
+                draw_text(e, buf, x + col * cw, y, rr, gg, bb);
+                col++;
+                continue;
+            }
+        }
+        /* Tag HTML: <b> <i> <code> <strong> <em> y sus cierres; otros se
+         * ignoran (strip).  No avanzan columna. */
+        if (c == '<') {
+            int j = i + 1;
+            while (j < n && s[j] != '>') j++;
+            int taglen = j - (i + 1);
+            char tag[16];
+            int tl = taglen < 15 ? taglen : 15;
+            memcpy(tag, s + i + 1, tl);
+            tag[tl] = 0;
+            /* normalizar a minusculas el nombre */
+            for (int k = 0; tag[k]; ++k)
+                if (tag[k] >= 'A' && tag[k] <= 'Z') tag[k] += 32;
+            if (!strcmp(tag, "b") || !strcmp(tag, "strong")) bold = 1;
+            else if (!strcmp(tag, "/b") || !strcmp(tag, "/strong")) bold = 0;
+            else if (!strcmp(tag, "i") || !strcmp(tag, "em")) ital = 1;
+            else if (!strcmp(tag, "/i") || !strcmp(tag, "/em")) ital = 0;
+            else if (!strcmp(tag, "code")) code = 1;
+            else if (!strcmp(tag, "/code")) code = 0;
+            i = (j < n) ? j + 1 : n; /* saltar hasta despues de '>' */
+            continue;
+        }
+        /* Marcadores Markdown. */
+        if (c == '*' && i + 1 < n && s[i + 1] == '*') { bold = !bold; i += 2; continue; }
+        if ((c == '*' || c == '_') &&
+            !(i + 1 < n && s[i + 1] == c)) { ital = !ital; i += 1; continue; }
+        if (c == '`') { code = !code; i += 1; continue; }
+        if (c == '[') { link = 1; i += 1; continue; }
+        if (c == ']' && link) {
+            link = 0;
+            /* saltar el (url) si lo hay */
+            int j = i + 1;
+            if (j < n && s[j] == '(') {
+                while (j < n && s[j] != ')') j++;
+                i = (j < n) ? j + 1 : n;
+            } else {
+                i = j;
+            }
+            continue;
+        }
+        /* Caracter normal con el color del estilo activo. */
+        int rr = base_r, gg = base_g, bb = base_b;
+        if (code) { rr = 0x9E; gg = 0xD0; bb = 0x8A; }
+        else if (link) { rr = 0x6C; gg = 0xB0; bb = 0xE0; }
+        else if (bold) { rr = 0xFF; gg = 0xFF; bb = 0xFF; }
+        else if (ital) { rr = 0xC6; gg = 0xBE; bb = 0xDC; }
+        char buf[2] = {c, 0};
+        draw_text(e, buf, x + col * cw, y, rr, gg, bb);
+        col++;
+        i++;
+    }
+}
+
+void render_hover_popup(Editor *e) {
+    HoverPopup *h = &e->hover;
+    if (!h->visible || h->n_tabs <= 0) return;
+    SDL_Renderer *r = e->renderer;
+
+    int cw = e->char_w > 0 ? e->char_w : 8;
+    int lh = e->line_height;
+    int pad = 8;
+    int hdr_h = e->font_size + 12; /* franja de pestanas + arrastre + cerrar */
+    int rsz = 14;                  /* tirador de redimension */
+
+    /* Colocacion inicial: tamano por defecto + posicion bajo el ancla.  Tras
+     * que el usuario lo mueva/redimensione, se respeta SU geometria. */
+    if (h->needs_place) {
+        int w0 = 74 * cw + pad * 2;
+        if (w0 > e->win_w - 16) w0 = e->win_w - 16;
+        int h0 = hdr_h + HOVER_BODY_ROWS * lh + pad;
+        int x0 = h->anchor_x;
+        int y0 = h->anchor_y + lh + 2;
+        if (x0 + w0 > e->win_w - 8) x0 = e->win_w - 8 - w0;
+        if (x0 < 8) x0 = 8;
+        if (y0 + h0 > e->win_h - STATUS_HEIGHT) {
+            y0 = h->anchor_y - h0 - 2;
+            if (y0 < NAVBAR_HEIGHT + TAB_BAR_HEIGHT)
+                y0 = NAVBAR_HEIGHT + TAB_BAR_HEIGHT;
+        }
+        h->rect_x = x0;
+        h->rect_y = y0;
+        h->rect_w = w0;
+        h->rect_h = h0;
+        h->needs_place = 0;
+    }
+    /* Clamp defensivo (tamano minimo + dentro de la ventana). */
+    if (h->rect_w < 24 * cw) h->rect_w = 24 * cw;
+    if (h->rect_h < hdr_h + lh * 3) h->rect_h = hdr_h + lh * 3;
+    if (h->rect_w > e->win_w) h->rect_w = e->win_w;
+    if (h->rect_x < 0) h->rect_x = 0;
+    if (h->rect_y < NAVBAR_HEIGHT) h->rect_y = NAVBAR_HEIGHT;
+    if (h->rect_x + h->rect_w > e->win_w) h->rect_x = e->win_w - h->rect_w;
+    if (h->rect_y + h->rect_h > e->win_h) h->rect_y = e->win_h - h->rect_h;
+
+    int x = h->rect_x, y = h->rect_y, w = h->rect_w, hh = h->rect_h;
+
+    /* Fondo CON la transparencia del IDE (see-through como el resto del chrome)
+     * + borde manual de 1px. */
+    chrome_fill_bg(e, e->theme.col_menu_bg, x, y, w, hh);
+    set_color_c(r, e->theme.col_menu_border);
+    fill_rect(r, x, y, w, 1);
+    fill_rect(r, x, y + hh - 1, w, 1);
+    fill_rect(r, x, y, 1, hh);
+    fill_rect(r, x + w - 1, y, 1, hh);
+
+    /* Franja de pestanas (clicables).  El boton de cerrar va a la derecha; el
+     * hueco entre la ultima pestana y el boton es la zona de arrastre. */
+    int close_w = hdr_h;
+    int tabs_right = x + w - close_w;
+    int tx = x;
+    for (int i = 0; i < h->n_tabs; ++i) {
+        const char *name = h->tab_names[i] ? h->tab_names[i] : "";
+        int tw = (int)strlen(name) * cw + pad * 2;
+        if (tx + tw > tabs_right) tw = tabs_right - tx;
+        if (tw <= 0) break;
+        Rect tr = {tx, y, tw, hdr_h};
+        ui_put_idx(&e->ui, UI_LIST_HOVER_TAB, i, tr);
+        if (i == h->active_tab) {
+            set_color_c(r, e->theme.col_tab_active);
+            fill_rect(r, tx, y, tw, hdr_h);
+            set_color_c(r, e->theme.col_tab_accent);
+            fill_rect(r, tx, y, tw, 2);
+            draw_text(e, name, tx + pad, y + (hdr_h - e->font_size) / 2, 0xDD,
+                      0xDD, 0xEE);
+        } else {
+            draw_text(e, name, tx + pad, y + (hdr_h - e->font_size) / 2, 0x88,
+                      0x8C, 0x99);
+        }
+        set_color_c(r, e->theme.col_tabbar_sep);
+        fill_rect(r, tx + tw - 1, y, 1, hdr_h);
+        tx += tw;
+    }
+    /* Boton de cerrar (x) a la derecha de la franja. */
+    set_color_c(r, e->theme.col_tabbar_sep);
+    fill_rect(r, tabs_right, y, 1, hdr_h);
+    draw_text(e, "x", tabs_right + (close_w - cw) / 2,
+              y + (hdr_h - e->font_size) / 2, 0xC8, 0x80, 0x80);
+    set_color_c(r, e->theme.col_menu_border);
+    fill_rect(r, x, y + hdr_h - 1, w, 1); /* linea bajo la franja */
+
+    /* Contenido del tab activo (recortado, scrollable).  El numero de filas se
+     * deriva del alto ACTUAL (el usuario puede haberlo redimensionado). */
+    int body_y0 = y + hdr_h;
+    int body_h = hh - hdr_h;
+    int rows = (body_h - pad) / lh;
+    if (rows < 1) rows = 1;
+    const char *content = h->tab_content[h->active_tab];
+    h->gb_active = 0; /* lo re-activa el branch 0x1D si aplica */
+    h->ir_active = 0; /* lo re-activa el bloque 0x1C si aplica */
+    int body_x = x + pad;
+    int by = body_y0 + pad / 2;
+
+    /* Pestana IR unica con selector de sub-vistas (contenido 0x1C): dibuja una
+     * fila de botones [lado a lado | unificado] y deja como contenido efectivo
+     * la sub-vista activa (el resto del render la trata como 0x1E o texto). */
+    char *ir_copy = NULL;
+    if (content && content[0] == 0x1C) {
+        h->ir_active = 1;
+        size_t L = strlen(content);
+        ir_copy = (char *)malloc(L + 1);
+        const char *sub0 = "", *sub1 = "";
+        if (ir_copy) {
+            memcpy(ir_copy, content, L + 1);
+            char *q = ir_copy + 1; /* saltar el 0x1C inicial */
+            sub0 = q;
+            char *sep = strchr(q, 0x1C);
+            if (sep) {
+                *sep = 0;
+                sub1 = sep + 1;
+            }
+        }
+        /* Fila selectora (dos botones).  Geometria publicada para el input. */
+        int sel_y = by;
+        int b0x = body_x, b0w = 14 * cw;       /* "lado a lado" */
+        int b1x = b0x + b0w + cw, b1w = 12 * cw; /* "unificado" */
+        h->ir_sel_y = sel_y;
+        h->ir_sel_x0 = b0x;
+        h->ir_sel_mid = b1x - cw / 2;
+        h->ir_sel_x1 = b1x + b1w;
+        for (int bi = 0; bi < 2; ++bi) {
+            int bxx = bi == 0 ? b0x : b1x;
+            int bww = bi == 0 ? b0w : b1w;
+            const char *lbl = bi == 0 ? "lado a lado" : "unificado";
+            if (h->ir_submode == bi) {
+                set_color_c(r, e->theme.col_tab_active);
+                fill_rect(r, bxx, sel_y - 1, bww, lh);
+                set_color_c(r, e->theme.col_tab_accent);
+                fill_rect(r, bxx, sel_y - 1, bww, 2);
+                draw_text(e, lbl, bxx + 4, sel_y, 0xDD, 0xDD, 0xEE);
+            } else {
+                draw_text(e, lbl, bxx + 4, sel_y, 0x88, 0x8C, 0x99);
+            }
+        }
+        /* El cuerpo real baja una fila; el resto del render usa la sub-vista. */
+        body_y0 += lh;
+        body_h -= lh;
+        rows -= 1;
+        if (rows < 1) rows = 1;
+        by += lh;
+        content = (h->ir_submode == 0) ? sub0 : sub1;
+    }
+
+    SDL_Rect clip = {x + 1, body_y0, w - 2, body_h - 2};
+    SDL_SetRenderClipRect(r, &clip);
+    if (!content) {
+        draw_text(e, "Cargando...", body_x, by, 0x88, 0x8C, 0x99);
+    } else if (content[0] == 0x1E) {
+        /* Vista DIFF LADO A LADO: cada linea es "lm \x1f L \x1f rm \x1f R".
+         * Maquetamos dos columnas segun el ancho ACTUAL del popup. */
+        int avail = (w - 2 * pad) / cw;
+        int col_w = (avail - 3) / 2;
+        if (col_w < 4) col_w = 4;
+        int midx = body_x + col_w * cw + cw;
+        int rx = midx + 2 * cw;
+        /* separador vertical continuo */
+        set_color_c(r, e->theme.col_tabbar_sep);
+        fill_rect(r, midx + cw / 2, body_y0, 1, body_h - 2);
+        const char *p = content;
+        const char *nl0 = strchr(p, '\n');
+        p = nl0 ? nl0 + 1 : p + 1; /* saltar el sentinela */
+        int skip = h->scroll < 0 ? 0 : h->scroll;
+        int row = 0;
+        char fbuf[2048];
+        while (*p && row < rows) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            if (skip > 0) {
+                skip--;
+            } else {
+                size_t cpy = len < sizeof(fbuf) - 1 ? len : sizeof(fbuf) - 1;
+                memcpy(fbuf, p, cpy);
+                fbuf[cpy] = 0;
+                /* parsear lm \x1f L \x1f rm \x1f R */
+                char lm = ' ', rm = ' ';
+                char *L = fbuf, *R = (char *)"";
+                char *s1 = strchr(fbuf, 0x1F);
+                if (s1) {
+                    lm = fbuf[0];
+                    *s1 = 0;
+                    L = s1 + 1;
+                    char *s2 = strchr(L, 0x1F);
+                    if (s2) {
+                        *s2 = 0;
+                        char *mr = s2 + 1;
+                        rm = mr[0];
+                        char *s3 = strchr(mr, 0x1F);
+                        if (s3) R = s3 + 1;
+                    }
+                }
+                int yy = by + row * lh;
+                /* columna izquierda (pre): roja si eliminada/cambiada. */
+                {
+                    char lb[1024];
+                    int lc = (int)strlen(L);
+                    if (lc > col_w) lc = col_w;
+                    if (lc > 1023) lc = 1023;
+                    memcpy(lb, L, lc);
+                    lb[lc] = 0;
+                    if (lm == '-')
+                        draw_text(e, lb, body_x, yy, 0xD0, 0x6A, 0x6A);
+                    else
+                        draw_code_line(e, lb, lc, body_x, yy);
+                }
+                /* indicador de correspondencia para los cambios (->). */
+                if (lm == '-' && rm == '+')
+                    draw_text(e, ">", midx, yy, 0xC8, 0xB0, 0x60);
+                /* columna derecha (post): verde si anyadida/cambiada. */
+                {
+                    char rb[1024];
+                    int rc = (int)strlen(R);
+                    if (rc > col_w) rc = col_w;
+                    if (rc > 1023) rc = 1023;
+                    memcpy(rb, R, rc);
+                    rb[rc] = 0;
+                    if (rm == '+')
+                        draw_text(e, rb, rx, yy, 0x7A, 0xC0, 0x7A);
+                    else
+                        draw_code_line(e, rb, rc, rx, yy);
+                }
+                row++;
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    } else if (content[0] == 0x1D) {
+        /* Vista "Godbolt" correlada (solo-LSP): DOS columnas -- fuente (izq)
+         * y nativo (der) -- con separador vertical y cross-highlight POR LINEA
+         * al pasar el raton: al apuntar una linea fuente se resaltan TODAS sus
+         * instrucciones (y viceversa), con barra de acento a la izquierda de
+         * las filas correladas.  Encoding por fila "kind \x1f ...":
+         * 'H'=stats, 'S'=fuente (\x1f linea \x1f texto), 'A'=instruccion
+         * (\x1f linea \x1f addr \x1f texto).  La col. fuente NO scrollea (es
+         * corta); la col. nativo (larga) usa h->scroll. */
+        size_t clen = strlen(content);
+        char *cp = (char *)malloc(clen + 1);
+        if (cp) {
+            memcpy(cp, content, clen + 1);
+            int cap = 1;
+            for (size_t i = 0; i < clen; ++i)
+                if (cp[i] == '\n') ++cap;
+            typedef struct {
+                int line;
+                const char *a;
+                const char *b;
+            } GbRow;
+            GbRow *src = (GbRow *)malloc(sizeof(GbRow) * cap);
+            GbRow *asml = (GbRow *)malloc(sizeof(GbRow) * cap);
+            int ns = 0, na = 0;
+            const char *hdr = NULL;
+            if (src && asml) {
+                char *p = strchr(cp, '\n');
+                p = p ? p + 1 : cp; /* saltar el sentinela */
+                while (*p) {
+                    char *nl = strchr(p, '\n');
+                    if (nl) *nl = 0;
+                    char kind = p[0];
+                    char *f1 = strchr(p, 0x1F);
+                    if (f1) {
+                        *f1 = 0;
+                        char *c1 = f1 + 1, *c2 = NULL, *c3 = NULL;
+                        char *f2 = strchr(c1, 0x1F);
+                        if (f2) {
+                            *f2 = 0;
+                            c2 = f2 + 1;
+                            char *f3 = strchr(c2, 0x1F);
+                            if (f3) { *f3 = 0; c3 = f3 + 1; }
+                        }
+                        if (kind == 'H') hdr = c1;
+                        else if (kind == 'S') {
+                            src[ns].line = atoi(c1);
+                            src[ns].a = c2 ? c2 : "";
+                            src[ns].b = NULL;
+                            ++ns;
+                        } else if (kind == 'A') {
+                            asml[na].line = atoi(c1);
+                            asml[na].a = c2 ? c2 : "";
+                            asml[na].b = c3 ? c3 : "";
+                            ++na;
+                        }
+                    }
+                    if (!nl) break;
+                    p = nl + 1;
+                }
+
+                /* Layout de las dos columnas.  El ancho de la col. fuente es
+                 * configurable por el usuario (arrastrar el separador). */
+                int avail = (w - 2 * pad) / cw;
+                if (avail < 10) avail = 10;
+                int sp = h->gb_split_pct;
+                if (sp <= 0) sp = 45; /* default */
+                if (sp < 20) sp = 20;
+                if (sp > 75) sp = 75;
+                int src_cols = avail * sp / 100;
+                if (src_cols < 6) src_cols = 6;
+                if (src_cols > avail - 6) src_cols = avail - 6;
+                int sepx = body_x + src_cols * cw + cw / 2;
+                int asm_x = body_x + (src_cols + 2) * cw;
+                int hrows = hdr ? 1 : 0;
+                int body_rows = rows - hrows;
+                if (body_rows < 1) body_rows = 1;
+                int body_top = by + hrows * lh;
+
+                /* Publicar geometria + estado godbolt para el input (click-
+                 * select de linea + arrastre del separador). */
+                h->gb_active = 1;
+                h->gb_sepx = sepx;
+                h->gb_body_top = body_top;
+                h->gb_lh = lh;
+                h->gb_left_n = 0;
+                h->gb_right_n = 0;
+
+                /* Cabecera de stats. */
+                if (hdr) draw_text(e, hdr, body_x, by, 0x88, 0x8C, 0x99);
+                /* Separador vertical (resaltado si se esta arrastrando). */
+                set_color_c(r, h->gb_split_drag ? e->theme.col_tab_accent
+                                                : e->theme.col_tabbar_sep);
+                fill_rect(r, sepx, body_y0, h->gb_split_drag ? 2 : 1,
+                          body_h - 2);
+
+                /* Linea .vex bajo el raton (hover, en cualquier columna). */
+                int hover_line = -1;
+                if (h->last_mx >= x && h->last_mx < x + w &&
+                    h->last_my >= body_top && h->last_my < y + hh) {
+                    int vr = (h->last_my - body_top) / lh;
+                    if (h->last_mx < sepx) {
+                        if (vr >= 0 && vr < ns) hover_line = src[vr].line;
+                    } else {
+                        int ai = (h->scroll < 0 ? 0 : h->scroll) + vr;
+                        if (ai >= 0 && ai < na) hover_line = asml[ai].line;
+                    }
+                }
+                int sel_line = h->gb_sel_line; /* linea fijada al click */
+
+                /* Helper local de highlight de fila: bg si correla (hover o
+                 * fijada); barra de acento mas marcada si esta FIJADA. */
+                /* Columna fuente (sin scroll) -- con resaltado de sintaxis. */
+                for (int i = 0; i < ns && i < body_rows; ++i) {
+                    int yy = by + (hrows + i) * lh;
+                    int ln = src[i].line;
+                    int is_sel = (ln != 0 && ln == sel_line);
+                    int is_hov = (ln != 0 && ln == hover_line);
+                    /* Caja AGRUPADA: una sola caja alrededor del run contiguo
+                     * de filas con la misma linea (no una cajita por fila). */
+                    if (is_sel || is_hov) {
+                        int bl = is_sel ? sel_line : hover_line;
+                        int prev = (i > 0) ? src[i - 1].line : -999;
+                        int next = (i + 1 < ns && i + 1 < body_rows)
+                                       ? src[i + 1].line
+                                       : -999;
+                        int rw = sepx - (x + 1);
+                        if (is_sel) { /* fondo solido (texto nitido) */
+                            set_color_c(r, e->theme.col_tab_active);
+                            fill_rect(r, x + 1, yy - 1, rw, lh);
+                        }
+                        set_color_c(r, e->theme.col_tab_accent);
+                        fill_rect(r, x + 1, yy - 1, is_sel ? 3 : 2, lh); /* barra */
+                        if (is_sel) { /* bordes solo en los extremos del run */
+                            if (prev != bl) fill_rect(r, x + 1, yy - 1, rw, 1);
+                            if (next != bl)
+                                fill_rect(r, x + 1, yy + lh - 2, rw, 1);
+                        }
+                    }
+                    char pre[16];
+                    snprintf(pre, sizeof pre, "L%-4d", ln);
+                    draw_text(e, pre, body_x, yy, 0x6C, 0xB0, 0xE0);
+                    char tb[1024];
+                    int tc = (int)strlen(src[i].a);
+                    int lim = src_cols - 5;
+                    if (lim < 0) lim = 0;
+                    if (tc > lim) tc = lim;
+                    if (tc > 1023) tc = 1023;
+                    memcpy(tb, src[i].a, tc);
+                    tb[tc] = 0;
+                    draw_code_line(e, tb, tc, body_x + 5 * cw, yy);
+                    if (i < HOVER_GB_ROWS) h->gb_left_lines[i] = ln;
+                    if (i + 1 > h->gb_left_n) h->gb_left_n = i + 1;
+                }
+
+                /* Columna nativo (scrollable) -- con resaltado de sintaxis. */
+                int skip = h->scroll < 0 ? 0 : h->scroll;
+                int row = 0;
+                for (int i = skip; i < na && row < body_rows; ++i, ++row) {
+                    int yy = by + (hrows + row) * lh;
+                    int ln = asml[i].line;
+                    int is_sel = (ln != 0 && ln == sel_line);
+                    int is_hov = (ln != 0 && ln == hover_line);
+                    int rw = (x + w - 1) - (sepx + 1);
+                    /* Caja AGRUPADA del run contiguo (igual que la col. fuente). */
+                    if (is_sel || is_hov) {
+                        int bl = is_sel ? sel_line : hover_line;
+                        int prev = (i > skip) ? asml[i - 1].line : -999;
+                        int next = (i + 1 < na && row + 1 < body_rows)
+                                       ? asml[i + 1].line
+                                       : -999;
+                        if (is_sel) {
+                            set_color_c(r, e->theme.col_tab_active);
+                            fill_rect(r, sepx + 1, yy - 1, rw, lh);
+                        }
+                        set_color_c(r, e->theme.col_tab_accent);
+                        fill_rect(r, sepx + 1, yy - 1, is_sel ? 3 : 2, lh);
+                        if (is_sel) {
+                            if (prev != bl) fill_rect(r, sepx + 1, yy - 1, rw, 1);
+                            if (next != bl)
+                                fill_rect(r, sepx + 1, yy + lh - 2, rw, 1);
+                        }
+                    }
+                    char pre[16];
+                    snprintf(pre, sizeof pre, "L%-4d", ln);
+                    draw_text(e, pre, asm_x, yy, 0x6C, 0xB0, 0xE0);
+                    /* Columna +offset solo si hay addr (JIT/AOT); el bytecode
+                     * no tiene offset de byte -> el codigo va justo tras Lnnn. */
+                    int code_x;
+                    if (asml[i].a && asml[i].a[0]) {
+                        char ab[24];
+                        snprintf(ab, sizeof ab, "+%s", asml[i].a);
+                        draw_text(e, ab, asm_x + 5 * cw, yy, 0x70, 0x74, 0x80);
+                        code_x = asm_x + 12 * cw;
+                    } else {
+                        code_x = asm_x + 5 * cw;
+                    }
+                    draw_code_line(e, asml[i].b, (int)strlen(asml[i].b), code_x,
+                                   yy);
+                    if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
+                    h->gb_right_n = row + 1;
+                }
+            }
+            free(src);
+            free(asml);
+            free(cp);
+        }
+    } else if (h->active_tab == 0) {
+        /* Pestana Doc: Markdown + HTML 1.0 minimo.  Bloque: cabeceras (# /
+         * <h1-3>), vinetas (- * + / <li>), fences de codigo (``` / <pre>);
+         * inline via draw_md_inline.  Se cuentan TODAS las lineas para el
+         * scroll (manteniendo el estado de fence aunque la linea este oculta). */
+        const char *p = content;
+        int skip = h->scroll < 0 ? 0 : h->scroll;
+        int row = 0, idx = 0, in_fence = 0;
+        char linebuf[2048];
+        while (*p && row < rows) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            size_t cpy = len < sizeof(linebuf) - 1 ? len : sizeof(linebuf) - 1;
+            memcpy(linebuf, p, cpy);
+            linebuf[cpy] = 0;
+            char *t = linebuf;
+            while (*t == ' ' || *t == '\t') t++;
+            int is_fence = (strncmp(t, "```", 3) == 0) ||
+                           (strncmp(t, "<pre", 4) == 0) ||
+                           (strncmp(t, "</pre", 5) == 0);
+            if (idx++ < skip) { /* oculta por scroll: solo actualizar fence */
+                if (is_fence) in_fence = !in_fence;
+                if (!nl) break;
+                p = nl + 1;
+                continue;
+            }
+            int yy = by + row * lh;
+            if (is_fence) {
+                in_fence = !in_fence;
+                set_color_c(r, e->theme.col_tabbar_sep);
+                fill_rect(r, body_x, yy + lh / 2, 30 * cw, 1);
+            } else if (in_fence) {
+                draw_code_line(e, linebuf, (int)cpy, body_x, yy);
+            } else {
+                int hdr = 0, bullet = 0;
+                char *body = t;
+                if (t[0] == '#') {
+                    while (*body == '#') body++;
+                    while (*body == ' ') body++;
+                    hdr = 1;
+                } else if (t[0] == '<' && t[1] == 'h' && t[2] >= '1' &&
+                           t[2] <= '3') {
+                    char *gt = strchr(t, '>');
+                    body = gt ? gt + 1 : t;
+                    hdr = 1;
+                } else if ((t[0] == '-' || t[0] == '*' || t[0] == '+') &&
+                           t[1] == ' ') {
+                    body = t + 2;
+                    bullet = 1;
+                } else if (strncmp(t, "<li>", 4) == 0) {
+                    body = t + 4;
+                    bullet = 1;
+                }
+                int bx = body_x;
+                if (bullet) {
+                    draw_text(e, "\xe2\x80\xa2", body_x, yy, 0x88, 0x8C, 0x99);
+                    bx = body_x + 2 * cw;
+                }
+                int blen = (int)strlen(body);
+                if (hdr)
+                    draw_md_inline(e, body, blen, bx, yy, 0x4E, 0xC9, 0xB0);
+                else
+                    draw_md_inline(e, body, blen, bx, yy, 0xCC, 0xCC, 0xD4);
+            }
+            row++;
+            if (!nl) break;
+            p = nl + 1;
+        }
+    } else {
+        const char *p = content;
+        int skip = h->scroll < 0 ? 0 : h->scroll;
+        int row = 0;
+        char linebuf[2048];
+        while (*p && row < rows) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            if (skip > 0) {
+                skip--;
+            } else {
+                size_t cpy =
+                    len < sizeof(linebuf) - 1 ? len : sizeof(linebuf) - 1;
+                memcpy(linebuf, p, cpy);
+                linebuf[cpy] = 0;
+                draw_code_line(e, linebuf, (int)cpy, body_x, by + row * lh);
+                row++;
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    }
+    SDL_SetRenderClipRect(r, NULL);
+    free(ir_copy); /* copia mutable de la vista IR multi (si la hubo) */
+
+    /* Tirador de redimension (esquina inferior derecha): tres pips diagonales. */
+    set_color_c(r, e->theme.col_tabbar_sep);
+    for (int k = 0; k < 3; ++k) {
+        int off = 4 + k * 4;
+        fill_rect(r, x + w - off, y + hh - 4, 2, 2);
+    }
+    (void)rsz;
 }
 
 /**

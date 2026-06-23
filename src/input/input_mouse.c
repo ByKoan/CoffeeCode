@@ -19,6 +19,8 @@
 #include "input_internal.h"
 #include "app/app.h"
 #include "editor/tab_reorder.h"
+#include "ext/coffee_ext.h" /* COFFEE_EVENT_TEXT_HOVER, CoffeeHoverPos */
+#include "ext/ext_host.h"   /* ext_host_emit */
 /* render_detached_window (refresca el hit-test antes del clic) viene de
  * render/render.h, incluido por input_internal.h. */
 
@@ -599,6 +601,18 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
     int cursor_x = (int)cursor_xf;
     int cursor_y = (int)cursor_yf;
 
+    /* Rueda sobre el popup de hover: desplazar su contenido. */
+    if (e->hover.visible) {
+        HoverPopup *h = &e->hover;
+        if (cursor_x >= h->rect_x && cursor_x < h->rect_x + h->rect_w &&
+            cursor_y >= h->rect_y && cursor_y < h->rect_y + h->rect_h) {
+            h->scroll -= (int)ev->wheel.y;
+            if (h->scroll < 0) h->scroll = 0;
+            e->needs_redraw = 1;
+            return;
+        }
+    }
+
     /* Preferencias abiertas: la rueda sobre la lista de fuentes la desplaza
      * (ui_list recorta el scroll a un rango válido al dibujar). */
     if (e->settings_open) {
@@ -631,6 +645,23 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
             if (c->scroll < 0) c->scroll = 0;
             /* el tope inferior lo recorta el render segun las lineas visibles */
         }
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Rueda sobre la barra de pestañas (barra global, sin división): la
+     * convertimos en scroll HORIZONTAL de pestañas (una pestaña por muesca).
+     * Así, con muchos archivos abiertos, se navega cómodamente con la rueda. */
+    if (e->dock.leaf_count <= 1 && cursor_y >= NAVBAR_HEIGHT &&
+        cursor_y < NAVBAR_HEIGHT + TAB_BAR_HEIGHT &&
+        cursor_x >= get_left_offset(e) && cursor_x < e->win_w) {
+        int dir = (ev->wheel.y > 0) ? -1 : (ev->wheel.y < 0 ? 1 : 0);
+        e->tab_scroll += dir;
+        if (e->tab_scroll < 0) e->tab_scroll = 0;
+        if (e->tab_scroll > e->tab_count - 1) e->tab_scroll = e->tab_count - 1;
+        /* marcar la activa como ya centrada para que el auto-scroll del render
+         * no devuelva la vista a ella: permite explorar otras pestañas. */
+        e->tab_scroll_seen = e->active_tab;
         e->needs_redraw = 1;
         return;
     }
@@ -705,9 +736,91 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
  * @param e  Editor.
  * @param ev Evento SDL; se usan @c ev->motion.x / @c ev->motion.y.
  */
+/* Tiempo (ms) que el raton debe permanecer quieto sobre texto para disparar el
+ * hover. */
+#define HOVER_REST_MS 450
+
+void editor_hover_tick(Editor *e) {
+    if (!e || !e->buf || e->tab_count == 0) return;
+    HoverPopup *hv = &e->hover;
+    if (hv->dragging || hv->resizing) return; /* manipulando el popup */
+    if (hv->rest_fired || hv->last_move_ms == 0) return;
+    uint32_t now = (uint32_t)SDL_GetTicks();
+    if (now - hv->last_move_ms < HOVER_REST_MS) return;
+    hv->rest_fired = 1; /* una sola emision por reposo */
+    int mx = hv->last_mx, my = hv->last_my;
+    /* No re-disparar el hover si el raton esta SOBRE el propio popup (mirar su
+     * contenido no debe pedir otro simbolo). */
+    if (hv->visible && mx >= hv->rect_x && mx < hv->rect_x + hv->rect_w &&
+        my >= hv->rect_y && my < hv->rect_y + hv->rect_h)
+        return;
+    /* Solo dentro del area de texto (no barras superiores ni panel lateral). */
+    if (my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) return;
+    if (mx < get_left_offset(e)) return;
+    int line = 0, col = 0;
+    point_to_line_col(e, mx, my, &line, &col);
+    hv->anchor_line = line;
+    hv->anchor_col = col;
+    hv->anchor_x = mx;
+    hv->anchor_y = my;
+    /* Disparar el evento; la extension (LSP) decide si hay simbolo y abre el
+     * popup con show_hover.  Si no hay nada, no pasa nada. */
+    if (e->ext_host) {
+        CoffeeHoverPos pos;
+        pos.line = (uint32_t)line;
+        pos.col = (uint32_t)col;
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_TEXT_HOVER, &pos);
+    }
+}
+
 void on_mouse_motion(Editor *e, SDL_Event *ev) {
     int mouse_x = (int)ev->motion.x;
     int mouse_y = (int)ev->motion.y;
+
+    /* Popup de hover: arrastre / redimension (tienen prioridad).  NO se cierra
+     * por movimiento: persiste hasta Esc / boton cerrar / clic-fuera / otro
+     * hover (que lo reemplaza).  Solo registramos el movimiento para el
+     * temporizador de mouse-rest. */
+    {
+        HoverPopup *hv = &e->hover;
+        if (hv->visible && hv->dragging) {
+            hv->rect_x = mouse_x - hv->drag_off_x;
+            hv->rect_y = mouse_y - hv->drag_off_y;
+            e->needs_redraw = 1;
+            return;
+        }
+        if (hv->visible && hv->resizing) {
+            hv->rect_w = mouse_x - hv->rect_x + 4;
+            hv->rect_h = mouse_y - hv->rect_y + 4;
+            e->needs_redraw = 1;
+            return;
+        }
+        /* Arrastre del separador de columnas de la vista godbolt: recalcular
+         * el % de ancho de la columna fuente desde la x del raton. */
+        if (hv->visible && hv->gb_split_drag) {
+            int inner = hv->rect_w - 16; /* ~ ancho util (menos paddings) */
+            if (inner < 1) inner = 1;
+            int rel = mouse_x - (hv->rect_x + 8);
+            int pct = rel * 100 / inner;
+            if (pct < 20) pct = 20;
+            if (pct > 75) pct = 75;
+            hv->gb_split_pct = pct;
+            e->needs_redraw = 1;
+            return;
+        }
+        hv->last_mx = mouse_x;
+        hv->last_my = mouse_y;
+        hv->last_move_ms = (uint32_t)SDL_GetTicks();
+        hv->rest_fired = 0;
+        /* Vista godbolt: re-dibujar al mover el raton por encima para que el
+         * cross-highlight de hover siga al cursor en vivo (el resto del popup
+         * no necesita redibujo continuo). */
+        if (hv->visible && hv->gb_active && mouse_x >= hv->rect_x &&
+            mouse_x < hv->rect_x + hv->rect_w && mouse_y >= hv->rect_y &&
+            mouse_y < hv->rect_y + hv->rect_h) {
+            e->needs_redraw = 1;
+        }
+    }
 
     /* Arrastrando un flotante (mover por la barra de titulo o redimensionar por
      * la esquina): tiene prioridad sobre el resto del hit-testing. */
@@ -1685,6 +1798,83 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     if (e->enc_popup) {
         handle_enc_popup_click(e, mx, my);
         return;
+    }
+
+    /* Popup de hover abierto: clic en cerrar / redimension / pestana / barra de
+     * arrastre / cuerpo; un clic FUERA lo cierra. */
+    if (e->hover.visible) {
+        HoverPopup *h = &e->hover;
+        int hdr_h = e->font_size + 12;
+        int close_w = hdr_h;
+        int in_rect = mx >= h->rect_x && mx < h->rect_x + h->rect_w &&
+                      my >= h->rect_y && my < h->rect_y + h->rect_h;
+        if (in_rect) {
+            /* boton cerrar (x): esquina superior derecha de la franja */
+            if (mx >= h->rect_x + h->rect_w - close_w &&
+                my < h->rect_y + hdr_h) {
+                editor_hover_hide(e);
+                return;
+            }
+            /* tirador de redimension: esquina inferior derecha */
+            if (mx >= h->rect_x + h->rect_w - 16 &&
+                my >= h->rect_y + h->rect_h - 16) {
+                h->resizing = 1;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* pestana */
+            int tab = ui_hit_idx(&e->ui, UI_LIST_HOVER_TAB, mx, my);
+            if (tab >= 0 && tab < h->n_tabs) {
+                h->active_tab = tab;
+                h->scroll = 0;
+                h->gb_sel_line = -1; /* la linea fijada es por-pestana */
+                e->needs_redraw = 1;
+                return;
+            }
+            /* resto de la franja de cabecera: arrastrar el popup */
+            if (my < h->rect_y + hdr_h) {
+                h->dragging = 1;
+                h->drag_off_x = mx - h->rect_x;
+                h->drag_off_y = my - h->rect_y;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* Pestana IR multi-vista: clic en la fila selectora alterna entre
+             * "lado a lado" y "unificado". */
+            if (h->ir_active && my >= h->ir_sel_y &&
+                my < h->ir_sel_y + (e->line_height > 0 ? e->line_height : 16) &&
+                mx >= h->ir_sel_x0 && mx <= h->ir_sel_x1) {
+                h->ir_submode = (mx < h->ir_sel_mid) ? 0 : 1;
+                h->scroll = 0;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* Cuerpo de la vista "Godbolt": (a) clic cerca del separador ->
+             * empezar a arrastrarlo para redimensionar las columnas; (b) clic
+             * en una fila -> FIJAR su linea .vex (cross-highlight persistente). */
+            if (h->gb_active) {
+                if (mx >= h->gb_sepx - 4 && mx <= h->gb_sepx + 4) {
+                    h->gb_split_drag = 1;
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (h->gb_lh > 0 && my >= h->gb_body_top) {
+                    int vr = (my - h->gb_body_top) / h->gb_lh;
+                    int ln = 0;
+                    if (mx < h->gb_sepx) {
+                        if (vr >= 0 && vr < h->gb_left_n) ln = h->gb_left_lines[vr];
+                    } else {
+                        if (vr >= 0 && vr < h->gb_right_n) ln = h->gb_right_lines[vr];
+                    }
+                    /* toggle: re-clic en la misma linea la des-fija */
+                    h->gb_sel_line = (ln != 0 && ln == h->gb_sel_line) ? -1 : ln;
+                    e->needs_redraw = 1;
+                    return;
+                }
+            }
+            return; /* cuerpo: consumir el clic */
+        }
+        editor_hover_hide(e); /* clic fuera: cerrar y seguir con el clic normal */
     }
 
     /* Divisor de panel bajo el cursor: empezar a arrastrarlo.  Tiene prioridad

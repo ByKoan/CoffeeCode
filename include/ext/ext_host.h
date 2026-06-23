@@ -74,6 +74,15 @@ typedef struct CoffeeHostBackend {
 
     /* -- Repintado y decoraciones (opcionales) -- */
     void (*request_repaint)(void *ud);
+
+    /* -- Popup de hover con pestanas (opcionales, ABI v7) -- */
+    /** Abre el popup de hover en el ancla del ultimo TEXT_HOVER con @p n
+     *  pestanas tituladas @p names (contenido inicial vacio). */
+    void (*show_hover)(void *ud, const char *const *names, int n);
+    /** Fija el contenido de la pestana @p index del popup de hover. */
+    void (*set_hover_tab)(void *ud, int index, const char *content);
+    /** Cierra el popup de hover. */
+    void (*hide_hover)(void *ud);
 } CoffeeHostBackend;
 
 /**
@@ -309,6 +318,25 @@ int ext_host_range_underlines(CoffeeHost *host, const Buffer *buffer, size_t lin
  */
 int ext_host_inline_hint(CoffeeHost *host, const Buffer *buffer, size_t line,
                          const char **out_text, CoffeeColor *out_color);
+
+/** @brief Un inline hint recuperado del host (texto fantasma). */
+typedef struct CoffeeInlineHint {
+    const char *text;  /**< texto del hint (no se libera; vive en el host) */
+    CoffeeColor color; /**< color del texto */
+    uint32_t col;      /**< columna de inserción (codepoints); UINT32_MAX = al
+                            final de la linea (tras el codigo, ante el //) */
+} CoffeeInlineHint;
+
+/**
+ * @brief Recolecta TODOS los inline hints de la linea @p line del buffer.
+ *
+ * Incluye tanto el hint "al final" (set_inline_hint, col==UINT32_MAX) como los
+ * de columna intermedia (set_inline_hint_at).  Hasta @p max hints.
+ *
+ * @return Numero de hints escritos en @p out (0 si la linea no tiene).
+ */
+int ext_host_inline_hints(CoffeeHost *host, const Buffer *buffer, size_t line,
+                          CoffeeInlineHint *out, int max);
 
 /**
  * @brief Descarta TODAS las decoraciones asociadas a @p buffer.

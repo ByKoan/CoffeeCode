@@ -916,35 +916,29 @@ static void render_text_underlines(Editor *e, int li, int text_x, int y) {
     }
 }
 
-/* Info del texto fantasma (inline hint) de una linea: lo pone una extension
- * (p.ej. el LSP de Vex con el valor de sizeof<T>).  Se INSERTA tras el codigo
- * (antes de un comentario //) empujando lo que sigue a la derecha. */
-typedef struct {
-    const char *text; /**< texto del hint (NULL si no hay). */
-    CoffeeColor color;
-    int has;       /**< 1 si la linea tiene hint. */
-    int code_end;  /**< byte del texto de linea donde insertar (tras el codigo). */
-    int hint_cols; /**< columnas que ocupa el hint (texto + separacion). */
-} InlineHintInfo;
+/* Inline hints (textos fantasma) de una linea: los pone una extension (p.ej. el
+ * LSP de Vex: valor de sizeof<T> al final de la linea, o el nombre de cada
+ * parametro ANTES de su argumento en una llamada).  Cada hint se INSERTA en su
+ * columna empujando el texto a su derecha; varios por linea son posibles. */
+#define MAX_LINE_HINTS 24
 
-static InlineHintInfo get_inline_hint(Editor *e, int li, const char *line,
-                                      int line_bytes) {
-    InlineHintInfo h;
-    h.text = NULL;
-    h.has = 0;
-    h.code_end = line_bytes;
-    h.hint_cols = 0;
-    if (!e->ext_host || !e->buf) return h;
-    CoffeeHost *host = (CoffeeHost *)e->ext_host;
-    const char *text = NULL;
-    CoffeeColor c;
-    if (!ext_host_inline_hint(host, e->buf, (size_t)li, &text, &c)) return h;
-    if (!text || !text[0]) return h;
-    h.text = text;
-    h.color = c;
-    h.has = 1;
-    /* punto de insercion = tras el codigo, antes de un comentario // (fuera de
-     * cadenas), recortando el espacio en blanco previo al comentario. */
+typedef struct {
+    int disp_col;      /**< columna de DISPLAY (texto, sin hints) donde insertar */
+    const char *text;  /**< texto del hint */
+    CoffeeColor color; /**< color del hint */
+    int cols;          /**< columnas que ocupa (texto + separaciones) */
+    int done;          /**< 1 cuando ya se dibujo en esta pasada */
+} OneHint;
+
+typedef struct {
+    OneHint h[MAX_LINE_HINTS];
+    int count;
+} LineHints;
+
+/* Byte donde acaba el codigo de la linea: tras el ultimo caracter no blanco,
+ * antes de un comentario // (fuera de cadenas).  Es el punto del hint "al
+ * final" (set_inline_hint). */
+static int line_code_end_byte(const char *line, int line_bytes) {
     int code_end = line_bytes;
     int in_str = 0;
     char q = 0;
@@ -964,51 +958,107 @@ static InlineHintInfo get_inline_hint(Editor *e, int li, const char *line,
             break;
         }
     }
-    while (code_end > 0 && (line[code_end - 1] == ' ' || line[code_end - 1] == '\t'))
+    while (code_end > 0 &&
+           (line[code_end - 1] == ' ' || line[code_end - 1] == '\t'))
         --code_end;
-    h.code_end = code_end;
-    h.hint_cols = (int)strlen(text) + 2; /* 1 columna de separacion a cada lado */
-    return h;
+    return code_end;
 }
 
-/* Dibuja line[from..to) en color @p c desde la columna *col, INSERTANDO el hint
- * (y desplazando lo que sigue) cuando el segmento cruza @c h->code_end.  Asi el
- * valor queda tras la expresion y el comentario se empuja a la derecha, sin
- * solaparse.  Actualiza *col y marca *done cuando inserta el hint. */
-static void draw_seg_hint(Editor *e, const char *line, int from, int to, int *col,
-                          int text_x, int text_y, Color c, const InlineHintInfo *h,
-                          int *done) {
-    int cw = (e->char_w > 0 ? e->char_w : 8);
-    int d = from;
-    if (h->has && !*done && from <= h->code_end && to > h->code_end) {
-        if (d < h->code_end) { /* parte del codigo previa al punto */
-            draw_seg(e, line, d, h->code_end, *col, text_x, text_y, c);
-            *col += count_cols(line, d, h->code_end);
-            d = h->code_end;
-        }
-        Color hc = {h->color.r, h->color.g, h->color.b,
-                    (unsigned char)(h->color.a ? h->color.a : 255)};
-        int hx = text_x + (*col + 1 - e->scroll_col) * cw; /* 1 col de separacion */
-        draw_substr(e, h->text, 0, (int)strlen(h->text), hx, text_y, hc);
-        *col += h->hint_cols;
-        *done = 1;
-    }
-    if (d < to) { /* resto del segmento (ya desplazado si se inserto el hint) */
-        draw_seg(e, line, d, to, *col, text_x, text_y, c);
-        *col += count_cols(line, d, to);
-    }
+/* Orden ascendente por columna de insercion (qsort). */
+static int cmp_one_hint(const void *a, const void *b) {
+    int x = ((const OneHint *)a)->disp_col;
+    int y = ((const OneHint *)b)->disp_col;
+    return (x > y) - (x < y);
 }
 
-/* Dibuja el hint al final del texto cuando la linea no tenia comentario (no se
- * inserto en medio): va tras el ultimo caracter. */
-static void draw_trailing_hint(Editor *e, int col, int text_x, int text_y,
-                               const InlineHintInfo *h, int done) {
-    if (!h->has || done) return;
+/* Recolecta y ORDENA por columna todos los inline hints de la linea. */
+static LineHints get_inline_hints(Editor *e, int li, const char *line,
+                                  int line_bytes) {
+    LineHints out;
+    out.count = 0;
+    if (!e->ext_host || !e->buf) return out;
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    CoffeeInlineHint raw[MAX_LINE_HINTS];
+    int n = ext_host_inline_hints(host, e->buf, (size_t)li, raw, MAX_LINE_HINTS);
+    for (int i = 0; i < n && out.count < MAX_LINE_HINTS; ++i) {
+        if (!raw[i].text || !raw[i].text[0]) continue;
+        OneHint *o = &out.h[out.count];
+        if (raw[i].col == UINT32_MAX) /* "al final": tras el codigo */
+            o->disp_col = count_cols(line, 0, line_code_end_byte(line, line_bytes));
+        else /* columna intermedia: convertir codepoints -> display (tabs/CJK) */
+            o->disp_col = buffer_cp_to_display_col(e, li, raw[i].col);
+        o->text = raw[i].text;
+        o->color = raw[i].color;
+        o->cols = (int)strlen(raw[i].text) + 2; /* 1 col de separacion a cada lado */
+        o->done = 0;
+        out.count++;
+    }
+    if (out.count > 1)
+        qsort(out.h, (size_t)out.count, sizeof(OneHint), cmp_one_hint);
+    return out;
+}
+
+/* Dibuja un hint en la columna de DIBUJO @p draw_col (con 1 col de separacion
+ * previa); avanza @p shift por el ancho del hint. */
+static void blit_one_hint(Editor *e, const OneHint *h, int draw_col, int *shift,
+                          int text_x, int text_y) {
     int cw = (e->char_w > 0 ? e->char_w : 8);
     Color hc = {h->color.r, h->color.g, h->color.b,
                 (unsigned char)(h->color.a ? h->color.a : 255)};
-    int hx = text_x + (col + 1 - e->scroll_col) * cw;
+    int hx = text_x + (draw_col + 1 - e->scroll_col) * cw; /* 1 col separacion */
     draw_substr(e, h->text, 0, (int)strlen(h->text), hx, text_y, hc);
+    *shift += h->cols;
+}
+
+/* Dibuja line[from..to) en color @p c, INSERTANDO los hints pendientes cuya
+ * columna de texto caiga en el rango.  @p tcol = columna de TEXTO acumulada (sin
+ * hints); @p shift = columnas aportadas por los hints ya insertados.  La columna
+ * de DIBUJO de cualquier punto del texto es tcol+shift, de modo que cada hint
+ * empuja el resto a la derecha. */
+static void draw_seg_hints(Editor *e, const char *line, int from, int to,
+                           int *tcol, int *shift, int text_x, int text_y,
+                           Color c, LineHints *hints) {
+    int d = from;
+    for (int hi = 0; hi < hints->count; ++hi) {
+        OneHint *h = &hints->h[hi];
+        if (h->done) continue;
+        int seg_end_tcol = *tcol + count_cols(line, d, to);
+        if (h->disp_col > seg_end_tcol)
+            break; /* pertenece a un segmento posterior (estan ordenados) */
+        /* columna de texto destino (si ya pasamos su columna, insertar aqui) */
+        int target = h->disp_col < *tcol ? *tcol : h->disp_col;
+        int bk = d, ccol = *tcol;
+        while (bk < to && ccol < target) {
+            uint32_t cp;
+            int nseq = utf8_decode(line + bk, to - bk, &cp);
+            ccol += utf8_cp_width(cp);
+            bk += nseq;
+        }
+        if (bk > d) {
+            draw_seg(e, line, d, bk, *tcol + *shift, text_x, text_y, c);
+            *tcol = ccol;
+            d = bk;
+        }
+        blit_one_hint(e, h, *tcol + *shift, shift, text_x, text_y);
+        h->done = 1;
+    }
+    if (d < to) {
+        draw_seg(e, line, d, to, *tcol + *shift, text_x, text_y, c);
+        *tcol += count_cols(line, d, to);
+    }
+}
+
+/* Dibuja los hints no insertados (su columna >= longitud de texto de la linea):
+ * van tras el ultimo caracter, rellenando con espacio en blanco hasta su col. */
+static void flush_remaining_hints(Editor *e, int *tcol, int *shift, int text_x,
+                                  int text_y, LineHints *hints) {
+    for (int hi = 0; hi < hints->count; ++hi) {
+        OneHint *h = &hints->h[hi];
+        if (h->done) continue;
+        if (h->disp_col > *tcol) *tcol = h->disp_col; /* hueco en blanco */
+        blit_one_hint(e, h, *tcol + *shift, shift, text_x, text_y);
+        h->done = 1;
+    }
 }
 
 /**
@@ -1055,16 +1105,18 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         lt = (li < lexer_cache_count(e->lex)) ? lexer_cache_line(e->lex, li)
                                               : NULL;
 
-    /* Info del inline hint (valor comptime, etc.): se INSERTA tras el codigo,
-     * empujando el comentario; en lineas sin comentario va al final. */
-    InlineHintInfo hint = get_inline_hint(e, li, line_buf, line_bytes);
+    /* Inline hints (valor comptime al final, nombres de parametros antes de
+     * cada argumento, ...): cada uno se INSERTA en su columna empujando el
+     * texto a su derecha.  tcol = columna de texto; shift = columnas aportadas
+     * por los hints ya insertados. */
+    LineHints hints = get_inline_hints(e, li, line_buf, line_bytes);
+    int tcol = 0, shift = 0;
 
     /* Sin tramos: dibujar la línea entera en color por defecto. */
     if (!lt || lt->count == 0) {
-        int col = 0, hint_done = 0;
-        draw_seg_hint(e, line_buf, 0, line_bytes, &col, text_x, text_y, def,
-                      &hint, &hint_done);
-        draw_trailing_hint(e, col, text_x, text_y, &hint, hint_done);
+        draw_seg_hints(e, line_buf, 0, line_bytes, &tcol, &shift, text_x, text_y,
+                       def, &hints);
+        flush_remaining_hints(e, &tcol, &shift, text_x, text_y, &hints);
         render_text_underlines(e, li, text_x, y); /* squiggles encima */
         return;
     }
@@ -1072,8 +1124,8 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
     /* Con tramos: en orden, los huecos (sin tramo) en color por defecto y cada
      * tramo con SU color. Los tramos vienen en BYTES; aquí se posicionan por
      * COLUMNAS de carácter (draw_seg) para alinear multibyte.
-     * `drawn` = byte ya cubierto; `col` = su columna de caracteres. */
-    int drawn = 0, col = 0, hint_done = 0;
+     * `drawn` = byte ya cubierto. */
+    int drawn = 0;
     for (int ti = 0; ti < lt->count; ti++) {
         Token *tok = &lt->tokens[ti];
         int tok_start = tok->col;
@@ -1082,27 +1134,27 @@ static void render_text_line(Editor *e, int li, int y, int text_x) {
         if (tok_end > line_bytes) tok_end = line_bytes;
         if (tok_start < drawn) tok_start = drawn; /* defensivo: solapes */
 
-        /* hueco antes del tramo (color por defecto), insertando el hint si cae */
+        /* hueco antes del tramo (color por defecto), insertando hints si caen */
         if (drawn < tok_start) {
-            draw_seg_hint(e, line_buf, drawn, tok_start, &col, text_x, text_y,
-                          def, &hint, &hint_done);
+            draw_seg_hints(e, line_buf, drawn, tok_start, &tcol, &shift, text_x,
+                           text_y, def, &hints);
             drawn = tok_start;
         }
-        /* el tramo, con su color (insertando el hint si cae en su rango) */
+        /* el tramo, con su color (insertando hints si caen en su rango) */
         if (drawn < tok_end) {
-            draw_seg_hint(e, line_buf, drawn, tok_end, &col, text_x, text_y,
-                          tok->color, &hint, &hint_done);
+            draw_seg_hints(e, line_buf, drawn, tok_end, &tcol, &shift, text_x,
+                           text_y, tok->color, &hints);
             drawn = tok_end;
         }
     }
 
     /* texto restante tras el último tramo (en color por defecto) */
     if (drawn < line_bytes)
-        draw_seg_hint(e, line_buf, drawn, line_bytes, &col, text_x, text_y, def,
-                      &hint, &hint_done);
+        draw_seg_hints(e, line_buf, drawn, line_bytes, &tcol, &shift, text_x,
+                       text_y, def, &hints);
 
-    /* si no habia comentario, el hint no se inserto: ponerlo tras el texto */
-    draw_trailing_hint(e, col, text_x, text_y, &hint, hint_done);
+    /* hints no insertados (su columna cae tras el final del texto) */
+    flush_remaining_hints(e, &tcol, &shift, text_x, text_y, &hints);
     /* subrayados de diagnostico (squiggles) por encima del texto de la linea */
     render_text_underlines(e, li, text_x, y);
 }
@@ -1709,6 +1761,7 @@ void render_frame(Editor *e) {
     render_find_bar(e);
     render_menu(e); /* el menú va el último: se dibuja sobre todo lo demás */
     render_enc_popup(e); /* selector de codificación, por encima de todo */
+    render_hover_popup(e); /* popup de hover (info de simbolo), por encima */
     render_tab_drag(e);  /* guia del arrastre de pestañas, sobre todo lo demás */
     render_drag_window_highlight(e); /* multi-ventana: marco de "soltar aqui" */
 

@@ -62,6 +62,19 @@ typedef struct VlDoc {
     int open;             /**< 1 si ya se envio didOpen al servidor. */
     int pending_open;     /**< 1 si hay que enviar didOpen al estar listo. */
     int version;          /**< version del documento para didChange. */
+    /* Cache de los semantic tokens YA convertidos a columnas de codepoint del
+     * ULTIMO analisis de este documento.  Permite re-pintar el resaltado al
+     * instante al volver a la pestana (sin esperar la respuesta async del
+     * servidor), igual que se cachea @c diagnostics.  Valido mientras el texto
+     * no cambie; tras un didChange el servidor responde y se reemplaza. */
+    VexSemTokenCp *sem_cps;        /**< tokens cacheados (heap), o NULL. */
+    int sem_n;                     /**< numero de tokens en @c sem_cps. */
+    /* Inline hints cacheados (resultados crudos del servidor) para re-aplicarlos
+     * al instante al volver a la pestana, sin esperar otra respuesta async.  Hay
+     * dos tipos coordinados: los valores comptime (al final de la linea) y los
+     * nombres de parametros (en columna).  Se re-aplican AMBOS juntos. */
+    cJSON *comptime_hints; /**< result de vesta/comptimeValues, o NULL. */
+    cJSON *param_hints;    /**< result de vesta/paramHints, o NULL. */
     struct VlDoc *next;
 } VlDoc;
 
@@ -95,6 +108,12 @@ typedef struct VlState {
     size_t *hint_lines;   /**< lineas (0-based) con hint puesto (heap). */
     size_t hint_count;    /**< numero de hints activos. */
     size_t hint_cap;      /**< capacidad del array. */
+
+    /* Hover rico (popup con pestanas).  hover_gen invalida respuestas en vuelo
+     * cuando el raton se mueve a otro simbolo; hover_uri es el doc del hover en
+     * curso (para pedir IR/bytecode/JIT/AOT). */
+    int hover_gen;
+    char *hover_uri;
 } VlState;
 
 /* Singleton: el core carga una sola instancia de la extension. */
@@ -104,6 +123,11 @@ static VlState g_state;
  * archivo) refresca el resaltado semantico, cuya rutina vive mas abajo. */
 static void vl_request_semantic_tokens(VlState *st, VlDoc *doc);
 static void vl_build_palette(VlState *st);
+/* Empuja al editor un lote de tokens (codepoints) ya convertidos; lo usa tanto
+ * la respuesta del servidor como el re-pintado desde cache al cambiar de tab. */
+static void vl_push_tokens(VlState *st, const VexSemTokenCp *toks, int n);
+/* Re-aplica los inline hints (comptime + parametros) cacheados de un doc. */
+static void vl_apply_inline_hints(VlState *st, VlDoc *doc);
 
 /* Indice de lineas del buffer activo (helpers definidos mas abajo).  Se usa
  * desde vl_apply_decorations para convertir columnas UTF-16 (las del LSP) a
@@ -507,9 +531,18 @@ static void vl_reapply_active(VlState *st) {
         vl_apply_decorations(st, doc->diagnostics);
         vl_refresh_problems_channel(st, doc);
         /* Al volver a un .vex ya abierto, el resaltado del buffer anterior se
-         * descarta (clear_tokens) y re-pedimos los tokens de este (su texto es
-         * el que ahora esta activo para convertir columnas). */
+         * descarta (clear_tokens).  Re-pintamos AL INSTANTE el resaltado
+         * cacheado de ESTE documento (su ultimo analisis) para que no haya
+         * parpadeo sin color, y ademas re-pedimos al servidor para refrescar
+         * (su texto es el que ahora esta activo para convertir columnas). */
         api->clear_tokens(st->host);
+        if (doc->sem_cps && doc->sem_n > 0) {
+            vl_push_tokens(st, doc->sem_cps, doc->sem_n);
+            api->request_repaint(st->host);
+        }
+        /* Re-pintar al instante los inline hints cacheados de este doc (valores
+         * comptime + nombres de parametros), sin esperar la respuesta async. */
+        vl_apply_inline_hints(st, doc);
         vl_request_semantic_tokens(st, doc);
     } else {
         api->channel_clear(st->host, VESTA_LSP_CHAN_PROB);
@@ -600,6 +633,16 @@ static int vl_palette_color_for(const char *name, CoffeeColor *out) {
         {"comment",       106, 153,  85},
         /* Operadores: gris claro. */
         {"operator",      212, 212, 212},
+        /* Secuencias de escape (\n, \xHH) y ANSI: dorado (estilo VS Code). */
+        {"escapeSequence", 215, 186, 125},
+        /* Delimitadores de interpolacion ${ }: magenta/rosa, destacan sobre
+         * el naranja del texto del string y el color del identificador. */
+        {"interpolation",  216, 132, 200},
+        /* Registros de CPU en bloques asm: rojo coral (distinto de los 4
+         * colores que reusan las categorias de instrucciones:
+         * aritmeticas=function amarillo, logicas=macro azul, control=keyword
+         * malva, movimiento=type turquesa). */
+        {"register",       224, 108, 117},
     };
 
     for (size_t i = 0; i < sizeof MAP / sizeof MAP[0]; ++i) {
@@ -836,6 +879,24 @@ static void vl_on_semantic_tokens(void *ud, cJSON *result, cJSON *error) {
     if (m > 0) vl_push_tokens(st, cps, m);
     st->api->request_repaint(st->host);
 
+    /* Cachear los tokens en el documento activo para re-pintarlos al instante
+     * al volver a su pestana (sin esperar otra respuesta del servidor).  El
+     * activo segun el IDE es st->last_open (vl_attend_path lo fija). */
+    if (st->last_open) {
+        free(st->last_open->sem_cps);
+        st->last_open->sem_cps = NULL;
+        st->last_open->sem_n = 0;
+        if (m > 0) {
+            VexSemTokenCp *keep =
+                (VexSemTokenCp *)malloc((size_t)m * sizeof(VexSemTokenCp));
+            if (keep) {
+                memcpy(keep, cps, (size_t)m * sizeof(VexSemTokenCp));
+                st->last_open->sem_cps = keep;
+                st->last_open->sem_n = m;
+            }
+        }
+    }
+
     free(cps);
     free(toks);
     if (have_ix) vl_line_index_free(&ix);
@@ -851,66 +912,129 @@ static void vl_on_semantic_tokens(void *ud, cJSON *result, cJSON *error) {
  */
 /* Color tenue (ghost) de los inline hints de valores comptime. */
 static const CoffeeColor VL_HINT_COLOR = {130, 130, 130, 255};
+/* Color de los nombres de parametro (inlay): gris azulado tenue, distinto del
+ * gris neutro de los valores comptime. */
+static const CoffeeColor VL_PARAM_HINT_COLOR = {118, 132, 150, 255};
 
-/* Limpia los inline hints que pusimos antes (texto vacio = quitar). */
-static void vl_clear_inline_hints(VlState *st) {
-    if (!st->api->set_inline_hint) return;
-    CoffeeColor z = {0, 0, 0, 0};
-    for (size_t i = 0; i < st->hint_count; ++i)
-        st->api->set_inline_hint(st->host, st->hint_lines[i], "", z);
-    st->hint_count = 0;
-}
+/* Aplica al editor TODOS los inline hints cacheados de @p doc: los valores
+ * comptime (al final de la linea) y los nombres de parametros (en columna).
+ * Limpia primero todo para no acumular.  Re-pinta al instante (lo llama tanto la
+ * respuesta del servidor como el cambio de pestana). */
+static void vl_apply_inline_hints(VlState *st, VlDoc *doc) {
+    const CoffeeApi *api = st->api;
+    if (!api->set_inline_hint) return;
+    /* Limpiar lo anterior de un golpe (ABI v6). */
+    if (api->clear_inline_hints) api->clear_inline_hints(st->host);
+    if (!doc) { api->request_repaint(st->host); return; }
 
-/* Recuerda una linea con hint para poder limpiarla en el proximo refresco. */
-static void vl_remember_hint_line(VlState *st, size_t line) {
-    if (st->hint_count >= st->hint_cap) {
-        size_t nc = st->hint_cap ? st->hint_cap * 2 : 16;
-        size_t *nb = (size_t *)realloc(st->hint_lines, nc * sizeof(size_t));
-        if (!nb) return;
-        st->hint_lines = nb;
-        st->hint_cap = nc;
+    /* (1) Valores comptime: ghost text al final de la linea. */
+    if (doc->comptime_hints) {
+        cJSON *values =
+            cJSON_GetObjectItemCaseSensitive(doc->comptime_hints, "values");
+        cJSON *v = NULL;
+        cJSON_ArrayForEach(v, values) {
+            cJSON *bk = cJSON_GetObjectItemCaseSensitive(v, "builtin_kind");
+            cJSON *jl = cJSON_GetObjectItemCaseSensitive(v, "line");
+            cJSON *vs = cJSON_GetObjectItemCaseSensitive(v, "value_str");
+            if (!cJSON_IsString(bk) || bk->valuestring[0] == '\0') continue;
+            if (!cJSON_IsNumber(jl) || jl->valuedouble < 1.0) continue;
+            if (!cJSON_IsString(vs)) continue;
+            size_t line0 = (size_t)(jl->valuedouble - 1.0);
+            /* ": " para tipos inferidos, nada para static_assert (OK/FALLA),
+             * "= " para valores. */
+            const char *prefix = "= ";
+            if (strcmp(bk->valuestring, "type") == 0)
+                prefix = ": ";
+            else if (strcmp(bk->valuestring, "static_assert") == 0)
+                prefix = "";
+            char buf[180];
+            snprintf(buf, sizeof(buf), "%s%s", prefix, vs->valuestring);
+            api->set_inline_hint(st->host, line0, buf, VL_HINT_COLOR);
+        }
     }
-    st->hint_lines[st->hint_count++] = line;
+
+    /* (2) Parameter hints: nombre del parametro ANTES de cada argumento. */
+    if (doc->param_hints && api->set_inline_hint_at) {
+        cJSON *hints =
+            cJSON_GetObjectItemCaseSensitive(doc->param_hints, "hints");
+        if (cJSON_IsArray(hints)) {
+            /* El servidor da la columna en UTF-16: la convertimos a codepoints
+             * con el texto del buffer activo (que es el de este doc). */
+            char *text = vl_read_active_buffer(st);
+            VlLineIndex ix;
+            int have_ix = text && vl_line_index_build(&ix, text, strlen(text));
+            cJSON *h = NULL;
+            cJSON_ArrayForEach(h, hints) {
+                cJSON *jl = cJSON_GetObjectItemCaseSensitive(h, "line");
+                cJSON *jc = cJSON_GetObjectItemCaseSensitive(h, "character");
+                cJSON *jlab = cJSON_GetObjectItemCaseSensitive(h, "label");
+                if (!cJSON_IsNumber(jl) || !cJSON_IsNumber(jc) ||
+                    !cJSON_IsString(jlab))
+                    continue;
+                uint32_t line0 =
+                    (jl->valuedouble < 0) ? 0u : (uint32_t)jl->valuedouble;
+                uint32_t u16 =
+                    (jc->valuedouble < 0) ? 0u : (uint32_t)jc->valuedouble;
+                uint32_t cp = u16;
+                if (have_ix) {
+                    const char *lp = NULL;
+                    size_t ll = 0;
+                    vl_line_text(&ix, line0, &lp, &ll);
+                    cp = vex_utf16_units_to_codepoints(lp, ll, u16);
+                }
+                api->set_inline_hint_at(st->host, (size_t)line0, cp,
+                                        jlab->valuestring, VL_PARAM_HINT_COLOR);
+            }
+            if (have_ix) vl_line_index_free(&ix);
+            free(text);
+        }
+    }
+    api->request_repaint(st->host);
 }
 
-/* Respuesta de vesta/comptimeValues: muestra los valores de los builtins
- * (sizeof<T>, kind<T>, ...) como ghost text en su linea. */
+/* Respuesta de vesta/comptimeValues: cachea y re-aplica todos los hints. */
 static void vl_on_comptime_hints(void *ud, cJSON *result, cJSON *error) {
     VlState *st = (VlState *)ud;
     if (!st || error || !result) return;
-    if (!st->api->set_inline_hint) return;
-    vl_clear_inline_hints(st);
-    cJSON *values = cJSON_GetObjectItemCaseSensitive(result, "values");
-    if (!cJSON_IsArray(values)) return;
-    cJSON *v = NULL;
-    cJSON_ArrayForEach(v, values) {
-        cJSON *bk = cJSON_GetObjectItemCaseSensitive(v, "builtin_kind");
-        cJSON *jl = cJSON_GetObjectItemCaseSensitive(v, "line");
-        cJSON *vs = cJSON_GetObjectItemCaseSensitive(v, "value_str");
-        if (!cJSON_IsString(bk) || bk->valuestring[0] == '\0') continue;
-        if (!cJSON_IsNumber(jl) || jl->valuedouble < 1.0) continue;
-        if (!cJSON_IsString(vs)) continue;
-        size_t line0 = (size_t)(jl->valuedouble - 1.0); /* 1-based -> 0-based */
-        char buf[160];
-        snprintf(buf, sizeof(buf), "= %s", vs->valuestring);
-        st->api->set_inline_hint(st->host, line0, buf, VL_HINT_COLOR);
-        vl_remember_hint_line(st, line0);
+    VlDoc *doc = st->last_open;
+    if (doc) {
+        if (doc->comptime_hints) cJSON_Delete(doc->comptime_hints);
+        doc->comptime_hints = cJSON_Duplicate(result, 1);
     }
-    st->api->request_repaint(st->host);
+    vl_apply_inline_hints(st, doc);
 }
 
-/* Pide al servidor los valores comptime del .vex activo y los muestra inline. */
+/* Respuesta de vesta/paramHints: cachea y re-aplica todos los hints. */
+static void vl_on_param_hints(void *ud, cJSON *result, cJSON *error) {
+    VlState *st = (VlState *)ud;
+    if (!st || error || !result) return;
+    VlDoc *doc = st->last_open;
+    if (doc) {
+        if (doc->param_hints) cJSON_Delete(doc->param_hints);
+        doc->param_hints = cJSON_Duplicate(result, 1);
+    }
+    vl_apply_inline_hints(st, doc);
+}
+
+/* Pide al servidor los valores comptime Y los parameter hints del .vex activo. */
 static void vl_refresh_inline_hints(VlState *st) {
     if (!st->ready || !st->lsp || !st->api->set_inline_hint) return;
     const char *path = st->api->current_path(st->host);
     if (!path || !vl_is_vex(path)) return;
     VlDoc *doc = vl_find_doc_by_path(st, path);
     if (!doc || !doc->open) return;
-    cJSON *params = cJSON_CreateObject();
-    if (!params) return;
-    cJSON_AddStringToObject(params, "uri", doc->uri);
-    lsp_vesta_request(st->lsp, "vesta/comptimeValues", params,
-                      vl_on_comptime_hints, st);
+    cJSON *p1 = cJSON_CreateObject();
+    if (p1) {
+        cJSON_AddStringToObject(p1, "uri", doc->uri);
+        lsp_vesta_request(st->lsp, "vesta/comptimeValues", p1,
+                          vl_on_comptime_hints, st);
+    }
+    cJSON *p2 = cJSON_CreateObject();
+    if (p2) {
+        cJSON_AddStringToObject(p2, "uri", doc->uri);
+        lsp_vesta_request(st->lsp, "vesta/paramHints", p2, vl_on_param_hints,
+                          st);
+    }
 }
 
 static void vl_request_semantic_tokens(VlState *st, VlDoc *doc) {
@@ -1154,6 +1278,55 @@ static void insp_fmt_text_like(VlState *st, InspMethod m, cJSON *result) {
             insp_emit(st, buf);
         }
         insp_emit(st, "\n\n");
+    }
+
+    /* Vista correlada "Godbolt" (solo-LSP): si el server trae asm_lines
+     * [{addr,text,line}] + source [{line,text}], renderizamos el bloque
+     * fuente y luego el asm con un prefijo de linea por instruccion, para
+     * ver de un vistazo que instruccion(es) genera cada linea .vex.  Si no
+     * vienen (server viejo / no compilable), caemos al texto plano. */
+    cJSON *asm_lines = cJSON_GetObjectItemCaseSensitive(result, "asm_lines");
+    if (cJSON_IsArray(asm_lines) && cJSON_GetArraySize(asm_lines) > 0) {
+        cJSON *src = cJSON_GetObjectItemCaseSensitive(result, "source");
+        if (cJSON_IsArray(src) && cJSON_GetArraySize(src) > 0) {
+            insp_emit(st, INSP_KEY "--- fuente ---" INSP_RST "\n");
+            cJSON *s = NULL;
+            cJSON_ArrayForEach(s, src) {
+                int ln = insp_num(s, "line", 0);
+                const char *tx = insp_str(s, "text", "");
+                char buf[1024];
+                snprintf(buf, sizeof buf,
+                         INSP_DIM "L%-4d" INSP_RST " %s\n", ln, tx);
+                insp_emit(st, buf);
+            }
+            insp_emit(st, "\n");
+        }
+        insp_emit(st, INSP_KEY
+                  "--- nativo (linea | offset | instruccion) ---" INSP_RST
+                  "\n");
+        cJSON *a = NULL;
+        int prev_line = -1;
+        cJSON_ArrayForEach(a, asm_lines) {
+            int ln = insp_num(a, "line", 0);
+            const char *addr = insp_str(a, "addr", "");
+            const char *tx = insp_str(a, "text", "");
+            char head[32];
+            /* Mostrar el numero de linea solo cuando cambia (agrupa la rafaga
+             * de instrs de una misma linea); las repeticiones van en blanco.
+             * Linea 0 = prologo/epilogo/sintetico -> punto medio gris. */
+            if (ln == 0)
+                snprintf(head, sizeof head, INSP_DIM "   . " INSP_RST);
+            else if (ln != prev_line)
+                snprintf(head, sizeof head, INSP_KEY "L%-4d" INSP_RST, ln);
+            else
+                snprintf(head, sizeof head, "     ");
+            prev_line = ln;
+            char buf[1280];
+            snprintf(buf, sizeof buf, "%s " INSP_DIM "+%s" INSP_RST "  %s\n",
+                     head, addr, tx);
+            insp_emit(st, buf);
+        }
+        return;
     }
 
     insp_emit_text_block(st, insp_str(result, "text", NULL));
@@ -1575,6 +1748,362 @@ static void insp_register_commands(VlState *st) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Hover rico (popup con pestanas doc/IR/bytecode/JIT/AOT).                   */
+/* ------------------------------------------------------------------------- */
+
+/* Contexto de una peticion del hover: identifica la generacion (para descartar
+ * respuestas obsoletas si el raton ya se movio) y la pestana a rellenar. */
+typedef struct {
+    VlState *st;
+    int gen;
+    int tab; /* -1 = symbolInfo; 0..4 = pestana a rellenar */
+} HoverReq;
+
+static HoverReq *hover_req_new(VlState *st, int tab) {
+    HoverReq *r = (HoverReq *)malloc(sizeof(HoverReq));
+    if (r) {
+        r->st = st;
+        r->gen = st->hover_gen;
+        r->tab = tab;
+    }
+    return r;
+}
+
+/* Respuesta de una pestana on-demand (ir/bytecode/jitAsm/aotAsm): rellena su
+ * contenido si el hover sigue vigente. */
+static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
+    HoverReq *rq = (HoverReq *)ud;
+    if (!rq) return;
+    VlState *st = rq->st;
+    if (st && rq->gen == st->hover_gen && st->api->set_hover_tab) {
+        const char *text = NULL, *err = NULL, *reason = NULL;
+        int bytes = -1, instr = -1, nrelocs = -1, fail = 0;
+        if (result && !error) {
+            cJSON *t = cJSON_GetObjectItemCaseSensitive(result, "text");
+            cJSON *je = cJSON_GetObjectItemCaseSensitive(result, "error");
+            cJSON *ju = cJSON_GetObjectItemCaseSensitive(result, "unsupported");
+            cJSON *ji = cJSON_GetObjectItemCaseSensitive(result, "incompatible");
+            cJSON *jr = cJSON_GetObjectItemCaseSensitive(result, "reason");
+            cJSON *jb = cJSON_GetObjectItemCaseSensitive(result, "bytes");
+            cJSON *jn = cJSON_GetObjectItemCaseSensitive(result, "instructions");
+            cJSON *jx = cJSON_GetObjectItemCaseSensitive(result, "relocs");
+            if (cJSON_IsString(t)) text = t->valuestring;
+            if (cJSON_IsString(je)) err = je->valuestring;
+            if (cJSON_IsTrue(ju) || cJSON_IsTrue(ji)) fail = 1;
+            if (cJSON_IsString(jr)) reason = jr->valuestring;
+            if (cJSON_IsNumber(jb)) bytes = (int)jb->valuedouble;
+            if (cJSON_IsNumber(jn)) instr = (int)jn->valuedouble;
+            if (cJSON_IsArray(jx)) nrelocs = cJSON_GetArraySize(jx);
+        }
+        /* Vista "Godbolt" correlada (solo-LSP): si el server trae asm_lines
+         * [{addr,text,line}] (+ source [{line,text}]) y la funcion SI se
+         * compilo, codificamos el contenido con el sentinela 0x1D para que
+         * render_hover_popup lo maquete con dos secciones (fuente + asm) y
+         * cross-highlight por linea al pasar el raton.  Encoding por fila
+         * (espejo del 0x1F del diff):
+         *   byte0=0x1D byte1='\n'
+         *   'H'\x1f<texto cabecera>\n        (stats: bytes/instrucciones)
+         *   'S'\x1f<linea>\x1f<texto>\n      (linea fuente .vex)
+         *   'A'\x1f<linea>\x1f<addr>\x1f<texto>\n  (instruccion nativa)
+         * Si no hay asm_lines (server viejo / no compilable) caemos al
+         * volcado plano de abajo. */
+        cJSON *jal = result ? cJSON_GetObjectItemCaseSensitive(result,
+                                                               "asm_lines")
+                            : NULL;
+        if (!err && !fail && cJSON_IsArray(jal) &&
+            cJSON_GetArraySize(jal) > 0) {
+            cJSON *jsrc =
+                cJSON_GetObjectItemCaseSensitive(result, "source");
+            /* Legenda de argumentos -> registros (que registro lleva cada
+             * argumento), para la cabecera H. */
+            char argbuf[512];
+            int ao = 0;
+            cJSON *jargs = cJSON_GetObjectItemCaseSensitive(result, "args");
+            if (cJSON_IsArray(jargs)) {
+                cJSON *ja = NULL;
+                cJSON_ArrayForEach(ja, jargs) {
+                    const char *an = insp_str(ja, "name", "?");
+                    const char *ar = insp_str(ja, "reg", "?");
+                    ao += snprintf(argbuf + ao, sizeof(argbuf) - ao,
+                                   "%s%s=%s", ao ? ", " : "", an, ar);
+                    if (ao > (int)sizeof(argbuf) - 32) break;
+                }
+            }
+            argbuf[ao] = 0;
+            size_t cap = 64 + (size_t)ao + 16;
+            cJSON *it = NULL;
+            if (cJSON_IsArray(jsrc))
+                cJSON_ArrayForEach(it, jsrc) cap +=
+                    strlen(insp_str(it, "text", "")) + 24;
+            cJSON_ArrayForEach(it, jal) cap +=
+                strlen(insp_str(it, "text", "")) +
+                strlen(insp_str(it, "addr", "")) + 32;
+            char *gb = (char *)malloc(cap);
+            if (gb) {
+                int o = 0;
+                gb[o++] = 0x1D;
+                gb[o++] = '\n';
+                if (bytes >= 0 || instr >= 0 || ao > 0)
+                    o += snprintf(gb + o, cap - o,
+                                  "H\x1f%d bytes, %d instrucciones%s%s\n",
+                                  bytes, instr, ao ? "  |  args: " : "",
+                                  argbuf);
+                if (cJSON_IsArray(jsrc)) {
+                    cJSON_ArrayForEach(it, jsrc) {
+                        o += snprintf(gb + o, cap - o, "S\x1f%d\x1f%s\n",
+                                      insp_num(it, "line", 0),
+                                      insp_str(it, "text", ""));
+                    }
+                }
+                cJSON_ArrayForEach(it, jal) {
+                    o += snprintf(gb + o, cap - o, "A\x1f%d\x1f%s\x1f%s\n",
+                                  insp_num(it, "line", 0),
+                                  insp_str(it, "addr", ""),
+                                  insp_str(it, "text", ""));
+                }
+                st->api->set_hover_tab(st->host, rq->tab, gb);
+                free(gb);
+            }
+            free(rq);
+            return;
+        }
+        /* Construir el contenido: cabecera con stats o el motivo de por que no
+         * hay codigo (asi las pestanas JIT/AOT informan en vez de "asm pelado"
+         * o "error"). */
+        size_t cap = (text ? strlen(text) : 0) + 640;
+        char *buf = (char *)malloc(cap);
+        if (buf) {
+            int off = 0;
+            if (err) {
+                off += snprintf(buf + off, cap - off, "// error: %s\n", err);
+            } else if (fail) {
+                off += snprintf(buf + off, cap - off,
+                                "// No disponible para esta funcion:\n// %s\n",
+                                reason ? reason : "operacion no soportada");
+            } else {
+                if (bytes >= 0 || instr >= 0 || nrelocs >= 0) {
+                    off += snprintf(buf + off, cap - off, "//");
+                    if (bytes >= 0)
+                        off += snprintf(buf + off, cap - off, " %d bytes", bytes);
+                    if (instr >= 0)
+                        off += snprintf(buf + off, cap - off,
+                                        ", %d instrucciones", instr);
+                    if (nrelocs >= 0)
+                        off += snprintf(buf + off, cap - off,
+                                        ", %d reubicaciones", nrelocs);
+                    off += snprintf(buf + off, cap - off, "\n\n");
+                }
+                if (text)
+                    off += snprintf(buf + off, cap - off, "%s", text);
+            }
+            if (off == 0) snprintf(buf, cap, "(sin datos)");
+            st->api->set_hover_tab(st->host, rq->tab, buf);
+            free(buf);
+        }
+    }
+    free(rq);
+}
+
+/* Respuesta de vesta/irDiff (filas alineadas): rellena DOS pestanas desde una
+ * sola respuesta -- "IR Δ" unificada (indice base) e "IR ⇄" lado a lado
+ * (indice base+1).  La lado-a-lado lleva un sentinela 0x1E al inicio y campos
+ * separados por 0x1F que el render maqueta en dos columnas. */
+static void vl_on_ir_diff(void *ud, cJSON *result, cJSON *error) {
+    HoverReq *rq = (HoverReq *)ud;
+    if (!rq) return;
+    VlState *st = rq->st;
+    int base = rq->tab;
+    if (st && rq->gen == st->hover_gen && st->api->set_hover_tab) {
+        cJSON *rows =
+            result ? cJSON_GetObjectItemCaseSensitive(result, "rows") : NULL;
+        cJSON *err =
+            result ? cJSON_GetObjectItemCaseSensitive(result, "error") : NULL;
+        if (error || cJSON_IsString(err) || !cJSON_IsArray(rows)) {
+            const char *m = cJSON_IsString(err) ? err->valuestring : "(sin diff)";
+            st->api->set_hover_tab(st->host, base, m);
+        } else {
+            /* Dimensionar los buffers. */
+            size_t uni_cap = 2, side_cap = 8;
+            cJSON *row = NULL;
+            cJSON_ArrayForEach(row, rows) {
+                cJSON *jl = cJSON_GetObjectItemCaseSensitive(row, "l");
+                cJSON *jr = cJSON_GetObjectItemCaseSensitive(row, "r");
+                size_t ll = cJSON_IsString(jl) ? strlen(jl->valuestring) : 0;
+                size_t rl = cJSON_IsString(jr) ? strlen(jr->valuestring) : 0;
+                uni_cap += ll + rl + 8;
+                side_cap += ll + rl + 12;
+            }
+            char *uni = (char *)malloc(uni_cap);
+            char *side = (char *)malloc(side_cap);
+            if (uni && side) {
+                int uo = 0, so = 0;
+                side[so++] = 0x1E; /* sentinela: contenido lado-a-lado */
+                side[so++] = '\n';
+                cJSON_ArrayForEach(row, rows) {
+                    cJSON *jk = cJSON_GetObjectItemCaseSensitive(row, "k");
+                    cJSON *jl = cJSON_GetObjectItemCaseSensitive(row, "l");
+                    cJSON *jr = cJSON_GetObjectItemCaseSensitive(row, "r");
+                    const char *k = cJSON_IsString(jk) ? jk->valuestring : "same";
+                    const char *l = cJSON_IsString(jl) ? jl->valuestring : "";
+                    const char *rr = cJSON_IsString(jr) ? jr->valuestring : "";
+                    char lm = ' ', rm = ' ';
+                    if (strcmp(k, "del") == 0) lm = '-';
+                    else if (strcmp(k, "add") == 0) rm = '+';
+                    else if (strcmp(k, "chg") == 0) { lm = '-'; rm = '+'; }
+                    /* unificada */
+                    if (strcmp(k, "same") == 0)
+                        uo += snprintf(uni + uo, uni_cap - uo, "  %s\n", l);
+                    else if (strcmp(k, "del") == 0)
+                        uo += snprintf(uni + uo, uni_cap - uo, "- %s\n", l);
+                    else if (strcmp(k, "add") == 0)
+                        uo += snprintf(uni + uo, uni_cap - uo, "+ %s\n", rr);
+                    else
+                        uo += snprintf(uni + uo, uni_cap - uo, "- %s\n+ %s\n", l,
+                                       rr);
+                    /* lado a lado: lm \x1f l \x1f rm \x1f r */
+                    so += snprintf(side + so, side_cap - so,
+                                   "%c\x1f%s\x1f%c\x1f%s\n", lm, l, rm, rr);
+                }
+                /* Empaquetar ambas sub-vistas en UN contenido 0x1C para la
+                 * pestana IR unica: 0x1C + <lado a lado> + 0x1C + <unificado>.
+                 * El render dibuja el selector y elige la sub-vista activa. */
+                size_t comb_cap = (size_t)so + (size_t)uo + 4;
+                char *comb = (char *)malloc(comb_cap);
+                if (comb) {
+                    int co = 0;
+                    comb[co++] = 0x1C;
+                    memcpy(comb + co, side, so);
+                    co += so;
+                    comb[co++] = 0x1C;
+                    memcpy(comb + co, uni, uo);
+                    co += uo;
+                    comb[co] = 0;
+                    st->api->set_hover_tab(st->host, base, comb);
+                    free(comb);
+                }
+            }
+            free(uni);
+            free(side);
+        }
+    }
+    free(rq);
+}
+
+/* Respuesta de vesta/symbolInfo: abre el popup con las pestanas y dispara las
+ * peticiones del resto de pestanas (IR/bytecode/JIT/AOT). */
+static void vl_on_symbol_info(void *ud, cJSON *result, cJSON *error) {
+    HoverReq *rq = (HoverReq *)ud;
+    if (!rq) return;
+    VlState *st = rq->st;
+    int gen = rq->gen;
+    free(rq);
+    if (!st || gen != st->hover_gen || !st->api->show_hover) return;
+    cJSON *found =
+        result ? cJSON_GetObjectItemCaseSensitive(result, "found") : NULL;
+    if (error || !cJSON_IsBool(found) || !cJSON_IsTrue(found)) {
+        if (st->api->hide_hover) st->api->hide_hover(st->host);
+        return;
+    }
+    cJSON *jn = cJSON_GetObjectItemCaseSensitive(result, "name");
+    cJSON *js = cJSON_GetObjectItemCaseSensitive(result, "signature");
+    cJSON *jd = cJSON_GetObjectItemCaseSensitive(result, "doc");
+    cJSON *jk = cJSON_GetObjectItemCaseSensitive(result, "kind");
+    cJSON *jc = cJSON_GetObjectItemCaseSensitive(result, "callable");
+    const char *name = cJSON_IsString(jn) ? jn->valuestring : "";
+    const char *sig = cJSON_IsString(js) ? js->valuestring : "";
+    const char *doc = cJSON_IsString(jd) ? jd->valuestring : "";
+    const char *kind = cJSON_IsString(jk) ? jk->valuestring : "";
+    int callable = cJSON_IsBool(jc) && cJSON_IsTrue(jc);
+
+    /* Pestana Doc: nombre + categoria + firma + comentarios.  Solo se muestra
+     * cuando HAY doc real (comentarios) o firma -- si no, no se anyade la
+     * pestana (no ensuciar con un "Doc" vacio). */
+    int has_doc = (doc && doc[0]) || (sig && sig[0]);
+    /* La pestana Doc se renderiza como Markdown/HTML: cabecera para el nombre,
+     * firma en `codigo`, y la doc tal cual (puede traer markdown del usuario). */
+    char docbuf[4096];
+    int off = 0;
+    off += snprintf(docbuf + off, sizeof(docbuf) - off, "## %s  (%s)\n", name,
+                    kind);
+    if (sig && sig[0])
+        off += snprintf(docbuf + off, sizeof(docbuf) - off, "\n`%s`\n", sig);
+    if (doc && doc[0])
+        off += snprintf(docbuf + off, sizeof(docbuf) - off, "\n%s\n", doc);
+
+    if (callable) {
+        /* Pestanas: [Doc?] + IR + Bytecode + JIT + AOT.  El indice base de IR
+         * depende de si hay pestana Doc. */
+        const char *uri = st->hover_uri;
+        int base;
+        /* Una sola pestana "IR" con selector interno (lado a lado / unificado);
+         * comprime el espacio del popup. */
+        if (has_doc) {
+            const char *tabs[] = {"Doc", "IR", "Bytecode", "JIT", "AOT"};
+            st->api->show_hover(st->host, tabs, 5);
+            st->api->set_hover_tab(st->host, 0, docbuf);
+            base = 1;
+        } else {
+            const char *tabs[] = {"IR", "Bytecode", "JIT", "AOT"};
+            st->api->show_hover(st->host, tabs, 4);
+            base = 0;
+        }
+        if (uri && st->lsp) {
+            cJSON *p;
+            /* irDiff rellena la UNICA pestana IR (base) con un contenido 0x1C
+             * que empaqueta ambas sub-vistas (lado a lado + unificado); el
+             * render dibuja el selector. */
+            p = cJSON_CreateObject();
+            cJSON_AddStringToObject(p, "uri", uri);
+            cJSON_AddStringToObject(p, "function", name);
+            lsp_vesta_request(st->lsp, "vesta/irDiff", p, vl_on_ir_diff,
+                              hover_req_new(st, base + 0));
+            p = cJSON_CreateObject();
+            cJSON_AddStringToObject(p, "uri", uri);
+            cJSON_AddStringToObject(p, "function", name); /* bytecode SOLO de la fn */
+            lsp_vesta_request(st->lsp, "vesta/bytecode", p, vl_on_hover_tab,
+                              hover_req_new(st, base + 1));
+            p = cJSON_CreateObject();
+            cJSON_AddStringToObject(p, "uri", uri);
+            cJSON_AddStringToObject(p, "function", name);
+            lsp_vesta_request(st->lsp, "vesta/jitAsm", p, vl_on_hover_tab,
+                              hover_req_new(st, base + 2));
+            p = cJSON_CreateObject();
+            cJSON_AddStringToObject(p, "uri", uri);
+            cJSON_AddStringToObject(p, "function", name);
+            cJSON_AddStringToObject(p, "tier", "bare");
+            lsp_vesta_request(st->lsp, "vesta/aotAsm", p, vl_on_hover_tab,
+                              hover_req_new(st, base + 3));
+        }
+    } else if (has_doc) {
+        const char *tabs[] = {"Info"};
+        st->api->show_hover(st->host, tabs, 1);
+        st->api->set_hover_tab(st->host, 0, docbuf);
+    } else {
+        /* Identificador sin nada que mostrar: no abrir popup. */
+        if (st->api->hide_hover) st->api->hide_hover(st->host);
+    }
+}
+
+/* Dispara el hover: pide symbolInfo del simbolo bajo (line,col). */
+static void vl_request_hover(VlState *st, uint32_t line, uint32_t col) {
+    if (!st->ready || !st->lsp || !st->api->show_hover) return;
+    const char *path = st->api->current_path(st->host);
+    if (!path || !vl_is_vex(path)) return;
+    VlDoc *doc = vl_find_doc_by_path(st, path);
+    if (!doc || !doc->open) return;
+    st->hover_gen++; /* invalidar respuestas en vuelo del hover anterior */
+    free(st->hover_uri);
+    st->hover_uri = vl_strdup(doc->uri);
+    cJSON *p = cJSON_CreateObject();
+    if (!p) return;
+    cJSON_AddStringToObject(p, "uri", doc->uri);
+    cJSON_AddNumberToObject(p, "line", (double)line);
+    cJSON_AddNumberToObject(p, "character", (double)col);
+    lsp_vesta_request(st->lsp, "vesta/symbolInfo", p, vl_on_symbol_info,
+                      hover_req_new(st, -1));
+}
+
+/* ------------------------------------------------------------------------- */
 /* Eventos del IDE.                                                          */
 /* ------------------------------------------------------------------------- */
 
@@ -1602,6 +2131,15 @@ static void vl_on_event(CoffeeHost *host, CoffeeEventType ev, const void *data,
         vl_open_active(st);
         vl_reapply_active(st);
         break;
+
+    case COFFEE_EVENT_TEXT_HOVER: {
+        /* El raton se detuvo sobre un identificador: pedir su info y abrir el
+         * popup de hover con las pestanas (doc/IR/bytecode/JIT/AOT). */
+        const CoffeeHoverPos *pos = (const CoffeeHoverPos *)data;
+        if (pos && st->server_alive)
+            vl_request_hover(st, pos->line, pos->col);
+        break;
+    }
 
     case COFFEE_EVENT_BUFFER_CHANGED:
         /* Cambio en el buffer: programar didChange con debounce. */
@@ -1821,6 +2359,7 @@ COFFEE_EXTENSION_EXPORT int coffee_extension_register(CoffeeHost *host,
     api->subscribe_event(host, COFFEE_EVENT_BUFFER_CHANGED, vl_on_event,
                          &g_state);
     api->subscribe_event(host, COFFEE_EVENT_FILE_SAVE, vl_on_event, &g_state);
+    api->subscribe_event(host, COFFEE_EVENT_TEXT_HOVER, vl_on_event, &g_state);
     api->subscribe_event(host, COFFEE_EVENT_SHUTDOWN, vl_on_event, &g_state);
     api->register_tick(host, vl_on_tick, &g_state);
 
@@ -1860,6 +2399,9 @@ COFFEE_EXTENSION_EXPORT void coffee_extension_unregister(CoffeeHost *host) {
     while (d) {
         VlDoc *nx = d->next;
         if (d->diagnostics) cJSON_Delete(d->diagnostics);
+        if (d->comptime_hints) cJSON_Delete(d->comptime_hints);
+        if (d->param_hints) cJSON_Delete(d->param_hints);
+        free(d->sem_cps);
         free(d->uri);
         free(d->path);
         free(d);
@@ -1872,6 +2414,8 @@ COFFEE_EXTENSION_EXPORT void coffee_extension_unregister(CoffeeHost *host) {
     st->palette = NULL;
     st->palette_set = NULL;
     st->palette_n = 0;
+    free(st->hover_uri);
+    st->hover_uri = NULL;
 
     free(st->server_path);
     st->server_path = NULL;

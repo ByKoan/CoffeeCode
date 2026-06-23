@@ -101,6 +101,8 @@ void chrome_fill_bg(Editor *e, Color c, int x, int y, int w, int h);
 void render_background_preview(Editor *e, SDL_FRect area);
 /* popup del selector de codificación (desde la barra de estado) */
 void render_enc_popup(Editor *e);
+/* popup de hover con pestanas (info de simbolo del LSP) */
+void render_hover_popup(Editor *e);
 
 /* -- Sistema de extensiones ----------------------------------------- */
 /* Dibuja las vistas registradas por extensiones (register_view): paneles y

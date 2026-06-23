@@ -342,6 +342,184 @@ static void ext_hook_request_repaint(void *ud) {
     if (e) e->needs_redraw = 1;
 }
 
+/* --- Hooks del popup de hover con pestanas (ABI v7) --- */
+static char *hv_dup(const char *s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char *p = (char *)malloc(n + 1);
+    if (p) memcpy(p, s, n + 1);
+    return p;
+}
+static void hover_free_tabs(HoverPopup *h) {
+    for (int i = 0; i < h->n_tabs; ++i) {
+        free(h->tab_names[i]);
+        h->tab_names[i] = NULL;
+        free(h->tab_content[i]);
+        h->tab_content[i] = NULL;
+    }
+    h->n_tabs = 0;
+}
+/* Decodifica un contenido de pestana (godbolt 0x1D / diff 0x1E / texto) a
+ * texto plano legible.  Devuelve un buffer heap (el caller libera). */
+static char *hover_decode_plain(const char *c) {
+    if (!c) return NULL;
+    size_t n = strlen(c);
+    char *out = (char *)malloc(n * 2 + 64);
+    if (!out) return NULL;
+    int o = 0;
+    if (c[0] == 0x1D) { /* vista godbolt: kind \x1f ... */
+        const char *p = strchr(c, '\n');
+        p = p ? p + 1 : c + 1;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            char line[2048];
+            size_t cpy = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+            memcpy(line, p, cpy);
+            line[cpy] = 0;
+            char kind = line[0];
+            char *f1 = strchr(line, 0x1F), *c1 = NULL, *c2 = NULL, *c3 = NULL;
+            if (f1) {
+                *f1 = 0;
+                c1 = f1 + 1;
+                char *f2 = strchr(c1, 0x1F);
+                if (f2) {
+                    *f2 = 0;
+                    c2 = f2 + 1;
+                    char *f3 = strchr(c2, 0x1F);
+                    if (f3) { *f3 = 0; c3 = f3 + 1; }
+                }
+            }
+            if (kind == 'H')
+                o += snprintf(out + o, n * 2 + 64 - o, "; %s\n", c1 ? c1 : "");
+            else if (kind == 'S')
+                o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  %s\n",
+                              c1 ? c1 : "", c2 ? c2 : "");
+            else if (kind == 'A') {
+                if (c2 && c2[0])
+                    o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  +%-5s  %s\n",
+                                  c1 ? c1 : "", c2, c3 ? c3 : "");
+                else
+                    o += snprintf(out + o, n * 2 + 64 - o, "L%-4s  %s\n",
+                                  c1 ? c1 : "", c3 ? c3 : "");
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    } else if (c[0] == 0x1E) { /* diff lado a lado: lm \x1f L \x1f rm \x1f R */
+        const char *p = strchr(c, '\n');
+        p = p ? p + 1 : c + 1;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            char line[2048];
+            size_t cpy = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+            memcpy(line, p, cpy);
+            line[cpy] = 0;
+            char *s1 = strchr(line, 0x1F);
+            char *L = line, *R = (char *)"";
+            if (s1) {
+                *s1 = 0;
+                L = s1 + 1;
+                char *s2 = strchr(L, 0x1F);
+                if (s2) {
+                    *s2 = 0;
+                    char *mr = s2 + 1;
+                    char *s3 = strchr(mr, 0x1F);
+                    if (s3) R = s3 + 1;
+                }
+            }
+            o += snprintf(out + o, n * 2 + 64 - o, "%-44s | %s\n", L, R);
+            if (!nl) break;
+            p = nl + 1;
+        }
+    } else { /* texto plano / markdown: copiar tal cual */
+        memcpy(out, c, n + 1);
+        o = (int)n;
+    }
+    out[o] = 0;
+    return out;
+}
+
+char *hover_copy_active_text(HoverPopup *h) {
+    if (!h || h->active_tab < 0 || h->active_tab >= h->n_tabs) return NULL;
+    const char *c = h->tab_content[h->active_tab];
+    if (!c) return NULL;
+    /* IR multi-vista (0x1C): extraer la sub-vista activa y decodificarla. */
+    if (c[0] == 0x1C) {
+        const char *p = c + 1;
+        const char *sep = strchr(p, 0x1C);
+        const char *sub_begin, *sub_end;
+        if (h->ir_submode == 0) {
+            sub_begin = p;
+            sub_end = sep ? sep : c + strlen(c);
+        } else {
+            sub_begin = sep ? sep + 1 : c + strlen(c);
+            sub_end = c + strlen(c);
+        }
+        size_t sl = (size_t)(sub_end - sub_begin);
+        char *sub = (char *)malloc(sl + 1);
+        if (!sub) return NULL;
+        memcpy(sub, sub_begin, sl);
+        sub[sl] = 0;
+        char *res = hover_decode_plain(sub);
+        free(sub);
+        return res;
+    }
+    return hover_decode_plain(c);
+}
+
+static void ext_hook_show_hover(void *ud, const char *const *names, int n) {
+    Editor *e = (Editor *)ud;
+    if (!e) return;
+    HoverPopup *h = &e->hover;
+    hover_free_tabs(h);
+    if (n > HOVER_MAX_TABS) n = HOVER_MAX_TABS;
+    if (n < 0) n = 0;
+    for (int i = 0; i < n; ++i) {
+        h->tab_names[i] = hv_dup(names && names[i] ? names[i] : "");
+        h->tab_content[i] = NULL; /* NULL = "cargando" */
+    }
+    h->n_tabs = n;
+    h->active_tab = 0;
+    h->scroll = 0;
+    h->visible = (n > 0);
+    h->needs_place = 1; /* el render lo coloca desde el ancla y fija el tamano */
+    h->dragging = 0;
+    h->resizing = 0;
+    /* Estado de la vista godbolt: linea fijada limpia; ancho de columnas se
+     * conserva entre hovers (gb_split_pct) salvo init a 0 = default. */
+    h->gb_active = 0;
+    h->gb_split_drag = 0;
+    h->gb_sel_line = -1;
+    h->ir_active = 0;
+    h->ir_submode = 0;
+    /* anchor_x/anchor_y los fijo la deteccion de mouse-rest al disparar el
+     * evento (input_mouse.c); show_hover los reusa tal cual. */
+    e->needs_redraw = 1;
+}
+static void ext_hook_set_hover_tab(void *ud, int index, const char *content) {
+    Editor *e = (Editor *)ud;
+    if (!e) return;
+    HoverPopup *h = &e->hover;
+    if (index < 0 || index >= h->n_tabs) return;
+    free(h->tab_content[index]);
+    h->tab_content[index] = hv_dup(content ? content : "");
+    e->needs_redraw = 1;
+}
+/* Cierra el popup de hover (libera las pestanas).  Publico: lo usan el hook de
+ * la API y el input (al mover el raton lejos / Esc / click fuera). */
+void editor_hover_hide(Editor *e) {
+    if (!e) return;
+    hover_free_tabs(&e->hover);
+    e->hover.visible = 0;
+    e->hover.rest_fired = 0;
+    e->needs_redraw = 1;
+}
+static void ext_hook_hide_hover(void *ud) {
+    editor_hover_hide((Editor *)ud);
+}
+
 /** workspace_root: ruta de la carpeta abierta en el explorador, o NULL.
  *  Devuelve el puntero ESTABLE al buffer interno del FileTree (valido hasta el
  *  siguiente ftree_load), no una copia temporal. */
@@ -590,6 +768,9 @@ int editor_init(Editor *e, const char *filepath) {
         backend.channel_clear = ext_hook_channel_clear;
         backend.log_line = ext_hook_log_line;
         backend.request_repaint = ext_hook_request_repaint;
+        backend.show_hover = ext_hook_show_hover;
+        backend.set_hover_tab = ext_hook_set_hover_tab;
+        backend.hide_hover = ext_hook_hide_hover;
         backend.workspace_root = ext_hook_workspace_root;
         backend.goto_location = ext_hook_goto_location;
         backend.current_path = ext_hook_current_path;
@@ -851,6 +1032,10 @@ void editor_frame_tasks(Editor *e) {
             e->needs_redraw = 1;
         }
     }
+
+    /* Hover: si el raton lleva parado sobre texto, disparar el evento (la
+     * extension LSP abre el popup con la info del simbolo). */
+    editor_hover_tick(e);
 }
 
 void editor_run(Editor *e) {
