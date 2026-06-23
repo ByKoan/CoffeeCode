@@ -171,6 +171,14 @@ typedef struct HoverPopup {
     /* Las opciones de vista (flechas/frame/notas/IR) son host-globales y viven
      * en Settings; su geometria clicable se registra en e->ui (ui_toggle), no
      * aqui. */
+    /* -- Seleccion de texto por arrastre (estilo terminal) en la vista
+     * godbolt: arrastrar selecciona un rango de FILAS visibles de la columna
+     * asm; Ctrl+C copia su texto. -- */
+    char gb_rowtext[HOVER_GB_ROWS][200]; /* texto plano de cada fila visual asm */
+    int gb_sel_r0, gb_sel_r1; /* rango de filas seleccionado (-1 = ninguno) */
+    int gb_seldrag;           /* 1 = arrastrando una seleccion */
+    int gb_down_x, gb_down_y; /* pos del mousedown (deteccion click vs drag) */
+    int gb_down_row;          /* fila visual del mousedown (ancla) */
 } HoverPopup;
 
 /* -- Estado global del editor --------------------------------------------- */

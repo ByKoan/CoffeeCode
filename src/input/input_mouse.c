@@ -809,6 +809,24 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
             e->needs_redraw = 1;
             return;
         }
+        /* Seleccion por arrastre (estilo terminal) en la vista godbolt: si el
+         * boton izq esta pulsado y el mousedown empezo en el cuerpo, extender
+         * la seleccion de filas desde el ancla hasta la fila actual. */
+        if (hv->visible && hv->gb_active && hv->gb_lh > 0 &&
+            (ev->motion.state & SDL_BUTTON_LMASK) &&
+            hv->gb_down_y >= hv->gb_body_top) {
+            int dx = mouse_x - hv->gb_down_x, dy = mouse_y - hv->gb_down_y;
+            if (hv->gb_seldrag || dx * dx + dy * dy > 16) {
+                hv->gb_seldrag = 1;
+                int cur = (mouse_y - hv->gb_body_top) / hv->gb_lh;
+                if (cur < 0) cur = 0;
+                int a = hv->gb_down_row, b = cur;
+                hv->gb_sel_r0 = a < b ? a : b;
+                hv->gb_sel_r1 = a < b ? b : a;
+                e->needs_redraw = 1;
+                return;
+            }
+        }
         hv->last_mx = mouse_x;
         hv->last_my = mouse_y;
         hv->last_move_ms = (uint32_t)SDL_GetTicks();
@@ -1883,14 +1901,14 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
                 }
                 if (h->gb_lh > 0 && my >= h->gb_body_top) {
                     int vr = (my - h->gb_body_top) / h->gb_lh;
-                    int ln = 0;
-                    if (mx < h->gb_sepx) {
-                        if (vr >= 0 && vr < h->gb_left_n) ln = h->gb_left_lines[vr];
-                    } else {
-                        if (vr >= 0 && vr < h->gb_right_n) ln = h->gb_right_lines[vr];
-                    }
-                    /* toggle: re-clic en la misma linea la des-fija */
-                    h->gb_sel_line = (ln != 0 && ln == h->gb_sel_line) ? -1 : ln;
+                    /* Mousedown en el cuerpo: registrar ancla para distinguir
+                     * CLICK (fija linea) de DRAG (selecciona texto).  La accion
+                     * se decide en el motion (drag) o en el button-up (click).*/
+                    h->gb_down_x = mx;
+                    h->gb_down_y = my;
+                    h->gb_down_row = vr;
+                    h->gb_seldrag = 0;
+                    h->gb_sel_r0 = h->gb_sel_r1 = -1; /* limpiar seleccion */
                     e->needs_redraw = 1;
                     return;
                 }

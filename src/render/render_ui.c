@@ -1768,6 +1768,8 @@ void render_hover_popup(Editor *e) {
                  * cabeceras IR, que tambien consumen filas). */
                 int skip = h->scroll < 0 ? 0 : h->scroll;
                 int row = 0;
+                for (int q = 0; q < body_rows && q < HOVER_GB_ROWS; ++q)
+                    h->gb_rowtext[q][0] = 0; /* limpiar para la copia */
                 int grp = (e->settings.hover_ir_mode == 1);
                 int exa = (e->settings.hover_ir_mode == 4);
                 int prev_grp_line = -1;
@@ -1888,10 +1890,22 @@ void render_hover_popup(Editor *e) {
                     int is_sel = (ln != 0 && ln == sel_line);
                     int is_hov = (ln != 0 && ln == hover_line);
                     int rw = (x + w - 1) - (asm_sep + 1);
-                    /* Banda zebra del grupo IR (mismo tinte que su cabecera). */
-                    if ((grp || exa) && ir_par && !is_sel) {
+                    /* Seleccion por arrastre (estilo terminal): fondo de
+                     * seleccion sobre las filas del rango; el texto se dibuja
+                     * encima. */
+                    if (h->gb_sel_r0 >= 0 && row >= h->gb_sel_r0 &&
+                        row <= h->gb_sel_r1) {
+                        set_color(r, 0x2E, 0x48, 0x6E, 0xFF);
+                        fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
+                    } else if ((grp || exa) && ir_par && !is_sel) {
+                        /* Banda zebra del grupo IR (si no hay seleccion). */
                         set_color(r, 0x26, 0x2B, 0x35, 0xFF);
                         fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
+                    }
+                    /* Guardar el texto plano de esta fila visual para copiar. */
+                    if (row < HOVER_GB_ROWS) {
+                        snprintf(h->gb_rowtext[row], sizeof h->gb_rowtext[row],
+                                 "%s", asml[i].b ? asml[i].b : "");
                     }
                     /* Caja AGRUPADA del run contiguo (igual que la col. fuente). */
                     if (is_sel || is_hov) {

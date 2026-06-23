@@ -465,10 +465,25 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
      * texto plano legible). */
     if (e->hover.visible && key == SDLK_C &&
         (SDL_GetModState() & SDL_KMOD_CTRL)) {
-        char *txt = hover_copy_active_text(&e->hover);
-        if (txt) {
-            SDL_SetClipboardText(txt);
-            free(txt);
+        /* Si hay una seleccion por arrastre en la vista godbolt, copiar SOLO
+         * esas filas (su texto); si no, copiar toda la pestana activa. */
+        if (e->hover.gb_active && e->hover.gb_sel_r0 >= 0 &&
+            e->hover.gb_sel_r1 >= e->hover.gb_sel_r0) {
+            char buf[HOVER_GB_ROWS * 200];
+            int o = 0;
+            for (int rr = e->hover.gb_sel_r0;
+                 rr <= e->hover.gb_sel_r1 && rr < HOVER_GB_ROWS; ++rr) {
+                const char *t = e->hover.gb_rowtext[rr];
+                if (t[0])
+                    o += snprintf(buf + o, (int)sizeof buf - o, "%s\n", t);
+            }
+            if (o > 0) SDL_SetClipboardText(buf);
+        } else {
+            char *txt = hover_copy_active_text(&e->hover);
+            if (txt) {
+                SDL_SetClipboardText(txt);
+                free(txt);
+            }
         }
         return;
     }
@@ -627,6 +642,26 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->hover.dragging = 0;   /* fin del arrastre del popup de hover      */
             e->hover.resizing = 0;
             e->hover.gb_split_drag = 0; /* fin del arrastre del separador godbolt */
+            /* Godbolt: si fue un CLICK (sin arrastre) en el cuerpo, fijar la
+             * linea (cross-highlight); si fue DRAG, conservar la seleccion. */
+            if (e->hover.visible && e->hover.gb_active &&
+                e->hover.gb_down_y >= e->hover.gb_body_top) {
+                if (!e->hover.gb_seldrag) {
+                    int vr = e->hover.gb_down_row;
+                    int ln = 0;
+                    if (e->hover.gb_down_x < e->hover.gb_sepx) {
+                        if (vr >= 0 && vr < e->hover.gb_left_n)
+                            ln = e->hover.gb_left_lines[vr];
+                    } else if (vr >= 0 && vr < e->hover.gb_right_n) {
+                        ln = e->hover.gb_right_lines[vr];
+                    }
+                    e->hover.gb_sel_line =
+                        (ln != 0 && ln == e->hover.gb_sel_line) ? -1 : ln;
+                    e->needs_redraw = 1;
+                }
+                e->hover.gb_down_y = -1; /* desarmar el ancla */
+                e->hover.gb_seldrag = 0;
+            }
         }
         break;
     case SDL_EVENT_MOUSE_MOTION: on_mouse_motion(e, ev); break;

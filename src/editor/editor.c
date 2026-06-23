@@ -499,6 +499,9 @@ static void ext_hook_show_hover(void *ud, const char *const *names, int n) {
     h->gb_active = 0;
     h->gb_split_drag = 0;
     h->gb_sel_line = -1;
+    h->gb_sel_r0 = h->gb_sel_r1 = -1;
+    h->gb_seldrag = 0;
+    h->gb_down_y = -1;
     h->ir_active = 0;
     h->ir_submode = 0;
     /* anchor_x/anchor_y los fijo la deteccion de mouse-rest al disparar el
