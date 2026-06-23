@@ -1506,7 +1506,9 @@ void render_hover_popup(Editor *e) {
                         char ab[24];
                         snprintf(ab, sizeof ab, "+%s", asml[i].a);
                         draw_text(e, ab, asm_x + 5 * cw, yy, 0x70, 0x74, 0x80);
-                        code_x = asm_x + 12 * cw;
+                        /* +14: deja un canalon de ~3 columnas (cols 11-13)
+                         * para las flechas de salto sin pisar el codigo. */
+                        code_x = asm_x + 14 * cw;
                     } else {
                         code_x = asm_x + 5 * cw;
                     }
@@ -1571,7 +1573,7 @@ void render_hover_popup(Editor *e) {
                         }
                         arw[a].lane = lane;
                     }
-                    int gx = asm_x + 10 * cw; /* canalon entre +offset y codigo */
+                    int gx = asm_x + 11 * cw; /* canalon entre +offset y codigo */
                     for (int a = 0; a < narw; ++a) {
                         int fr = arw[a].from, to = arw[a].to;
                         int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;
@@ -1589,8 +1591,12 @@ void render_hover_popup(Editor *e) {
                         if (hover_line != 0 &&
                             (fl == hover_line || tl == hover_line))
                             hot = 1;
-                        set_color_c(r, hot ? e->theme.col_tab_accent
-                                           : e->theme.col_tabbar_sep);
+                        /* Color SIEMPRE visible (azul acero); acento cuando el
+                         * salto o destino estan en la linea apuntada/fijada. */
+                        if (hot)
+                            set_color_c(r, e->theme.col_tab_accent);
+                        else
+                            set_color(r, 0x6A, 0x8C, 0xB8, 0xFF);
                         fill_rect(r, ax, y0, 1, y1 - y0 + 1); /* vertical */
                         int frv = fr - skip, tov = to - skip;
                         if (tov >= 0 && tov < body_rows) { /* cabeza en destino */
