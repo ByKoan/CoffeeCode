@@ -52,7 +52,10 @@
  * env VESTA_REPO).  Ramas: "release" (estable, default) y "feature" (ultimos
  * cambios; override: config "vesta_branch" / env VESTA_BRANCH). */
 #define VL_DEFAULT_REPO "https://github.com/desmonHak/VM"
-#define VL_DEFAULT_BRANCH "release"
+/* "feature" tiene los ultimos cambios Y punteros de submodulo validos.  La
+ * rama "release" sera la estable en el futuro (cuando lo este, cambiar aqui).
+ * Override: config "vesta_branch" / env VESTA_BRANCH. */
+#define VL_DEFAULT_BRANCH "feature"
 
 /* Identificadores de los canales del panel inferior. */
 #define VESTA_LSP_CHAN_LOG  "vesta-lsp"
