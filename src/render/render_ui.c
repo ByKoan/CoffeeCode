@@ -1521,6 +1521,92 @@ void render_hover_popup(Editor *e) {
                     h->gb_right_n = row + 1;
                 }
 
+                /* --- Flechas de salto (estilo IDA/Ghidra) ------------------
+                 * Para cada jmp/jcc con destino 0xADDR dentro de la funcion,
+                 * dibuja un conector vertical en el canalon (entre +offset y el
+                 * codigo) desde el salto hasta su destino, con cabeza de flecha.
+                 * Se acentua si el salto o el destino estan en la linea .vex
+                 * apuntada/fijada.  Solo nativo (el bytecode no trae 0xADDR). */
+                typedef struct { int from, to, lane; } GbArrow;
+                GbArrow *arw = (GbArrow *)malloc(sizeof(GbArrow) * (na + 1));
+                int narw = 0;
+                if (arw) {
+                    for (int i = 0; i < na; ++i) {
+                        const char *t = asml[i].b;
+                        if (!t || t[0] != 'j') continue; /* solo j* (no call) */
+                        const char *hx = strstr(t, "0x");
+                        if (!hx) continue;
+                        long tgt = strtol(hx + 2, NULL, 16);
+                        int to = -1;
+                        for (int k = 0; k < na; ++k) {
+                            if (asml[k].a && asml[k].a[0] &&
+                                strtol(asml[k].a, NULL, 16) == tgt) {
+                                to = k;
+                                break;
+                            }
+                        }
+                        if (to < 0) continue;
+                        arw[narw].from = i;
+                        arw[narw].to = to;
+                        arw[narw].lane = 0;
+                        ++narw;
+                    }
+                    /* Asignacion de carriles (greedy): un salto que se solapa
+                     * con otro del mismo carril sube de carril (max 4). */
+                    for (int a = 0; a < narw; ++a) {
+                        int lane = 0, clash = 1;
+                        int a0 = arw[a].from < arw[a].to ? arw[a].from : arw[a].to;
+                        int a1 = arw[a].from < arw[a].to ? arw[a].to : arw[a].from;
+                        while (clash && lane < 4) {
+                            clash = 0;
+                            for (int b = 0; b < a; ++b) {
+                                if (arw[b].lane != lane) continue;
+                                int b0 = arw[b].from < arw[b].to ? arw[b].from
+                                                                 : arw[b].to;
+                                int b1 = arw[b].from < arw[b].to ? arw[b].to
+                                                                 : arw[b].from;
+                                if (!(a1 < b0 || b1 < a0)) { clash = 1; break; }
+                            }
+                            if (clash) ++lane;
+                        }
+                        arw[a].lane = lane;
+                    }
+                    int gx = asm_x + 10 * cw; /* canalon entre +offset y codigo */
+                    for (int a = 0; a < narw; ++a) {
+                        int fr = arw[a].from, to = arw[a].to;
+                        int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;
+                        int r0v = r0 - skip, r1v = r1 - skip;
+                        if (r1v < 0 || r0v >= body_rows) continue; /* fuera */
+                        int cy0 = r0v < 0 ? 0 : r0v;
+                        int cy1 = r1v >= body_rows ? body_rows - 1 : r1v;
+                        int y0 = by + (hrows + cy0) * lh + lh / 2;
+                        int y1 = by + (hrows + cy1) * lh + lh / 2;
+                        int ax = gx + arw[a].lane * 3;
+                        int hot = 0;
+                        int fl = asml[fr].line, tl = asml[to].line;
+                        if (sel_line != 0 && (fl == sel_line || tl == sel_line))
+                            hot = 1;
+                        if (hover_line != 0 &&
+                            (fl == hover_line || tl == hover_line))
+                            hot = 1;
+                        set_color_c(r, hot ? e->theme.col_tab_accent
+                                           : e->theme.col_tabbar_sep);
+                        fill_rect(r, ax, y0, 1, y1 - y0 + 1); /* vertical */
+                        int frv = fr - skip, tov = to - skip;
+                        if (tov >= 0 && tov < body_rows) { /* cabeza en destino */
+                            int ty = by + (hrows + tov) * lh + lh / 2;
+                            fill_rect(r, ax, ty, cw, 1);
+                            fill_rect(r, ax + cw - 3, ty - 2, 1, 5);
+                            fill_rect(r, ax + cw - 4, ty - 1, 1, 3);
+                        }
+                        if (frv >= 0 && frv < body_rows) { /* tick en origen */
+                            int fy = by + (hrows + frv) * lh + lh / 2;
+                            fill_rect(r, ax, fy, cw / 2, 1);
+                        }
+                    }
+                    free(arw);
+                }
+
                 /* Banda inferior: stack frame (debug-info).  Una fila por
                  * slot: label  [kind]  sz=N  nombre.  Color segun kind. */
                 if (frame_h > 0) {
