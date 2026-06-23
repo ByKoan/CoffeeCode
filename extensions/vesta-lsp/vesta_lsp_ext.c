@@ -1907,6 +1907,13 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                     cap += (cJSON_IsString(bnm) ? strlen(bnm->valuestring) : 0) +
                            24;
             }
+            cJSON *jirl =
+                cJSON_GetObjectItemCaseSensitive(result, "ir_listing");
+            if (cJSON_IsArray(jirl)) {
+                cJSON *ent = NULL;
+                cJSON_ArrayForEach(ent, jirl)
+                    cap += strlen(insp_str(ent, "text", "")) + 28;
+            }
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1979,6 +1986,18 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                             o += snprintf(gb + o, cap - o, "B\x1f%d\x1f%s\n", bi,
                                           bnm->valuestring);
                         ++bi;
+                    }
+                }
+                /* Listado ordenado del IR (col. central 3col):
+                 * K\x1f<kind>\x1f<linea>\x1f<texto>  kind: L=label O=op */
+                if (cJSON_IsArray(jirl)) {
+                    cJSON *ent = NULL;
+                    cJSON_ArrayForEach(ent, jirl) {
+                        const char *k = insp_str(ent, "kind", "op");
+                        o += snprintf(gb + o, cap - o, "K\x1f%c\x1f%d\x1f%s\n",
+                                      k[0] == 'l' ? 'L' : 'O',
+                                      insp_num(ent, "line", 0),
+                                      insp_str(ent, "text", ""));
                     }
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);

@@ -1337,16 +1337,22 @@ void render_hover_popup(Editor *e) {
                 int line;
                 const char *text;
             } IrRow;
+            typedef struct {
+                int is_label;
+                int line;
+                const char *text;
+            } IrlRow; /* listado IR ordenado (col. central 3col) */
             GbRow *src = (GbRow *)malloc(sizeof(GbRow) * cap);
             GbRow *asml = (GbRow *)malloc(sizeof(GbRow) * cap);
             FrRow *frm = (FrRow *)malloc(sizeof(FrRow) * cap);
             IrRow *irr = (IrRow *)malloc(sizeof(IrRow) * cap);
             IrRow *jrr = (IrRow *)malloc(sizeof(IrRow) * cap); /* mapa exacto: line=id */
+            IrlRow *irl = (IrlRow *)malloc(sizeof(IrlRow) * cap); /* listado IR */
             /* Nombres de bloque por indice (etiquetas que dividen el asm). */
             const char **blkname = (const char **)calloc(cap, sizeof(char *));
-            int ns = 0, na = 0, nf = 0, nir = 0, njr = 0;
+            int ns = 0, na = 0, nf = 0, nir = 0, njr = 0, nirl = 0;
             const char *hdr = NULL;
-            if (src && asml && frm && irr && jrr && blkname) {
+            if (src && asml && frm && irr && jrr && irl && blkname) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1407,6 +1413,12 @@ void render_hover_popup(Editor *e) {
                             /* B\x1f indice \x1f nombre de bloque */
                             int bi = c1 ? atoi(c1) : -1;
                             if (bi >= 0 && bi < cap) blkname[bi] = c2 ? c2 : "";
+                        } else if (kind == 'K') {
+                            /* K\x1f kind(L/O) \x1f linea \x1f texto */
+                            irl[nirl].is_label = (c1 && c1[0] == 'L');
+                            irl[nirl].line = c2 ? atoi(c2) : 0;
+                            irl[nirl].text = c3 ? c3 : "";
+                            ++nirl;
                         }
                     }
                     if (!nl) break;
@@ -1641,8 +1653,9 @@ void render_hover_popup(Editor *e) {
                     if (h->last_mx < sepx) {
                         if (vr >= 0 && vr < ns) hover_line = src[vr].line;
                     } else if (col3 && h->last_mx < sep2x) {
-                        /* columna IR central: cada fila es una op por linea */
-                        if (vr >= 0 && vr < nir) hover_line = irr[vr].line;
+                        /* columna IR central: listado ordenado (etiquetas+ops) */
+                        if (vr >= 0 && vr < nirl && !irl[vr].is_label)
+                            hover_line = irl[vr].line;
                     } else {
                         int ai = (h->scroll < 0 ? 0 : h->scroll) + vr;
                         if (ai >= 0 && ai < na) hover_line = asml[ai].line;
@@ -1695,28 +1708,48 @@ void render_hover_popup(Editor *e) {
                     if (i + 1 > h->gb_left_n) h->gb_left_n = i + 1;
                 }
 
-                /* Columna IR central (modo 3col): lista de ops IR por linea,
-                 * resaltadas si su linea coincide con la apuntada/fijada. */
+                /* Columna IR central (modo 3col): listado ordenado con
+                 * etiquetas de bloque (como el asm) y ops con el MISMO recuadro
+                 * agrupado que fuente/asm (run contiguo de la misma linea). */
                 if (col3) {
-                    int irw = sep2x - (ir_x - cw); /* ancho de la banda IR */
-                    for (int i = 0; i < nir && i < body_rows; ++i) {
+                    int irw = sep2x - (sepx + 1);
+                    for (int i = 0; i < nirl && i < body_rows; ++i) {
                         int yy = by + (hrows + i) * lh;
-                        int ln = irr[i].line;
+                        if (irl[i].is_label) {
+                            char lbl[96];
+                            snprintf(lbl, sizeof lbl, "%s:", irl[i].text);
+                            draw_text(e, lbl, ir_x, yy, 0xC8, 0xA0, 0x66);
+                            set_color(r, 0x44, 0x40, 0x38, 0xFF);
+                            fill_rect(r, sepx + 1, yy + lh - 2, irw, 1);
+                            continue;
+                        }
+                        int ln = irl[i].line;
                         int is_sel = (ln != 0 && ln == sel_line);
                         int is_hov = (ln != 0 && ln == hover_line);
                         if (is_sel || is_hov) {
+                            int bl = is_sel ? sel_line : hover_line;
+                            int prev = (i > 0 && !irl[i - 1].is_label)
+                                           ? irl[i - 1].line
+                                           : -999;
+                            int next = (i + 1 < nirl && i + 1 < body_rows &&
+                                        !irl[i + 1].is_label)
+                                           ? irl[i + 1].line
+                                           : -999;
                             if (is_sel) {
                                 set_color_c(r, e->theme.col_tab_active);
                                 fill_rect(r, sepx + 1, yy - 1, irw, lh);
                             }
                             set_color_c(r, e->theme.col_tab_accent);
                             fill_rect(r, sepx + 1, yy - 1, is_sel ? 3 : 2, lh);
+                            if (is_sel) {
+                                if (prev != bl)
+                                    fill_rect(r, sepx + 1, yy - 1, irw, 1);
+                                if (next != bl)
+                                    fill_rect(r, sepx + 1, yy + lh - 2, irw, 1);
+                            }
                         }
-                        char pre[16];
-                        snprintf(pre, sizeof pre, "L%-4d", ln);
-                        draw_text(e, pre, ir_x, yy, 0x6C, 0xB0, 0xE0);
-                        draw_code_line(e, irr[i].text, (int)strlen(irr[i].text),
-                                       ir_x + 5 * cw, yy);
+                        draw_code_line(e, irl[i].text, (int)strlen(irl[i].text),
+                                       ir_x, yy);
                     }
                 }
 
@@ -1999,6 +2032,7 @@ void render_hover_popup(Editor *e) {
             free(frm);
             free(irr);
             free(jrr);
+            free(irl);
             free(blkname);
             free(cp);
         }
