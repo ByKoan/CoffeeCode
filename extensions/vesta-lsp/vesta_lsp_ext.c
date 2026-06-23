@@ -48,6 +48,11 @@
 #define VL_PATH_SEP ':'
 #define VL_DIR_SEP '/'
 #endif
+/* Repo oficial de VestaVM para auto-instalar (override: config "vesta_repo" /
+ * env VESTA_REPO).  Ramas: "release" (estable, default) y "feature" (ultimos
+ * cambios; override: config "vesta_branch" / env VESTA_BRANCH). */
+#define VL_DEFAULT_REPO "https://github.com/desmonHak/VM"
+#define VL_DEFAULT_BRANCH "release"
 
 /* Identificadores de los canales del panel inferior. */
 #define VESTA_LSP_CHAN_LOG  "vesta-lsp"
@@ -2409,16 +2414,23 @@ static void vl_install_dir(char *out, size_t n) {
 static int vl_try_autoinstall(VlState *st) {
     char dir[1024];
     vl_install_dir(dir, sizeof dir);
+    /* URL directa de un .zip (override total). */
     const char *url = st->api->get_config(st->host, "download_url");
     if (!url || !url[0]) url = getenv("VESTA_LSP_DOWNLOAD_URL");
+    /* Repo + rama (defaults oficiales). */
     const char *repo = st->api->get_config(st->host, "vesta_repo");
     if (!repo || !repo[0]) repo = getenv("VESTA_REPO");
-    char cmd[4096];
+    if (!repo || !repo[0]) repo = VL_DEFAULT_REPO;
+    const char *branch = st->api->get_config(st->host, "vesta_branch");
+    if (!branch || !branch[0]) branch = getenv("VESTA_BRANCH");
+    if (!branch || !branch[0]) branch = VL_DEFAULT_BRANCH;
+    char cmd[8192];
 
+    /* (1) URL directa configurada -> descargar ese .zip y extraer. */
     if (url && url[0]) {
         st->api->channel_append(
             st->host, VESTA_LSP_CHAN_LOG,
-            "[vesta-lsp] descargando VestaVM (release) desde GitHub...\n");
+            "[vesta-lsp] descargando VestaVM (url configurada)...\n");
 #if defined(_WIN32)
         snprintf(cmd, sizeof cmd,
                  "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
@@ -2436,30 +2448,42 @@ static int vl_try_autoinstall(VlState *st) {
         return system(cmd) == 0;
     }
 
-    if (repo && repo[0]) {
-        st->api->channel_append(
-            st->host, VESTA_LSP_CHAN_LOG,
-            "[vesta-lsp] clonando y compilando VestaVM desde GitHub "
-            "(puede tardar)...\n");
+    /* (2) Default: intentar la ultima RELEASE de GitHub; si no hay, CLONAR la
+     * rama y COMPILAR.  En Windows PowerShell parsea la API de releases; en
+     * POSIX vamos directo a clonar+compilar (sin parser JSON dependiente). */
+    st->api->channel_append(
+        st->host, VESTA_LSP_CHAN_LOG,
+        "[vesta-lsp] instalando VestaVM desde GitHub (release o, si no hay, "
+        "clonar+compilar; puede tardar)...\n");
 #if defined(_WIN32)
-        snprintf(cmd, sizeof cmd,
-                 "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
-                 "$d='%s'; git clone --depth 1 '%s' \"$d\\src\"; "
-                 "cmake -S \"$d\\src\" -B \"$d\\build\" "
-                 "-DCMAKE_BUILD_TYPE=Release; "
-                 "cmake --build \"$d\\build\" --target vesta_lsp\"",
-                 dir, repo);
+    snprintf(
+        cmd, sizeof cmd,
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+        "$d='%s'; $repo='%s'; $br='%s'; "
+        "New-Item -ItemType Directory -Force $d | Out-Null; $ok=$false; "
+        "try { $api=($repo -replace 'github.com','api.github.com/repos') + "
+        "'/releases/latest'; "
+        "$rel=Invoke-RestMethod -Headers @{'User-Agent'='vesta-lsp'} $api; "
+        "$a=$rel.assets | Where-Object { $_.name -like '*.zip' } | "
+        "Select-Object -First 1; "
+        "if ($a) { $z=Join-Path $d 'vesta.zip'; "
+        "Invoke-WebRequest $a.browser_download_url -OutFile $z; "
+        "Expand-Archive -Force $z $d; $ok=$true } } catch {} "
+        "if (-not $ok) { "
+        "if (Test-Path \"$d\\src\") { Remove-Item -Recurse -Force \"$d\\src\" } "
+        "git clone --depth 1 --branch $br $repo \"$d\\src\"; "
+        "cmake -S \"$d\\src\" -B \"$d\\build\" -DCMAKE_BUILD_TYPE=Release; "
+        "cmake --build \"$d\\build\" --target vesta_lsp }\"",
+        dir, repo, branch);
 #else
-        snprintf(cmd, sizeof cmd,
-                 "git clone --depth 1 '%s' '%s/src' && "
-                 "cmake -S '%s/src' -B '%s/build' -DCMAKE_BUILD_TYPE=Release && "
-                 "cmake --build '%s/build' --target vesta_lsp",
-                 repo, dir, dir, dir, dir);
+    snprintf(cmd, sizeof cmd,
+             "set -e; mkdir -p '%s'; rm -rf '%s/src'; "
+             "git clone --depth 1 --branch '%s' '%s' '%s/src'; "
+             "cmake -S '%s/src' -B '%s/build' -DCMAKE_BUILD_TYPE=Release; "
+             "cmake --build '%s/build' --target vesta_lsp",
+             dir, dir, branch, repo, dir, dir, dir, dir);
 #endif
-        return system(cmd) == 0;
-    }
-
-    return 0; /* nada configurado -> el caller muestra la guia manual */
+    return system(cmd) == 0;
 }
 
 /* ------------------------------------------------------------------------- */
