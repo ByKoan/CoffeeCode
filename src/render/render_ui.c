@@ -1733,8 +1733,10 @@ void render_hover_popup(Editor *e) {
                     for (int i = 0; i < nir && drawn < shown; ++i) {
                         if (al <= 0 || irr[i].line != al) continue;
                         int yy = iy0 + (1 + drawn) * lh + 3;
-                        draw_text(e, irr[i].text, body_x + 2 * cw, yy, 0x9A,
-                                  0xB6, 0xD8);
+                        /* Resaltado de sintaxis IR (%valores, mnemonicos,
+                         * numeros) via draw_code_line. */
+                        draw_code_line(e, irr[i].text, (int)strlen(irr[i].text),
+                                       body_x + 2 * cw, yy);
                         ++drawn;
                     }
                 }
