@@ -1659,6 +1659,10 @@ void render_hover_popup(Editor *e) {
                 int exa = (e->settings.hover_ir_mode == 4);
                 int prev_grp_line = -1;
                 int prev_exa_id = -2;
+                /* Banda zebra por grupo IR: la cabecera y SU asm comparten el
+                 * mismo tinte, alternando por grupo -> deja claro que asm
+                 * pertenece a que op IR (arriba/abajo). */
+                int ir_par = 0;
                 /* Fila VISUAL de cada asm (para que las flechas sigan alineadas
                  * aunque el modo grupo intercale cabeceras IR).  -1 = no
                  * visible este frame. */
@@ -1672,9 +1676,15 @@ void render_hover_popup(Editor *e) {
                      * grupo de linea. */
                     if (grp && ln != 0 && ln != prev_grp_line) {
                         prev_grp_line = ln;
+                        ir_par ^= 1;
                         for (int q = 0; q < nir && row < body_rows; ++q) {
                             if (irr[q].line != ln) continue;
                             int hyy = by + (hrows + row) * lh;
+                            if (ir_par) {
+                                set_color(r, 0x26, 0x2B, 0x35, 0xFF);
+                                fill_rect(r, sepx + 1, hyy - 1,
+                                          (x + w - 1) - (sepx + 1), lh);
+                            }
                             draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
                             /* El op IR empieza tras el canalon de flechas (en
                              * code_col), dejando el canalon libre para que las
@@ -1693,6 +1703,7 @@ void render_hover_popup(Editor *e) {
                     if (exa && asml[i].ir_id >= 0 &&
                         asml[i].ir_id != prev_exa_id) {
                         prev_exa_id = asml[i].ir_id;
+                        ir_par ^= 1;
                         const char *opt = NULL;
                         for (int q = 0; q < njr; ++q)
                             if (jrr[q].line == asml[i].ir_id) {
@@ -1701,6 +1712,11 @@ void render_hover_popup(Editor *e) {
                             }
                         if (opt && row < body_rows) {
                             int hyy = by + (hrows + row) * lh;
+                            if (ir_par) {
+                                set_color(r, 0x26, 0x2B, 0x35, 0xFF);
+                                fill_rect(r, sepx + 1, hyy - 1,
+                                          (x + w - 1) - (sepx + 1), lh);
+                            }
                             draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
                             draw_code_line(e, opt, (int)strlen(opt),
                                            asm_x + code_col * cw, hyy);
@@ -1714,6 +1730,11 @@ void render_hover_popup(Editor *e) {
                     int is_sel = (ln != 0 && ln == sel_line);
                     int is_hov = (ln != 0 && ln == hover_line);
                     int rw = (x + w - 1) - (sepx + 1);
+                    /* Banda zebra del grupo IR (mismo tinte que su cabecera). */
+                    if ((grp || exa) && ir_par && !is_sel) {
+                        set_color(r, 0x26, 0x2B, 0x35, 0xFF);
+                        fill_rect(r, sepx + 1, yy - 1, rw, lh);
+                    }
                     /* Caja AGRUPADA del run contiguo (igual que la col. fuente). */
                     if (is_sel || is_hov) {
                         int bl = is_sel ? sel_line : hover_line;
