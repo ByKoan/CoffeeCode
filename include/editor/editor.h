@@ -168,6 +168,9 @@ typedef struct HoverPopup {
     int ir_sel_y;      /* y (px) de la fila selectora */
     int ir_sel_mid;    /* x (px) frontera entre los dos botones */
     int ir_sel_x0, ir_sel_x1; /* extension x clicable de la fila selectora */
+    /* Las opciones de vista (flechas/frame/notas/IR) son host-globales y viven
+     * en Settings; su geometria clicable se registra en e->ui (ui_toggle), no
+     * aqui. */
 } HoverPopup;
 
 /* -- Estado global del editor --------------------------------------------- */

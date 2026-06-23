@@ -48,6 +48,23 @@ int ui_label(Editor *e, int x, int y, const char *text, Color c);
 void ui_button(Editor *e, UiId id, Rect r, const char *label, const UiStyle *st,
                UiState state);
 
+/**
+ * @brief Chip toggle on/off reutilizable (componente generico).
+ *
+ * Dibuja una caja compacta con @p label, coloreada segun @p on (activo) /
+ * apagado, y registra su rectangulo bajo @p id para el hit-test.  Pensado para
+ * barras de opciones (p.ej. la vista godbolt del hover) pero usable por
+ * cualquier seccion/extension.  No muta estado: el llamante decide que hacer
+ * en el click (consultando ui_hit con @p id).
+ *
+ * @param id     Id de hit-test (::UI_ID_NONE para no registrar).
+ * @param x,y    Esquina superior izquierda.
+ * @param label  Texto del chip.
+ * @param on     1 = activo (resaltado), 0 = apagado (atenuado).
+ * @return Ancho total del chip en px (para encadenar varios en una barra).
+ */
+int ui_toggle(Editor *e, UiId id, int x, int y, const char *label, int on);
+
 /** Callback que dibuja el contenido de una fila de ::ui_list. */
 typedef void (*UiRowDraw)(Editor *e, int index, Rect row, int selected,
                           void *ud);

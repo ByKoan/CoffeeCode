@@ -891,13 +891,15 @@ static void asm_reg_rgb(int fam, int *R, int *G, int *B) {
  * su decimal cuando son 0xHEX de datos, no de saltos), puntuacion atenuada y el
  * comentario "; ..." en gris.  Distinto de draw_code_line (que es sintaxis Vex).
  */
-static void draw_asm_line(Editor *e, const char *line, int x, int y) {
+static void draw_asm_line(Editor *e, const char *line, int x, int y,
+                          int show_notes) {
     int cw = e->char_w > 0 ? e->char_w : 8;
     int n = (int)strlen(line);
     int i = 0, first_id = 1, is_branch = 0;
     while (i < n) {
         char c = line[i];
         if (c == ';') { /* comentario hasta fin de linea (atenuado) */
+            if (!show_notes) return; /* notas ocultas por opcion de vista */
             char buf[512];
             int L = n - i;
             if (L > 511) L = 511;
@@ -1383,7 +1385,7 @@ void render_hover_popup(Editor *e) {
                 /* Reservar una banda inferior para el stack frame (titulo +
                  * filas), sin comerse mas de 1/3 del cuerpo. */
                 int frame_h = 0;
-                if (nf > 0) {
+                if (nf > 0 && e->settings.hover_frame) {
                     frame_h = nf + 1; /* +1 titulo */
                     int maxf = body_rows / 3;
                     if (maxf < 2) maxf = 2;
@@ -1474,7 +1476,7 @@ void render_hover_popup(Editor *e) {
                 }
                 /* Layout: canalon de flechas (gw columnas) entre el prefijo
                  * (Lnnn[+offset]) y el codigo, solo si hay flechas. */
-                int gw = (narw > 0) ? 4 : 0;
+                int gw = (narw > 0 && e->settings.hover_arrows) ? 4 : 0;
                 int code_col = (is_native ? 11 : 5) + gw; /* col. del codigo */
                 int gx = asm_x + (is_native ? 11 : 5) * cw; /* base del canalon */
 
@@ -1489,6 +1491,32 @@ void render_hover_popup(Editor *e) {
 
                 /* Cabecera de stats. */
                 if (hdr) draw_text(e, hdr, body_x, by, 0x88, 0x8C, 0x99);
+                /* Barra de toggles de opciones de vista (componente generico
+                 * ui_toggle; valores host-globales en Settings).  Derecha de la
+                 * cabecera, de derecha a izquierda. */
+                {
+                    static const char *kIrName[5] = {"IR:off", "IR:grupo",
+                                                     "IR:panel", "IR:3col",
+                                                     "IR:exacto"};
+                    struct { UiId id; const char *l; int on; } tg[] = {
+                        {UI_HOVER_OPT_IR,
+                         kIrName[e->settings.hover_ir_mode % 5],
+                         e->settings.hover_ir_mode != 0},
+                        {UI_HOVER_OPT_NOTES, "notas", e->settings.hover_notes},
+                        {UI_HOVER_OPT_FRAME, "frame", e->settings.hover_frame},
+                        {UI_HOVER_OPT_ARROWS, "flechas",
+                         e->settings.hover_arrows},
+                    };
+                    int tx = x + w - pad;
+                    for (int ti = 0; ti < 4; ++ti) {
+                        int tw = 0, th = 0;
+                        TTF_GetStringSize(e->font, tg[ti].l, 0, &tw, &th);
+                        int chipw = tw + cw + 4;
+                        tx -= chipw + 4;
+                        ui_toggle(e, tg[ti].id, tx, by - 1, tg[ti].l,
+                                  tg[ti].on);
+                    }
+                }
                 /* Separador vertical (resaltado si se esta arrastrando). */
                 set_color_c(r, h->gb_split_drag ? e->theme.col_tab_accent
                                                 : e->theme.col_tabbar_sep);
@@ -1599,7 +1627,8 @@ void render_hover_popup(Editor *e) {
                     /* Nativo (JIT/AOT, con offset) -> coloreado x86; bytecode
                      * (.vel, sin offset) -> sintaxis Vex. */
                     if (asml[i].a && asml[i].a[0])
-                        draw_asm_line(e, asml[i].b, code_x, yy);
+                        draw_asm_line(e, asml[i].b, code_x, yy,
+                                      e->settings.hover_notes);
                     else
                         draw_code_line(e, asml[i].b, (int)strlen(asml[i].b),
                                        code_x, yy);
@@ -1611,7 +1640,7 @@ void render_hover_popup(Editor *e) {
                  * Conector vertical en el canalon desde el salto hasta su
                  * destino, con cabeza de flecha; acento si el salto o el
                  * destino estan en la linea .vex apuntada/fijada. */
-                if (arw) {
+                if (arw && e->settings.hover_arrows) {
                     for (int a = 0; a < narw; ++a) {
                         int fr = arw[a].from, to = arw[a].to;
                         int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;

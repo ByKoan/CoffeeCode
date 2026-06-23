@@ -32,6 +32,11 @@ void settings_defaults(Settings *s) {
     s->background_scaling = BG_SCALE_STRETCH; /* historico: imagen estirada */
     s->background_gallery_count = 0;          /* galeria vacia por defecto   */
     s->background_gallery[0][0] = '\0';
+    /* Vista godbolt del hover (generica para cualquier extension). */
+    s->hover_arrows = 1;
+    s->hover_frame = 1;
+    s->hover_notes = 1;
+    s->hover_ir_mode = 0;
 }
 
 int settings_gallery_index_of(const Settings *s, const char *path) {
@@ -119,6 +124,14 @@ void settings_load(Settings *s) {
             s->highlight_current_line = atoi(val) ? 1 : 0;
         else if (!strcmp(key, "show_shortcuts"))
             s->show_shortcuts = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "hover_arrows"))
+            s->hover_arrows = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "hover_frame"))
+            s->hover_frame = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "hover_notes"))
+            s->hover_notes = atoi(val) ? 1 : 0;
+        else if (!strcmp(key, "hover_ir_mode"))
+            s->hover_ir_mode = clampi(atoi(val), 0, 4);
         else if (!strcmp(key, "font_path")) {
             strncpy(s->font_path, val, sizeof s->font_path - 1);
             s->font_path[sizeof s->font_path - 1] = '\0';
@@ -205,6 +218,10 @@ void settings_save(const Settings *s) {
     fprintf(f, "show_line_numbers=%d\n", s->show_line_numbers);
     fprintf(f, "highlight_current_line=%d\n", s->highlight_current_line);
     fprintf(f, "show_shortcuts=%d\n", s->show_shortcuts);
+    fprintf(f, "hover_arrows=%d\n", s->hover_arrows);
+    fprintf(f, "hover_frame=%d\n", s->hover_frame);
+    fprintf(f, "hover_notes=%d\n", s->hover_notes);
+    fprintf(f, "hover_ir_mode=%d\n", s->hover_ir_mode);
     fprintf(f, "font_path=%s\n", s->font_path);
     /* Fondo del area de texto (modo + parametros del modo activo). */
     fprintf(f, "background_path=%s\n", s->background_path);

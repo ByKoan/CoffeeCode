@@ -93,6 +93,27 @@ void ui_button(Editor *e, UiId id, Rect r, const char *label, const UiStyle *st,
     if (id != UI_ID_NONE) ui_put(&e->ui, id, r);
 }
 
+int ui_toggle(Editor *e, UiId id, int x, int y, const char *label, int on) {
+    int cw = e->char_w > 0 ? e->char_w : 8;
+    int tw = 0, th = 0;
+    if (label && label[0]) TTF_GetStringSize(e->font, label, 0, &tw, &th);
+    if (th <= 0) th = e->line_height > 0 ? e->line_height : 16;
+    int padx = cw / 2 + 2; /* margen horizontal interno */
+    int w = tw + 2 * padx;
+    int h = th + 2;
+    Rect r = {x, y, w, h};
+    Color bg = on ? e->theme.col_tab_active : e->theme.col_tabbar_bg;
+    Color border = on ? e->theme.col_tab_accent : e->theme.col_tabbar_sep;
+    ui_panel(e, r, bg, border);
+    if (label && label[0]) {
+        Color tx = on ? ui_rgba(0xDC, 0xE2, 0xD0, 0xFF)
+                      : ui_rgba(0x84, 0x88, 0x92, 0xFF);
+        ui_label(e, x + padx, y + 1, label, tx);
+    }
+    if (id != UI_ID_NONE) ui_put(&e->ui, id, r);
+    return w;
+}
+
 void ui_list(Editor *e, Rect bounds, UiId area_id, UiList row_list, int count,
              int row_h, int *scroll, int selected, UiRowDraw draw_row,
              void *ud) {

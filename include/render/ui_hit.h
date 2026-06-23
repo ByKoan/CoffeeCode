@@ -88,6 +88,11 @@ typedef enum {
     /* División del editor (split panes) */
     UI_SPLIT_V,         /**< Botón dividir el editor en vertical (lado a lado). */
     UI_SPLIT_H,         /**< Botón dividir el editor en horizontal (arriba/abajo). */
+    /* Opciones de la vista godbolt del hover (toggles genericos ui_toggle). */
+    UI_HOVER_OPT_ARROWS, /**< Toggle flechas de salto.            */
+    UI_HOVER_OPT_FRAME,  /**< Toggle banda del stack frame.       */
+    UI_HOVER_OPT_NOTES,  /**< Toggle anotaciones del desensamblado. */
+    UI_HOVER_OPT_IR,     /**< Selector ciclico del modo de correlacion IR. */
     UI_ID_COUNT
 } UiId;
 

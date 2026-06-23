@@ -18,6 +18,7 @@
  */
 #include "input_internal.h"
 #include "app/app.h"
+#include "settings/settings.h"
 #include "editor/tab_reorder.h"
 #include "ext/coffee_ext.h" /* COFFEE_EVENT_TEXT_HOVER, CoffeeHoverPos */
 #include "ext/ext_host.h"   /* ext_host_emit */
@@ -1830,6 +1831,28 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
                 h->gb_sel_line = -1; /* la linea fijada es por-pestana */
                 e->needs_redraw = 1;
                 return;
+            }
+            /* Toggles de opciones de vista (componente generico ui_toggle;
+             * valores host-globales en Settings, compartidos por todas las
+             * extensiones que usen la vista godbolt). */
+            {
+                int changed = 1;
+                if (ui_hit(&e->ui, UI_HOVER_OPT_ARROWS, mx, my))
+                    e->settings.hover_arrows = !e->settings.hover_arrows;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_FRAME, mx, my))
+                    e->settings.hover_frame = !e->settings.hover_frame;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_NOTES, mx, my))
+                    e->settings.hover_notes = !e->settings.hover_notes;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_IR, mx, my))
+                    e->settings.hover_ir_mode =
+                        (e->settings.hover_ir_mode + 1) % 5;
+                else
+                    changed = 0;
+                if (changed) {
+                    settings_save(&e->settings);
+                    e->needs_redraw = 1;
+                    return;
+                }
             }
             /* resto de la franja de cabecera: arrastrar el popup */
             if (my < h->rect_y + hdr_h) {

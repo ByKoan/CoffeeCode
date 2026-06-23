@@ -65,6 +65,12 @@ typedef struct {
      *  elegir entre ellas en la sub-pantalla "Fondos". */
     char background_gallery[BG_GALLERY_MAX][512];
     int background_gallery_count; /**< Numero de rutas validas en la galeria. */
+    /* -- Opciones GENERICAS de la vista godbolt del hover (cualquier extension
+     *    que mande contenido 0x1D las hereda; no son especificas de ninguna). */
+    int hover_arrows;  /**< 1 = flechas de salto en el desensamblado.        */
+    int hover_frame;   /**< 1 = banda del stack frame.                       */
+    int hover_notes;   /**< 1 = anotaciones "; val" en el desensamblado.     */
+    int hover_ir_mode; /**< Correlacion IR: 0=off 1=grupo 2=panel 3=3col 4=exacto. */
 } Settings;
 
 /**
