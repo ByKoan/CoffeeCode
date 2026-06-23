@@ -841,6 +841,132 @@ static void draw_code_line(Editor *e, const char *line, int n, int x, int y) {
     }
 }
 
+/* Familia GPR de 64 bits de un token de registro x86 ("eax"->"rax",
+ * "r8d"->"r8", ...).  Devuelve el indice en kFam o -1 si no es un GPR. */
+static int asm_reg_family(const char *t) {
+    static const struct {
+        const char *n;
+        int fam;
+    } kReg[] = {
+        {"rax", 0},  {"eax", 0},  {"ax", 0},   {"al", 0},   {"ah", 0},
+        {"rbx", 1},  {"ebx", 1},  {"bx", 1},   {"bl", 1},   {"bh", 1},
+        {"rcx", 2},  {"ecx", 2},  {"cx", 2},   {"cl", 2},   {"ch", 2},
+        {"rdx", 3},  {"edx", 3},  {"dx", 3},   {"dl", 3},   {"dh", 3},
+        {"rsi", 4},  {"esi", 4},  {"si", 4},   {"sil", 4},
+        {"rdi", 5},  {"edi", 5},  {"di", 5},   {"dil", 5},
+        {"rbp", 6},  {"ebp", 6},  {"bp", 6},   {"bpl", 6},
+        {"rsp", 7},  {"esp", 7},  {"sp", 7},   {"spl", 7},
+        {"r8", 8},   {"r8d", 8},  {"r8w", 8},  {"r8b", 8},
+        {"r9", 9},   {"r9d", 9},  {"r9w", 9},  {"r9b", 9},
+        {"r10", 10}, {"r10d", 10},{"r10w", 10},{"r10b", 10},
+        {"r11", 11}, {"r11d", 11},{"r11w", 11},{"r11b", 11},
+        {"r12", 12}, {"r12d", 12},{"r12w", 12},{"r12b", 12},
+        {"r13", 13}, {"r13d", 13},{"r13w", 13},{"r13b", 13},
+        {"r14", 14}, {"r14d", 14},{"r14w", 14},{"r14b", 14},
+        {"r15", 15}, {"r15d", 15},{"r15w", 15},{"r15b", 15},
+    };
+    for (size_t k = 0; k < sizeof(kReg) / sizeof(kReg[0]); ++k)
+        if (strcmp(t, kReg[k].n) == 0) return kReg[k].fam;
+    return -1;
+}
+
+/* Color estable por registro (mismo registro -> mismo color siempre).  rbp/rsp
+ * en gris (de-enfasis del marco); el resto en una paleta distinguible. */
+static void asm_reg_rgb(int fam, int *R, int *G, int *B) {
+    static const int kPal[16][3] = {
+        {0xE6, 0x9A, 0x9A}, {0xE6, 0xC8, 0x8A}, {0x8A, 0xC4, 0xE6},
+        {0x8A, 0xE0, 0xA6}, {0xC6, 0xA4, 0xEE}, {0xEE, 0xA4, 0xCE},
+        {0x86, 0x8E, 0x9A}, {0x86, 0x8E, 0x9A}, {0x6F, 0xD0, 0xC8},
+        {0x6F, 0xD0, 0xC8}, {0x7C, 0xC0, 0xD8}, {0x7C, 0xC0, 0xD8},
+        {0x9C, 0xC8, 0x88}, {0x9C, 0xC8, 0x88}, {0xC8, 0xB0, 0x78},
+        {0xC8, 0xB0, 0x78},
+    };
+    *R = kPal[fam][0];
+    *G = kPal[fam][1];
+    *B = kPal[fam][2];
+}
+
+/* Pinta una linea de DESENSAMBLADO x86 (columna nativa del godbolt): mnemonico
+ * en malva, registros con color estable por registro, inmediatos en ambar (con
+ * su decimal cuando son 0xHEX de datos, no de saltos), puntuacion atenuada y el
+ * comentario "; ..." en gris.  Distinto de draw_code_line (que es sintaxis Vex).
+ */
+static void draw_asm_line(Editor *e, const char *line, int x, int y) {
+    int cw = e->char_w > 0 ? e->char_w : 8;
+    int n = (int)strlen(line);
+    int i = 0, first_id = 1, is_branch = 0;
+    while (i < n) {
+        char c = line[i];
+        if (c == ';') { /* comentario hasta fin de linea (atenuado) */
+            char buf[512];
+            int L = n - i;
+            if (L > 511) L = 511;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            draw_text(e, buf, x + i * cw, y, 0x6A, 0x86, 0x66);
+            return;
+        }
+        if (c == ' ' || c == '\t') { i++; continue; }
+        /* numero / inmediato (decimal o 0xHEX, con signo) */
+        if ((c >= '0' && c <= '9') ||
+            (c == '-' && i + 1 < n && line[i + 1] >= '0' && line[i + 1] <= '9')) {
+            int j = i + 1;
+            while (j < n && (hv_id_ch(line[j]) || line[j] == 'x' ||
+                             line[j] == 'X'))
+                j++;
+            char buf[64];
+            int L = j - i;
+            if (L > 63) L = 63;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            draw_text(e, buf, x + i * cw, y, 0xD6, 0xB0, 0x76);
+            /* Decimal de un inmediato 0xHEX de DATOS (no de salto) y solo si
+             * cierra la linea -> evita solaparse con tokens posteriores. */
+            int k = j;
+            while (k < n && (line[k] == ' ' || line[k] == '\t')) k++;
+            if (!is_branch && k >= n && L > 2 && buf[0] == '0' &&
+                (buf[1] == 'x' || buf[1] == 'X')) {
+                long long v = strtoll(buf + 2, NULL, 16);
+                if (v >= 10) {
+                    char db[32];
+                    snprintf(db, sizeof db, " (%lld)", v);
+                    draw_text(e, db, x + j * cw, y, 0x60, 0x70, 0x80);
+                }
+            }
+            i = j;
+            continue;
+        }
+        /* identificador: mnemonico (primero) / registro / otro */
+        if (hv_id_start(c)) {
+            int j = i + 1;
+            while (j < n && hv_id_ch(line[j])) j++;
+            char buf[64];
+            int L = j - i;
+            if (L > 63) L = 63;
+            memcpy(buf, line + i, L);
+            buf[L] = 0;
+            int rr = 0xCC, gg = 0xCC, bb = 0xD4, fam;
+            if (first_id) {
+                rr = 0xC5; gg = 0x86; bb = 0xC0; /* mnemonico malva */
+                if (buf[0] == 'j' || strcmp(buf, "call") == 0 ||
+                    strcmp(buf, "loop") == 0 || strcmp(buf, "ret") == 0)
+                    is_branch = 1;
+                first_id = 0;
+            } else if ((fam = asm_reg_family(buf)) >= 0) {
+                asm_reg_rgb(fam, &rr, &gg, &bb);
+            }
+            draw_text(e, buf, x + i * cw, y, rr, gg, bb);
+            i = j;
+            continue;
+        }
+        { /* puntuacion */
+            char buf[2] = {c, 0};
+            draw_text(e, buf, x + i * cw, y, 0x80, 0x84, 0x90);
+            i++;
+        }
+    }
+}
+
 /* ----------------------------------------------------------------------------
  * Renderer minimo de Markdown + HTML 1.0 para la pestana Doc del hover.
  * Soporta INLINE: **negrita** / *cursiva* / `codigo` / [texto](url) y los tags
@@ -1384,8 +1510,13 @@ void render_hover_popup(Editor *e) {
                     } else {
                         code_x = asm_x + 5 * cw;
                     }
-                    draw_code_line(e, asml[i].b, (int)strlen(asml[i].b), code_x,
-                                   yy);
+                    /* Nativo (JIT/AOT, con offset) -> coloreado x86; bytecode
+                     * (.vel, sin offset) -> sintaxis Vex. */
+                    if (asml[i].a && asml[i].a[0])
+                        draw_asm_line(e, asml[i].b, code_x, yy);
+                    else
+                        draw_code_line(e, asml[i].b, (int)strlen(asml[i].b),
+                                       code_x, yy);
                     if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                     h->gb_right_n = row + 1;
                 }
