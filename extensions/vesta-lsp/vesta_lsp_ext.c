@@ -97,6 +97,7 @@ typedef struct VlState {
     const CoffeeApi *api;
 
     CoffeeProc proc;      /**< subproceso del servidor (o NULL si no arranco). */
+    CoffeeProc install_proc; /**< subproceso de auto-instalacion (async), o NULL. */
     LspClient *lsp;       /**< cliente LSP sobre el transporte del subproceso. */
     char *server_path;    /**< ruta resuelta del ejecutable (heap). */
 
@@ -2400,90 +2401,243 @@ static void vl_install_dir(char *out, size_t n) {
 #endif
 }
 
+/* Forward-decl: arranca el servidor LSP (definido junto a register).  Lo llama
+ * tanto register (cuando ya hay ruta) como el callback de fin de instalacion. */
+static int vl_start_lsp_server(VlState *st);
+
+/** @brief stdout/stderr de la auto-instalacion -> terminal del IDE. */
+static void vl_install_on_data(void *ud, const char *bytes, size_t len) {
+    VlState *st = (VlState *)ud;
+    if (!st || !bytes || !len) return;
+    char buf[4096];
+    size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
+    memcpy(buf, bytes, n);
+    buf[n] = 0;
+    st->api->channel_append(st->host, VESTA_LSP_CHAN_LOG, buf);
+}
+
+/** @brief Fin de la auto-instalacion: re-resolver la ruta y arrancar el LSP. */
+static void vl_install_on_exit(void *ud, int code) {
+    VlState *st = (VlState *)ud;
+    if (!st) return;
+    st->install_proc = NULL;
+    char line[160];
+    snprintf(line, sizeof line,
+             "[vesta-lsp] auto-instalacion terminada (codigo %d)\n", code);
+    st->api->channel_append(st->host, VESTA_LSP_CHAN_LOG, line);
+    if (!st->server_path) st->server_path = vl_resolve_server_path(st);
+    if (st->server_path) {
+        vl_start_lsp_server(st);
+    } else {
+        st->api->channel_append(
+            st->host, VESTA_LSP_CHAN_LOG,
+            "\x1b[31m[vesta-lsp] tras instalar sigue sin encontrarse "
+            "vesta_lsp (falta git/cmake/MinGW en el PATH?  revisa la salida "
+            "de arriba)\x1b[0m\n");
+        st->api->set_status(st->host, "vesta-lsp: instalacion fallida");
+    }
+}
+
 /**
- * @brief Intenta auto-instalar VestaVM desde GitHub a la carpeta estandar.
+ * @brief Lanza la auto-instalacion de VestaVM desde GitHub de forma ASINCRONA.
  *
- * Opt-in (no congela el arranque por defecto): se activa solo si hay
- *   - "download_url" (config) / env VESTA_LSP_DOWNLOAD_URL -> release prebuilt
- *     (.zip) que se descarga y descomprime; o
- *   - "vesta_repo"  (config) / env VESTA_REPO -> repo git que se clona y
- *     compila (requiere git + cmake + compilador).
- * Bloqueante (paso de setup unico).  Devuelve 1 si instalo algo (el caller
- * re-resuelve la ruta), 0 si no habia forma de auto-instalar.
+ * No congela el IDE: spawnea un subproceso (powershell / sh) cuya salida se
+ * vuelca en vivo a la terminal del IDE (canal "Vesta LSP"); al terminar,
+ * @c vl_install_on_exit re-resuelve la ruta y arranca el servidor.
+ *
+ * Flujo por defecto (override: config/env download_url, vesta_repo,
+ * vesta_branch):
+ *   1. si hay RELEASE en GitHub -> descarga el .zip y lo extrae;
+ *   2. si NO hay -> git clone --depth 1 --branch <rama> + cmake build.
+ * El build usa el generador "MinGW Makefiles" (VestaVM se compila con MinGW,
+ * NO con Visual Studio).
+ *
+ * @return 1 si lanzo el subproceso (instalacion en curso), 0 si no pudo.
  */
-static int vl_try_autoinstall(VlState *st) {
+static int vl_start_autoinstall(VlState *st) {
     char dir[1024];
     vl_install_dir(dir, sizeof dir);
-    /* URL directa de un .zip (override total). */
     const char *url = st->api->get_config(st->host, "download_url");
     if (!url || !url[0]) url = getenv("VESTA_LSP_DOWNLOAD_URL");
-    /* Repo + rama (defaults oficiales). */
     const char *repo = st->api->get_config(st->host, "vesta_repo");
     if (!repo || !repo[0]) repo = getenv("VESTA_REPO");
     if (!repo || !repo[0]) repo = VL_DEFAULT_REPO;
     const char *branch = st->api->get_config(st->host, "vesta_branch");
     if (!branch || !branch[0]) branch = getenv("VESTA_BRANCH");
     if (!branch || !branch[0]) branch = VL_DEFAULT_BRANCH;
-    char cmd[8192];
 
-    /* (1) URL directa configurada -> descargar ese .zip y extraer. */
-    if (url && url[0]) {
-        st->api->channel_append(
-            st->host, VESTA_LSP_CHAN_LOG,
-            "[vesta-lsp] descargando VestaVM (url configurada)...\n");
+    char script[8192];
+    const char *exe;
+    const char *argv[8];
+    int argc;
+
 #if defined(_WIN32)
-        snprintf(cmd, sizeof cmd,
-                 "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
-                 "$d='%s'; New-Item -ItemType Directory -Force $d | Out-Null; "
+    /* Script PowerShell con comillas SIMPLES (sin dobles internas) para que
+     * win_build_cmdline pueda pasarlo como UN argumento (-Command). */
+    if (url && url[0]) {
+        snprintf(script, sizeof script,
+                 "$ErrorActionPreference='Stop'; $d='%s'; "
+                 "New-Item -ItemType Directory -Force $d | Out-Null; "
                  "$z=Join-Path $d 'vesta.zip'; "
+                 "Write-Output ('[install] descargando '+'%s'); "
                  "Invoke-WebRequest -Uri '%s' -OutFile $z; "
-                 "Expand-Archive -Force $z $d\"",
-                 dir, url);
-#else
-        snprintf(cmd, sizeof cmd,
-                 "mkdir -p '%s' && curl -fL '%s' -o '%s/vesta.zip' && "
-                 "unzip -o '%s/vesta.zip' -d '%s'",
-                 dir, url, dir, dir, dir);
-#endif
-        return system(cmd) == 0;
+                 "Expand-Archive -Force $z $d; Write-Output '[install] listo'",
+                 dir, url, url);
+    } else {
+        snprintf(
+            script, sizeof script,
+            "$ErrorActionPreference='Stop'; $d='%s'; $repo='%s'; $br='%s'; "
+            "New-Item -ItemType Directory -Force $d | Out-Null; "
+            "Write-Output ('[install] destino: '+$d); $ok=$false; "
+            "try { $api=($repo -replace 'github.com','api.github.com/repos')"
+            "+'/releases/latest'; "
+            "Write-Output ('[install] buscando release: '+$api); "
+            "$rel=Invoke-RestMethod -Headers @{'User-Agent'='vesta-lsp'} $api; "
+            "$a=$rel.assets | Where-Object { $_.name -like '*.zip' } | "
+            "Select-Object -First 1; "
+            "if ($a) { Write-Output ('[install] descargando '+$a.name); "
+            "$z=Join-Path $d 'vesta.zip'; "
+            "Invoke-WebRequest $a.browser_download_url -OutFile $z; "
+            "Expand-Archive -Force $z $d; $ok=$true } "
+            "else { Write-Output '[install] release sin .zip' } } "
+            "catch { Write-Output ('[install] sin release: '"
+            "+$_.Exception.Message) } "
+            "if (-not $ok) { Write-Output '[install] clonando + compilando "
+            "(MinGW)...'; $s=Join-Path $d 'src'; $b=Join-Path $d 'build'; "
+            "if (Test-Path $s) { Remove-Item -Recurse -Force $s } "
+            "git clone --depth 1 --recurse-submodules --shallow-submodules "
+            "--branch $br $repo $s; "
+            "cmake -S $s -B $b -G 'MinGW Makefiles' "
+            "-DCMAKE_BUILD_TYPE=Release; "
+            "cmake --build $b --target vesta_lsp } "
+            "Write-Output '[install] terminado'",
+            dir, repo, branch);
     }
+    exe = "powershell.exe";
+    argv[0] = "-NoProfile";
+    argv[1] = "-ExecutionPolicy";
+    argv[2] = "Bypass";
+    argv[3] = "-Command";
+    argv[4] = script;
+    argc = 5;
+#else
+    if (url && url[0])
+        snprintf(script, sizeof script,
+                 "set -e; d='%s'; mkdir -p \"$d\"; "
+                 "echo '[install] descargando %s'; "
+                 "curl -fL '%s' -o \"$d/vesta.zip\"; "
+                 "unzip -o \"$d/vesta.zip\" -d \"$d\"; echo '[install] listo'",
+                 dir, url, url);
+    else
+        snprintf(script, sizeof script,
+                 "set -e; d='%s'; repo='%s'; br='%s'; mkdir -p \"$d\"; "
+                 "rm -rf \"$d/src\"; "
+                 "echo '[install] clonando + compilando...'; "
+                 "git clone --depth 1 --recurse-submodules --shallow-submodules "
+                 "--branch \"$br\" \"$repo\" \"$d/src\"; "
+                 "cmake -S \"$d/src\" -B \"$d/build\" "
+                 "-DCMAKE_BUILD_TYPE=Release; "
+                 "cmake --build \"$d/build\" --target vesta_lsp; "
+                 "echo '[install] terminado'",
+                 dir, repo, branch);
+    exe = "sh";
+    argv[0] = "-c";
+    argv[1] = script;
+    argc = 2;
+#endif
 
-    /* (2) Default: intentar la ultima RELEASE de GitHub; si no hay, CLONAR la
-     * rama y COMPILAR.  En Windows PowerShell parsea la API de releases; en
-     * POSIX vamos directo a clonar+compilar (sin parser JSON dependiente). */
     st->api->channel_append(
         st->host, VESTA_LSP_CHAN_LOG,
-        "[vesta-lsp] instalando VestaVM desde GitHub (release o, si no hay, "
-        "clonar+compilar; puede tardar)...\n");
-#if defined(_WIN32)
-    snprintf(
-        cmd, sizeof cmd,
-        "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
-        "$d='%s'; $repo='%s'; $br='%s'; "
-        "New-Item -ItemType Directory -Force $d | Out-Null; $ok=$false; "
-        "try { $api=($repo -replace 'github.com','api.github.com/repos') + "
-        "'/releases/latest'; "
-        "$rel=Invoke-RestMethod -Headers @{'User-Agent'='vesta-lsp'} $api; "
-        "$a=$rel.assets | Where-Object { $_.name -like '*.zip' } | "
-        "Select-Object -First 1; "
-        "if ($a) { $z=Join-Path $d 'vesta.zip'; "
-        "Invoke-WebRequest $a.browser_download_url -OutFile $z; "
-        "Expand-Archive -Force $z $d; $ok=$true } } catch {} "
-        "if (-not $ok) { "
-        "if (Test-Path \"$d\\src\") { Remove-Item -Recurse -Force \"$d\\src\" } "
-        "git clone --depth 1 --branch $br $repo \"$d\\src\"; "
-        "cmake -S \"$d\\src\" -B \"$d\\build\" -DCMAKE_BUILD_TYPE=Release; "
-        "cmake --build \"$d\\build\" --target vesta_lsp }\"",
-        dir, repo, branch);
-#else
-    snprintf(cmd, sizeof cmd,
-             "set -e; mkdir -p '%s'; rm -rf '%s/src'; "
-             "git clone --depth 1 --branch '%s' '%s' '%s/src'; "
-             "cmake -S '%s/src' -B '%s/build' -DCMAKE_BUILD_TYPE=Release; "
-             "cmake --build '%s/build' --target vesta_lsp",
-             dir, dir, branch, repo, dir, dir, dir, dir);
-#endif
-    return system(cmd) == 0;
+        "[vesta-lsp] instalando VestaVM en SEGUNDO PLANO desde GitHub "
+        "(el IDE sigue usable; sigue el progreso aqui)...\n");
+    st->install_proc = st->api->proc_spawn(st->host, exe, argv, argc);
+    if (!st->install_proc) {
+        st->api->channel_append(
+            st->host, VESTA_LSP_CHAN_LOG,
+            "\x1b[31m[vesta-lsp] no se pudo lanzar la auto-instalacion "
+            "(falta powershell/sh?)\x1b[0m\n");
+        return 0;
+    }
+    st->api->proc_on_data(st->host, st->install_proc, vl_install_on_data, st);
+    st->api->proc_on_exit(st->host, st->install_proc, vl_install_on_exit, st);
+    return 1;
+}
+
+/**
+ * @brief Arranca el servidor LSP (subproceso + cliente + eventos + servicio).
+ *
+ * Requiere @c st->server_path ya resuelto.  Lo llaman register (cuando la ruta
+ * se descubrio al cargar) y @c vl_install_on_exit (tras auto-instalar).  Hace
+ * el setup completo (eventos, tick, servicio, comandos del inspector) UNA vez,
+ * cuando el servidor esta disponible.  Devuelve 1 si arranco, 0 si no.
+ */
+static int vl_start_lsp_server(VlState *st) {
+    CoffeeHost *host = st->host;
+    const CoffeeApi *api = st->api;
+    if (!st->server_path) return 0;
+
+    {
+        char line[640];
+        snprintf(line, sizeof line, "[vesta-lsp] servidor: %s\n",
+                 st->server_path);
+        api->channel_append(host, VESTA_LSP_CHAN_LOG, line);
+    }
+
+    st->proc = api->proc_spawn(host, st->server_path, NULL, 0);
+    if (!st->proc) {
+        api->channel_append(host, VESTA_LSP_CHAN_LOG,
+                            "\x1b[31m[vesta-lsp] no se pudo arrancar el "
+                            "servidor\x1b[0m\n");
+        api->log(host, COFFEE_LOG_ERROR, "vesta-lsp: proc_spawn fallo");
+        api->set_status(host, "vesta-lsp: servidor no disponible");
+        return 0;
+    }
+    st->server_alive = 1;
+
+    st->lsp = lsp_create(vl_lsp_write, st);
+    if (!st->lsp) {
+        api->channel_append(host, VESTA_LSP_CHAN_LOG,
+                            "\x1b[31m[vesta-lsp] sin memoria para el cliente LSP"
+                            "\x1b[0m\n");
+        api->proc_kill(host, st->proc);
+        st->proc = NULL;
+        st->server_alive = 0;
+        return 0;
+    }
+
+    api->proc_on_data(host, st->proc, vl_on_proc_data, st);
+    api->proc_on_exit(host, st->proc, vl_on_proc_exit, st);
+    lsp_on_diagnostics(st->lsp, vl_on_diagnostics, st);
+
+    char *root_uri = NULL;
+    const char *root = api->workspace_root ? api->workspace_root(host) : NULL;
+    if (root && root[0]) {
+        root_uri = vl_path_to_uri(root);
+    } else {
+        const char *active = api->current_path(host);
+        if (active && active[0]) root_uri = vl_path_to_uri(active);
+    }
+    lsp_initialize(st->lsp, root_uri, vl_on_ready, st);
+    free(root_uri);
+
+    api->subscribe_event(host, COFFEE_EVENT_FILE_OPEN, vl_on_event, st);
+    api->subscribe_event(host, COFFEE_EVENT_TAB_SWITCH, vl_on_event, st);
+    api->subscribe_event(host, COFFEE_EVENT_BUFFER_CHANGED, vl_on_event, st);
+    api->subscribe_event(host, COFFEE_EVENT_FILE_SAVE, vl_on_event, st);
+    api->subscribe_event(host, COFFEE_EVENT_TEXT_HOVER, vl_on_event, st);
+    api->subscribe_event(host, COFFEE_EVENT_SHUTDOWN, vl_on_event, st);
+    api->register_tick(host, vl_on_tick, st);
+
+    st->svc.version = COFFEE_SVC_LSP_VERSION;
+    st->svc.is_ready = svc_is_ready;
+    st->svc.request = svc_request;
+    st->svc.server_path = svc_server_path;
+    st->svc.self = st;
+    api->register_service(host, COFFEE_SVC_LSP_NAME, &st->svc);
+
+    insp_register_commands(st);
+    api->log(host, COFFEE_LOG_INFO, "vesta-lsp: servidor LSP arrancado");
+    return 1;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2509,105 +2663,31 @@ COFFEE_EXTENSION_EXPORT int coffee_extension_register(CoffeeHost *host,
     /* Resolver la ruta del servidor por descubrimiento (config/env/PATH/
      * instalaciones estandar).  Si falla, intentar auto-instalar desde GitHub
      * (si hay URL configurada) y reintentar. */
+    /* Descubrir la ruta del servidor.  Si esta -> arrancar ya.  Si NO ->
+     * auto-instalar EN SEGUNDO PLANO (sin congelar el IDE); al terminar, el
+     * callback de fin arranca el servidor.  El editor queda usable mientras. */
     g_state.server_path = vl_resolve_server_path(&g_state);
-    if (!g_state.server_path) {
-        if (vl_try_autoinstall(&g_state))
-            g_state.server_path = vl_resolve_server_path(&g_state);
-    }
-    if (!g_state.server_path) {
+    if (g_state.server_path) {
+        vl_start_lsp_server(&g_state);
+    } else {
         api->channel_append(
             host, VESTA_LSP_CHAN_LOG,
-            "\x1b[33m[vesta-lsp] no se encontro 'vesta_lsp' (servidor de Vex).\n"
-            "  Busque en: VESTA_LSP_PATH, VESTA_HOME, PATH, "
-#if defined(_WIN32)
-            "%ProgramFiles%/VestaVM, %LOCALAPPDATA%/VestaVM, %APPDATA%/VestaVM, "
-            "%USERPROFILE%/VestaVM.\n"
-#else
-            "/usr/local/bin, /usr/local/share/vesta, ~/.local/share/vesta.\n"
-#endif
-            "  Instala VestaVM o define VESTA_LSP_PATH, o configura "
-            "'download_url' para auto-instalar desde GitHub.\x1b[0m\n");
-        api->log(host, COFFEE_LOG_ERROR,
-                 "vesta-lsp: no se encontro vesta_lsp");
-        api->set_status(host, "vesta-lsp: servidor no disponible");
-        return 0; /* inactiva pero no tumba el IDE */
+            "\x1b[33m[vesta-lsp] 'vesta_lsp' no encontrado (busque en "
+            "VESTA_LSP_PATH, VESTA_HOME, PATH, instalaciones estandar).\x1b[0m\n"
+            "[vesta-lsp] intentando auto-instalar desde GitHub...\n");
+        if (!vl_start_autoinstall(&g_state)) {
+            api->channel_append(
+                host, VESTA_LSP_CHAN_LOG,
+                "\x1b[31m[vesta-lsp] no se pudo iniciar la auto-instalacion.  "
+                "Instala VestaVM, define VESTA_LSP_PATH, o configura "
+                "'download_url'/'vesta_repo'.\x1b[0m\n");
+            api->log(host, COFFEE_LOG_ERROR, "vesta-lsp: sin servidor");
+            api->set_status(host, "vesta-lsp: servidor no disponible");
+        }
     }
-
-    {
-        char line[640];
-        snprintf(line, sizeof line, "[vesta-lsp] servidor: %s\n",
-                 g_state.server_path);
-        api->channel_append(host, VESTA_LSP_CHAN_LOG, line);
-    }
-
-    /* Lanzar el subproceso del servidor (sin argumentos extra). */
-    g_state.proc = api->proc_spawn(host, g_state.server_path, NULL, 0);
-    if (!g_state.proc) {
-        api->channel_append(host, VESTA_LSP_CHAN_LOG,
-                            "\x1b[31m[vesta-lsp] no se pudo arrancar el "
-                            "servidor; configura 'server_path' o define "
-                            "VESTA_LSP_PATH\x1b[0m\n");
-        api->log(host, COFFEE_LOG_ERROR,
-                 "vesta-lsp: no se encontro vesta_lsp.exe");
-        api->set_status(host, "vesta-lsp: servidor no disponible");
-        /* Extension cargada pero inactiva: el resto del IDE sigue funcionando. */
-        return 0;
-    }
-    g_state.server_alive = 1;
-
-    /* Crear el cliente LSP sobre el transporte del subproceso. */
-    g_state.lsp = lsp_create(vl_lsp_write, &g_state);
-    if (!g_state.lsp) {
-        api->channel_append(host, VESTA_LSP_CHAN_LOG,
-                            "\x1b[31m[vesta-lsp] sin memoria para el cliente LSP"
-                            "\x1b[0m\n");
-        api->proc_kill(host, g_state.proc);
-        g_state.proc = NULL;
-        g_state.server_alive = 0;
-        return 0;
-    }
-
-    /* Cablear datos del servidor -> parser LSP, fin del proceso y diagnosticos. */
-    api->proc_on_data(host, g_state.proc, vl_on_proc_data, &g_state);
-    api->proc_on_exit(host, g_state.proc, vl_on_proc_exit, &g_state);
-    lsp_on_diagnostics(g_state.lsp, vl_on_diagnostics, &g_state);
-
-    /* rootUri: la carpeta del proyecto, o la del archivo activo. */
-    char *root_uri = NULL;
-    const char *root = api->workspace_root ? api->workspace_root(host) : NULL;
-    if (root && root[0]) {
-        root_uri = vl_path_to_uri(root);
-    } else {
-        const char *active = api->current_path(host);
-        if (active && active[0]) root_uri = vl_path_to_uri(active);
-    }
-    lsp_initialize(g_state.lsp, root_uri, vl_on_ready, &g_state);
-    free(root_uri);
-
-    /* Suscribir eventos del editor + tick para el debounce. */
-    api->subscribe_event(host, COFFEE_EVENT_FILE_OPEN, vl_on_event, &g_state);
-    api->subscribe_event(host, COFFEE_EVENT_TAB_SWITCH, vl_on_event, &g_state);
-    api->subscribe_event(host, COFFEE_EVENT_BUFFER_CHANGED, vl_on_event,
-                         &g_state);
-    api->subscribe_event(host, COFFEE_EVENT_FILE_SAVE, vl_on_event, &g_state);
-    api->subscribe_event(host, COFFEE_EVENT_TEXT_HOVER, vl_on_event, &g_state);
-    api->subscribe_event(host, COFFEE_EVENT_SHUTDOWN, vl_on_event, &g_state);
-    api->register_tick(host, vl_on_tick, &g_state);
-
-    /* Publicar el servicio LSP para otras extensiones. */
-    g_state.svc.version = COFFEE_SVC_LSP_VERSION;
-    g_state.svc.is_ready = svc_is_ready;
-    g_state.svc.request = svc_request;
-    g_state.svc.server_path = svc_server_path;
-    g_state.svc.self = &g_state;
-    api->register_service(host, COFFEE_SVC_LSP_NAME, &g_state.svc);
-
-    /* Registrar el inspector del ecosistema: comandos que consultan los metodos
-     * "vesta/*" del servidor y vuelcan el resultado formateado al panel. */
-    insp_register_commands(&g_state);
 
     api->log(host, COFFEE_LOG_INFO, "extension vesta-lsp activada");
-    return 0;
+    return 0; /* la extension queda cargada; el IDE sigue usable */
 }
 
 COFFEE_EXTENSION_EXPORT void coffee_extension_unregister(CoffeeHost *host) {
@@ -2619,6 +2699,11 @@ COFFEE_EXTENSION_EXPORT void coffee_extension_unregister(CoffeeHost *host) {
     if (st->proc) {
         st->api->proc_kill(st->host, st->proc);
         st->proc = NULL;
+    }
+    /* Abortar la auto-instalacion si seguia en curso. */
+    if (st->install_proc) {
+        st->api->proc_kill(st->host, st->install_proc);
+        st->install_proc = NULL;
     }
     if (st->lsp) {
         lsp_destroy(st->lsp);
