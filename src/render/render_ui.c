@@ -1673,9 +1673,15 @@ void render_hover_popup(Editor *e) {
                 }
                 int sel_line = h->gb_sel_line; /* linea fijada al click */
 
-                /* Helper local de highlight de fila: bg si correla (hover o
-                 * fijada); barra de acento mas marcada si esta FIJADA. */
-                /* Columna fuente (sin scroll) -- con resaltado de sintaxis. */
+                /* Clipping por columna: el texto de cada columna se recorta a su
+                 * ancho para que NO se desborde/superponga con la de al lado. */
+                const int body_clip_h = body_rows * lh;
+                /* Columna fuente -- con resaltado de sintaxis. */
+                {
+                    SDL_Rect cs = {x + 1, body_top, sepx - (x + 1),
+                                   body_clip_h};
+                    SDL_SetRenderClipRect(r, &cs);
+                }
                 for (int i = 0; i < ns && i < body_rows; ++i) {
                     int yy = by + (hrows + i) * lh;
                     int ln = src[i].line;
@@ -1723,6 +1729,8 @@ void render_hover_popup(Editor *e) {
                  * agrupado que fuente/asm (run contiguo de la misma linea). */
                 if (col3) {
                     int irw = sep2x - (sepx + 1);
+                    SDL_Rect ci = {sepx + 1, body_top, irw, body_clip_h};
+                    SDL_SetRenderClipRect(r, &ci);
                     for (int i = 0; i < nirl && i < body_rows; ++i) {
                         int yy = by + (hrows + i) * lh;
                         if (irl[i].is_label) {
@@ -1766,6 +1774,11 @@ void render_hover_popup(Editor *e) {
                 /* Columna nativo (scrollable) -- con resaltado de sintaxis.
                  * `row` es la fila VISUAL (en modo IR=grupo se intercalan
                  * cabeceras IR, que tambien consumen filas). */
+                {
+                    SDL_Rect ca = {asm_sep + 1, body_top,
+                                   (x + w - 1) - (asm_sep + 1), body_clip_h};
+                    SDL_SetRenderClipRect(r, &ca);
+                }
                 int skip = h->scroll < 0 ? 0 : h->scroll;
                 int row = 0;
                 for (int q = 0; q < body_rows && q < HOVER_GB_ROWS; ++q)
@@ -2019,6 +2032,7 @@ void render_hover_popup(Editor *e) {
                     free(arw);
                 }
                 free(asml_vrow);
+                SDL_SetRenderClipRect(r, NULL); /* fin del clip de columnas */
 
                 /* Banda IR (modo panel=2): ops IR de la linea activa
                  * (fijada por click, o apuntada por el raton). */
