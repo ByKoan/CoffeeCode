@@ -37,8 +37,17 @@
 
 /* Ruta por defecto del servidor LSP de Vesta (compilado en el repo VestaVM).
  * El usuario la puede cambiar con el config "server_path" o la env var
- * VESTA_LSP_PATH. */
-#define VESTA_LSP_DEFAULT_PATH "F:/C/VM/cmake-build-debug/vesta_lsp.exe"
+ * VESTA_LSP_PATH.  NUNCA se hardcodea una ruta: se DESCUBRE buscando en env
+ * vars, PATH e instalaciones estandar (ver vl_resolve_server_path). */
+#if defined(_WIN32)
+#define VL_EXE_NAME "vesta_lsp.exe"
+#define VL_PATH_SEP ';'
+#define VL_DIR_SEP '\\'
+#else
+#define VL_EXE_NAME "vesta_lsp"
+#define VL_PATH_SEP ':'
+#define VL_DIR_SEP '/'
+#endif
 
 /* Identificadores de los canales del panel inferior. */
 #define VESTA_LSP_CHAN_LOG  "vesta-lsp"
@@ -2252,24 +2261,205 @@ static int svc_request(void *self, const char *method, const char *params_json,
 /* ------------------------------------------------------------------------- */
 
 /**
- * @brief Resuelve la ruta del ejecutable del servidor LSP.
+/** @brief true si @p p existe y es un fichero legible. */
+static int vl_file_exists(const char *p) {
+    if (!p || !p[0]) return 0;
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+/** @brief Une @p dir [+ @p sub] + @p exe; devuelve heap si el fichero existe,
+ *  o NULL.  @p sub puede ser NULL (p.ej. "<dir>/<exe>"). */
+static char *vl_try_join(const char *dir, const char *sub, const char *exe) {
+    if (!dir || !dir[0]) return NULL;
+    char buf[1024];
+    if (sub && sub[0])
+        snprintf(buf, sizeof buf, "%s%c%s%c%s", dir, VL_DIR_SEP, sub,
+                 VL_DIR_SEP, exe);
+    else
+        snprintf(buf, sizeof buf, "%s%c%s", dir, VL_DIR_SEP, exe);
+    return vl_file_exists(buf) ? vl_strdup(buf) : NULL;
+}
+
+/** @brief Busca @p exe en cada entrada de la variable PATH. */
+static char *vl_search_path_env(const char *exe) {
+    const char *path = getenv("PATH");
+    if (!path) return NULL;
+    const char *p = path;
+    char dir[1024];
+    while (*p) {
+        const char *sep = strchr(p, VL_PATH_SEP);
+        size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        if (len > 0 && len < sizeof dir) {
+            memcpy(dir, p, len);
+            dir[len] = 0;
+            char *r = vl_try_join(dir, NULL, exe);
+            if (r) return r;
+        }
+        if (!sep) break;
+        p = sep + 1;
+    }
+    return NULL;
+}
+
+/**
+ * @brief Resuelve la ruta del ejecutable del servidor LSP por DESCUBRIMIENTO.
  *
- * Orden: config "server_path" -> env var VESTA_LSP_PATH -> default.  Si la ruta
- * efectiva no estaba en el config, la persiste para que el usuario la vea y la
- * pueda editar.  Devuelve una cadena en heap (free por el llamante), o NULL.
+ * Orden (nunca hardcodea una ruta):
+ *   1. config "server_path" explicito (si el fichero existe).
+ *   2. env VESTA_LSP_PATH (fichero directo o carpeta que lo contenga).
+ *   3. env VESTA_HOME [+ /bin].
+ *   4. PATH (cada entrada).
+ *   5. instalaciones estandar del SO:
+ *      Windows: %ProgramFiles%\VestaVM[\bin], C:\Program Files\VestaVM[\bin],
+ *               %LOCALAPPDATA%\VestaVM, %APPDATA%\VestaVM, %USERPROFILE%\VestaVM.
+ *      POSIX:   /usr/local/bin, /usr/local/share/vesta, ~/.local/share/vesta.
+ * Persiste la ruta hallada en el config.  Devuelve heap (free por el llamante)
+ * o NULL si no se encontro (el caller informa + puede ofrecer auto-descarga).
  */
 static char *vl_resolve_server_path(VlState *st) {
-    const char *cfg = st->api->get_config(st->host, "server_path");
-    if (cfg && cfg[0]) return vl_strdup(cfg);
+    char *r = NULL;
+    const char *exe = VL_EXE_NAME;
 
+    /* 1. config explicito. */
+    const char *cfg = st->api->get_config(st->host, "server_path");
+    if (cfg && cfg[0] && vl_file_exists(cfg)) return vl_strdup(cfg);
+
+    /* 2. VESTA_LSP_PATH: fichero directo o carpeta. */
     const char *env = getenv("VESTA_LSP_PATH");
     if (env && env[0]) {
-        st->api->set_config(st->host, "server_path", env);
-        return vl_strdup(env);
+        if (vl_file_exists(env))
+            r = vl_strdup(env);
+        else
+            r = vl_try_join(env, NULL, exe);
+        if (r) goto found;
     }
 
-    st->api->set_config(st->host, "server_path", VESTA_LSP_DEFAULT_PATH);
-    return vl_strdup(VESTA_LSP_DEFAULT_PATH);
+    /* 3. VESTA_HOME [+ bin]. */
+    const char *vh = getenv("VESTA_HOME");
+    if (vh && ((r = vl_try_join(vh, NULL, exe)) ||
+               (r = vl_try_join(vh, "bin", exe))))
+        goto found;
+
+    /* 4. PATH. */
+    if ((r = vl_search_path_env(exe))) goto found;
+
+    /* 5. instalaciones estandar. */
+#if defined(_WIN32)
+    const char *pf = getenv("ProgramFiles");
+    if (pf && ((r = vl_try_join(pf, "VestaVM", exe)) ||
+               (r = vl_try_join(pf, "VestaVM\\bin", exe))))
+        goto found;
+    if ((r = vl_try_join("C:\\Program Files\\VestaVM", NULL, exe)) ||
+        (r = vl_try_join("C:\\Program Files\\VestaVM", "bin", exe)))
+        goto found;
+    const char *la = getenv("LOCALAPPDATA");
+    if (la && ((r = vl_try_join(la, "VestaVM", exe)) ||
+               (r = vl_try_join(la, "VestaVM\\bin", exe)) ||
+               (r = vl_try_join(la, "VestaVM\\build", exe)) ||
+               (r = vl_try_join(la, "VestaVM\\src\\build", exe))))
+        goto found;
+    const char *ad = getenv("APPDATA");
+    if (ad && (r = vl_try_join(ad, "VestaVM", exe))) goto found;
+    const char *up = getenv("USERPROFILE");
+    if (up && (r = vl_try_join(up, "VestaVM", exe))) goto found;
+#else
+    if ((r = vl_try_join("/usr/local/bin", NULL, exe)) ||
+        (r = vl_try_join("/usr/local/share/vesta", NULL, exe)) ||
+        (r = vl_try_join("/usr/local/share/vesta/bin", NULL, exe)))
+        goto found;
+    const char *home = getenv("HOME");
+    if (home && ((r = vl_try_join(home, ".local/share/vesta", exe)) ||
+                 (r = vl_try_join(home, ".local/share/vesta/bin", exe)) ||
+                 (r = vl_try_join(home, ".local/share/vesta/build", exe)) ||
+                 (r = vl_try_join(home, ".local/share/vesta/src/build", exe))))
+        goto found;
+#endif
+    return NULL; /* no encontrado */
+
+found:
+    st->api->set_config(st->host, "server_path", r);
+    return r;
+}
+
+/** @brief Carpeta de instalacion estandar para VestaVM (auto-instalacion). */
+static void vl_install_dir(char *out, size_t n) {
+#if defined(_WIN32)
+    const char *la = getenv("LOCALAPPDATA");
+    snprintf(out, n, "%s%cVestaVM", (la && la[0]) ? la : ".", VL_DIR_SEP);
+#else
+    const char *home = getenv("HOME");
+    snprintf(out, n, "%s/.local/share/vesta", (home && home[0]) ? home : ".");
+#endif
+}
+
+/**
+ * @brief Intenta auto-instalar VestaVM desde GitHub a la carpeta estandar.
+ *
+ * Opt-in (no congela el arranque por defecto): se activa solo si hay
+ *   - "download_url" (config) / env VESTA_LSP_DOWNLOAD_URL -> release prebuilt
+ *     (.zip) que se descarga y descomprime; o
+ *   - "vesta_repo"  (config) / env VESTA_REPO -> repo git que se clona y
+ *     compila (requiere git + cmake + compilador).
+ * Bloqueante (paso de setup unico).  Devuelve 1 si instalo algo (el caller
+ * re-resuelve la ruta), 0 si no habia forma de auto-instalar.
+ */
+static int vl_try_autoinstall(VlState *st) {
+    char dir[1024];
+    vl_install_dir(dir, sizeof dir);
+    const char *url = st->api->get_config(st->host, "download_url");
+    if (!url || !url[0]) url = getenv("VESTA_LSP_DOWNLOAD_URL");
+    const char *repo = st->api->get_config(st->host, "vesta_repo");
+    if (!repo || !repo[0]) repo = getenv("VESTA_REPO");
+    char cmd[4096];
+
+    if (url && url[0]) {
+        st->api->channel_append(
+            st->host, VESTA_LSP_CHAN_LOG,
+            "[vesta-lsp] descargando VestaVM (release) desde GitHub...\n");
+#if defined(_WIN32)
+        snprintf(cmd, sizeof cmd,
+                 "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+                 "$d='%s'; New-Item -ItemType Directory -Force $d | Out-Null; "
+                 "$z=Join-Path $d 'vesta.zip'; "
+                 "Invoke-WebRequest -Uri '%s' -OutFile $z; "
+                 "Expand-Archive -Force $z $d\"",
+                 dir, url);
+#else
+        snprintf(cmd, sizeof cmd,
+                 "mkdir -p '%s' && curl -fL '%s' -o '%s/vesta.zip' && "
+                 "unzip -o '%s/vesta.zip' -d '%s'",
+                 dir, url, dir, dir, dir);
+#endif
+        return system(cmd) == 0;
+    }
+
+    if (repo && repo[0]) {
+        st->api->channel_append(
+            st->host, VESTA_LSP_CHAN_LOG,
+            "[vesta-lsp] clonando y compilando VestaVM desde GitHub "
+            "(puede tardar)...\n");
+#if defined(_WIN32)
+        snprintf(cmd, sizeof cmd,
+                 "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+                 "$d='%s'; git clone --depth 1 '%s' \"$d\\src\"; "
+                 "cmake -S \"$d\\src\" -B \"$d\\build\" "
+                 "-DCMAKE_BUILD_TYPE=Release; "
+                 "cmake --build \"$d\\build\" --target vesta_lsp\"",
+                 dir, repo);
+#else
+        snprintf(cmd, sizeof cmd,
+                 "git clone --depth 1 '%s' '%s/src' && "
+                 "cmake -S '%s/src' -B '%s/build' -DCMAKE_BUILD_TYPE=Release && "
+                 "cmake --build '%s/build' --target vesta_lsp",
+                 repo, dir, dir, dir, dir);
+#endif
+        return system(cmd) == 0;
+    }
+
+    return 0; /* nada configurado -> el caller muestra la guia manual */
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2292,13 +2482,30 @@ COFFEE_EXTENSION_EXPORT int coffee_extension_register(CoffeeHost *host,
     api->register_output_channel(host, VESTA_LSP_CHAN_LOG, "Vesta LSP");
     api->register_output_channel(host, VESTA_LSP_CHAN_PROB, "Problemas");
 
-    /* Resolver la ruta del servidor (config / env / default). */
+    /* Resolver la ruta del servidor por descubrimiento (config/env/PATH/
+     * instalaciones estandar).  Si falla, intentar auto-instalar desde GitHub
+     * (si hay URL configurada) y reintentar. */
     g_state.server_path = vl_resolve_server_path(&g_state);
     if (!g_state.server_path) {
-        api->channel_append(host, VESTA_LSP_CHAN_LOG,
-                            "\x1b[31m[vesta-lsp] sin memoria al resolver la ruta"
-                            "\x1b[0m\n");
-        api->log(host, COFFEE_LOG_ERROR, "vesta-lsp: sin memoria");
+        if (vl_try_autoinstall(&g_state))
+            g_state.server_path = vl_resolve_server_path(&g_state);
+    }
+    if (!g_state.server_path) {
+        api->channel_append(
+            host, VESTA_LSP_CHAN_LOG,
+            "\x1b[33m[vesta-lsp] no se encontro 'vesta_lsp' (servidor de Vex).\n"
+            "  Busque en: VESTA_LSP_PATH, VESTA_HOME, PATH, "
+#if defined(_WIN32)
+            "%ProgramFiles%/VestaVM, %LOCALAPPDATA%/VestaVM, %APPDATA%/VestaVM, "
+            "%USERPROFILE%/VestaVM.\n"
+#else
+            "/usr/local/bin, /usr/local/share/vesta, ~/.local/share/vesta.\n"
+#endif
+            "  Instala VestaVM o define VESTA_LSP_PATH, o configura "
+            "'download_url' para auto-instalar desde GitHub.\x1b[0m\n");
+        api->log(host, COFFEE_LOG_ERROR,
+                 "vesta-lsp: no se encontro vesta_lsp");
+        api->set_status(host, "vesta-lsp: servidor no disponible");
         return 0; /* inactiva pero no tumba el IDE */
     }
 
