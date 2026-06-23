@@ -1497,7 +1497,13 @@ void render_hover_popup(Editor *e) {
                 }
                 /* Layout: canalon de flechas (gw columnas) entre el prefijo
                  * (Lnnn[+offset]) y el codigo, solo si hay flechas. */
-                int gw = (narw > 0 && e->settings.hover_arrows) ? 4 : 0;
+                /* En modo IR=grupo se intercalan cabeceras IR que desplazan las
+                 * filas; las flechas (que asumen 1 fila por asm) se desactivan
+                 * para no desalinearse. */
+                int gw = (narw > 0 && e->settings.hover_arrows &&
+                          e->settings.hover_ir_mode != 1)
+                             ? 4
+                             : 0;
                 int code_col = (is_native ? 11 : 5) + gw; /* col. del codigo */
                 int gx = asm_x + (is_native ? 11 : 5) * cw; /* base del canalon */
 
@@ -1618,12 +1624,33 @@ void render_hover_popup(Editor *e) {
                     if (i + 1 > h->gb_left_n) h->gb_left_n = i + 1;
                 }
 
-                /* Columna nativo (scrollable) -- con resaltado de sintaxis. */
+                /* Columna nativo (scrollable) -- con resaltado de sintaxis.
+                 * `row` es la fila VISUAL (en modo IR=grupo se intercalan
+                 * cabeceras IR, que tambien consumen filas). */
                 int skip = h->scroll < 0 ? 0 : h->scroll;
                 int row = 0;
-                for (int i = skip; i < na && row < body_rows; ++i, ++row) {
-                    int yy = by + (hrows + row) * lh;
+                int grp = (e->settings.hover_ir_mode == 1);
+                int prev_grp_line = -1;
+                for (int i = skip; i < na && row < body_rows; ++i) {
                     int ln = asml[i].line;
+                    /* Modo IR=grupo: cabecera(s) IR antes del 1er asm de cada
+                     * grupo de linea. */
+                    if (grp && ln != 0 && ln != prev_grp_line) {
+                        prev_grp_line = ln;
+                        for (int q = 0; q < nir && row < body_rows; ++q) {
+                            if (irr[q].line != ln) continue;
+                            int hyy = by + (hrows + row) * lh;
+                            draw_text(e, "IR", asm_x, hyy, 0x70, 0x82, 0x70);
+                            draw_code_line(e, irr[q].text,
+                                           (int)strlen(irr[q].text),
+                                           asm_x + 3 * cw, hyy);
+                            if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
+                            h->gb_right_n = row + 1;
+                            ++row;
+                        }
+                        if (row >= body_rows) break;
+                    }
+                    int yy = by + (hrows + row) * lh;
                     int is_sel = (ln != 0 && ln == sel_line);
                     int is_hov = (ln != 0 && ln == hover_line);
                     int rw = (x + w - 1) - (sepx + 1);
@@ -1670,13 +1697,15 @@ void render_hover_popup(Editor *e) {
                                        code_x, yy);
                     if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                     h->gb_right_n = row + 1;
+                    ++row;
                 }
 
                 /* --- Dibujar flechas de salto (construidas arriba) ---------
                  * Conector vertical en el canalon desde el salto hasta su
                  * destino, con cabeza de flecha; acento si el salto o el
                  * destino estan en la linea .vex apuntada/fijada. */
-                if (arw && e->settings.hover_arrows) {
+                if (arw && e->settings.hover_arrows &&
+                    e->settings.hover_ir_mode != 1) {
                     for (int a = 0; a < narw; ++a) {
                         int fr = arw[a].from, to = arw[a].to;
                         int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;
