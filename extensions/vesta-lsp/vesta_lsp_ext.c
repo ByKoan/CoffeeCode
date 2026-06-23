@@ -2513,7 +2513,12 @@ static int vl_start_autoinstall(VlState *st) {
             "'C:\\msys64\\mingw64\\bin','C:\\ProgramData\\mingw64\\mingw64\\bin')"
             " { if (Test-Path (Join-Path $m 'gcc.exe')) "
             "{ $env:PATH=$m+';'+$env:PATH; break } } "
-            "git clone --depth 1 --recurse-submodules --branch $br $repo $s; "
+            /* Forzar colores ANSI aunque stdout sea un pipe (el canal del IDE
+             * los renderiza): cmake (CLICOLOR_FORCE), gcc via cmake
+             * (CMAKE_COLOR_DIAGNOSTICS) y git (color.ui=always). */
+            "$env:CLICOLOR_FORCE='1'; $env:CMAKE_COLOR_DIAGNOSTICS='ON'; "
+            "git -c color.ui=always clone --depth 1 --recurse-submodules "
+            "--branch $br $repo $s; "
             "cmake -S $s -B $b -G 'MinGW Makefiles' "
             "-DCMAKE_BUILD_TYPE=Release; "
             "cmake --build $b --target vesta_lsp } "
@@ -2537,10 +2542,11 @@ static int vl_start_autoinstall(VlState *st) {
                  dir, url, url);
     else
         snprintf(script, sizeof script,
-                 "set -e; d='%s'; repo='%s'; br='%s'; mkdir -p \"$d\"; "
+                 "set -e; export CLICOLOR_FORCE=1 CMAKE_COLOR_DIAGNOSTICS=ON; "
+                 "d='%s'; repo='%s'; br='%s'; mkdir -p \"$d\"; "
                  "rm -rf \"$d/src\" \"$d/build\"; "
                  "echo '[install] clonando + compilando...'; "
-                 "git clone --depth 1 --recurse-submodules "
+                 "git -c color.ui=always clone --depth 1 --recurse-submodules "
                  "--branch \"$br\" \"$repo\" \"$d/src\"; "
                  "cmake -S \"$d/src\" -B \"$d/build\" "
                  "-DCMAKE_BUILD_TYPE=Release; "

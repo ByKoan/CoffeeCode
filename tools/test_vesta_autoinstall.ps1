@@ -23,9 +23,12 @@ try {
         if (Test-Path (Join-Path $m 'gcc.exe')) { $env:PATH = $m + ';' + $env:PATH; Write-Host "[test] MinGW: $m"; break }
     }
 
+    # --- forzar colores ANSI aunque stdout sea pipe (igual que la extension) ---
+    $env:CLICOLOR_FORCE = '1'; $env:CMAKE_COLOR_DIAGNOSTICS = 'ON'
+
     # --- clone recursivo (sin --shallow-submodules) ---
     Write-Host "[test] clonando $repo ($br) con submodulos..."
-    git clone --depth 1 --recurse-submodules --branch $br $repo $s
+    git -c color.ui=always clone --depth 1 --recurse-submodules --branch $br $repo $s
     if ($LASTEXITCODE -ne 0) { Write-Host "[test] FALLO: git clone exit $LASTEXITCODE"; $fail = 1 }
 
     # --- validar que los submodulos con CMakeLists existen (lo que fallaba) ---
@@ -51,11 +54,16 @@ try {
 
     if ($fail -eq 0 -and $Build) {
         Write-Host "[test] cmake build --target vesta_lsp (lento)..."
-        cmake --build $b --target vesta_lsp
+        # Capturar para comprobar que la salida lleva codigos de color ANSI.
+        $out = (cmake --build $b --target vesta_lsp 2>&1 | Out-String)
+        Write-Host $out
         if ($LASTEXITCODE -ne 0) { Write-Host "[test] FALLO: build exit $LASTEXITCODE"; $fail = 1 }
         $exe = Join-Path $b 'vesta_lsp.exe'
         if (Test-Path $exe) { Write-Host "[test]   OK binario: $exe" }
         else { Write-Host "[test]   FALTA vesta_lsp.exe"; $fail = 1 }
+        $esc = [char]27
+        if ($out.Contains($esc)) { Write-Host "[test]   OK colores ANSI presentes en la salida del build" }
+        else { Write-Host "[test]   AVISO: sin codigos ANSI en la salida (sin warnings/errores que colorear?)" }
     }
 }
 catch {
