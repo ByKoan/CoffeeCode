@@ -1348,11 +1348,16 @@ void render_hover_popup(Editor *e) {
             IrRow *irr = (IrRow *)malloc(sizeof(IrRow) * cap);
             IrRow *jrr = (IrRow *)malloc(sizeof(IrRow) * cap); /* mapa exacto: line=id */
             IrlRow *irl = (IrlRow *)malloc(sizeof(IrlRow) * cap); /* listado IR */
+            typedef struct {
+                const char *addr;
+                const char *name;
+            } AslRow; /* etiqueta interna de inline-asm: addr (hex) -> nombre */
+            AslRow *asl = (AslRow *)malloc(sizeof(AslRow) * cap);
             /* Nombres de bloque por indice (etiquetas que dividen el asm). */
             const char **blkname = (const char **)calloc(cap, sizeof(char *));
-            int ns = 0, na = 0, nf = 0, nir = 0, njr = 0, nirl = 0;
+            int ns = 0, na = 0, nf = 0, nir = 0, njr = 0, nirl = 0, nasl = 0;
             const char *hdr = NULL;
-            if (src && asml && frm && irr && jrr && irl && blkname) {
+            if (src && asml && frm && irr && jrr && irl && asl && blkname) {
                 char *p = strchr(cp, '\n');
                 p = p ? p + 1 : cp; /* saltar el sentinela */
                 while (*p) {
@@ -1419,6 +1424,11 @@ void render_hover_popup(Editor *e) {
                             irl[nirl].line = c2 ? atoi(c2) : 0;
                             irl[nirl].text = c3 ? c3 : "";
                             ++nirl;
+                        } else if (kind == 'C') {
+                            /* C\x1f offset(hex) \x1f nombre (etiqueta asm) */
+                            asl[nasl].addr = c1 ? c1 : "";
+                            asl[nasl].name = c2 ? c2 : "";
+                            ++nasl;
                         }
                     }
                     if (!nl) break;
@@ -1800,6 +1810,26 @@ void render_hover_popup(Editor *e) {
                             }
                         }
                     }
+                    /* Etiqueta interna de inline-asm: si esta instruccion
+                     * empieza en el offset de una etiqueta del asm, dibujarla
+                     * como divisor (recupera .loop/.chunk/... del asm). */
+                    if (nasl > 0 && asml[i].a && asml[i].a[0]) {
+                        for (int q = 0; q < nasl; ++q) {
+                            if (strcmp(asl[q].addr, asml[i].a) != 0) continue;
+                            if (row >= body_rows) break;
+                            int ayy = by + (hrows + row) * lh;
+                            draw_text(e, asl[q].name, asm_x + code_col * cw, ayy,
+                                      0xC8, 0xA0, 0x66);
+                            set_color(r, 0x44, 0x40, 0x38, 0xFF);
+                            fill_rect(r, asm_sep + 1, ayy + lh - 2,
+                                      (x + w - 1) - (asm_sep + 1), 1);
+                            if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
+                            h->gb_right_n = row + 1;
+                            ++row;
+                            break;
+                        }
+                        if (row >= body_rows) break;
+                    }
                     /* Modo IR=grupo: cabecera(s) IR antes del 1er asm de cada
                      * grupo de linea. */
                     if (grp && ln != 0 && ln != prev_grp_line) {
@@ -2033,6 +2063,7 @@ void render_hover_popup(Editor *e) {
             free(irr);
             free(jrr);
             free(irl);
+            free(asl);
             free(blkname);
             free(cp);
         }

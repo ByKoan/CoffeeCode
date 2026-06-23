@@ -1914,6 +1914,13 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                 cJSON_ArrayForEach(ent, jirl)
                     cap += strlen(insp_str(ent, "text", "")) + 28;
             }
+            cJSON *jasl =
+                cJSON_GetObjectItemCaseSensitive(result, "asm_labels");
+            if (cJSON_IsArray(jasl)) {
+                cJSON *al = NULL;
+                cJSON_ArrayForEach(al, jasl)
+                    cap += strlen(insp_str(al, "name", "")) + 16;
+            }
             char *gb = (char *)malloc(cap);
             if (gb) {
                 int o = 0;
@@ -1999,6 +2006,14 @@ static void vl_on_hover_tab(void *ud, cJSON *result, cJSON *error) {
                                       insp_num(ent, "line", 0),
                                       insp_str(ent, "text", ""));
                     }
+                }
+                /* Etiquetas internas de inline-asm: C\x1f<offset>\x1f<nombre> */
+                if (cJSON_IsArray(jasl)) {
+                    cJSON *al = NULL;
+                    cJSON_ArrayForEach(al, jasl)
+                        o += snprintf(gb + o, cap - o, "C\x1f%s\x1f%s\n",
+                                      insp_str(al, "offset", ""),
+                                      insp_str(al, "name", ""));
                 }
                 st->api->set_hover_tab(st->host, rq->tab, gb);
                 free(gb);
