@@ -1456,8 +1456,13 @@ void render_hover_popup(Editor *e) {
                     if (src_cols < 6) src_cols = 6;
                     int rest = avail - src_cols - 4; /* -4 separadores */
                     if (rest < 8) rest = 8;
-                    ir_cols = rest * 45 / 100;
+                    int sp2 = h->gb_split2_pct;
+                    if (sp2 <= 0) sp2 = 45; /* default: IR ~45% del resto */
+                    if (sp2 < 15) sp2 = 15;
+                    if (sp2 > 80) sp2 = 80;
+                    ir_cols = rest * sp2 / 100;
                     if (ir_cols < 6) ir_cols = 6;
+                    if (ir_cols > rest - 6) ir_cols = rest - 6;
                     sepx = body_x + src_cols * cw + cw / 2;
                     ir_x = body_x + (src_cols + 2) * cw;
                     sep2x = ir_x + ir_cols * cw + cw / 2;
@@ -1596,6 +1601,7 @@ void render_hover_popup(Editor *e) {
                  * select de linea + arrastre del separador). */
                 h->gb_active = 1;
                 h->gb_sepx = sepx;
+                h->gb_sep2x = col3 ? sep2x : -1;
                 h->gb_body_top = body_top;
                 h->gb_lh = lh;
                 h->gb_left_n = 0;
@@ -1651,27 +1657,37 @@ void render_hover_popup(Editor *e) {
                           body_h - 2);
                 /* 2o separador (modo 3col) entre la columna IR y la asm. */
                 if (col3) {
-                    set_color_c(r, e->theme.col_tabbar_sep);
-                    fill_rect(r, sep2x, body_y0, 1, body_h - 2);
+                    set_color_c(r, h->gb_split2_drag ? e->theme.col_tab_accent
+                                                     : e->theme.col_tabbar_sep);
+                    fill_rect(r, sep2x, body_y0, h->gb_split2_drag ? 2 : 1,
+                              body_h - 2);
                 }
 
+                /* Scroll UNIFICADO: las tres columnas usan el mismo desplazamiento
+                 * (h->scroll) -> bajan juntas. */
+                int skip = h->scroll < 0 ? 0 : h->scroll;
                 /* Linea .vex bajo el raton (hover, en cualquier columna). */
                 int hover_line = -1;
                 if (h->last_mx >= x && h->last_mx < x + w &&
                     h->last_my >= body_top && h->last_my < y + hh) {
                     int vr = (h->last_my - body_top) / lh;
                     if (h->last_mx < sepx) {
-                        if (vr >= 0 && vr < ns) hover_line = src[vr].line;
+                        int si = skip + vr;
+                        if (si >= 0 && si < ns) hover_line = src[si].line;
                     } else if (col3 && h->last_mx < sep2x) {
                         /* columna IR central: listado ordenado (etiquetas+ops) */
-                        if (vr >= 0 && vr < nirl && !irl[vr].is_label)
-                            hover_line = irl[vr].line;
+                        int ii = skip + vr;
+                        if (ii >= 0 && ii < nirl && !irl[ii].is_label)
+                            hover_line = irl[ii].line;
                     } else {
-                        int ai = (h->scroll < 0 ? 0 : h->scroll) + vr;
+                        int ai = skip + vr;
                         if (ai >= 0 && ai < na) hover_line = asml[ai].line;
                     }
                 }
                 int sel_line = h->gb_sel_line; /* linea fijada al click */
+                /* Limpiar el buffer de copia (lo rellena la columna activa). */
+                for (int q = 0; q < body_rows && q < HOVER_GB_ROWS; ++q)
+                    h->gb_rowtext[q][0] = 0;
 
                 /* Clipping por columna: el texto de cada columna se recorta a su
                  * ancho para que NO se desborde/superponga con la de al lado. */
@@ -1682,20 +1698,26 @@ void render_hover_popup(Editor *e) {
                                    body_clip_h};
                     SDL_SetRenderClipRect(r, &cs);
                 }
-                for (int i = 0; i < ns && i < body_rows; ++i) {
+                h->gb_left_n = 0;
+                for (int i = 0; i < body_rows; ++i) {
+                    int si = skip + i;
+                    if (si >= ns) break;
                     int yy = by + (hrows + i) * lh;
-                    int ln = src[i].line;
+                    int ln = src[si].line;
                     int is_sel = (ln != 0 && ln == sel_line);
                     int is_hov = (ln != 0 && ln == hover_line);
-                    /* Caja AGRUPADA: una sola caja alrededor del run contiguo
-                     * de filas con la misma linea (no una cajita por fila). */
+                    int rw = sepx - (x + 1);
+                    /* Seleccion por arrastre en esta columna (col 0). */
+                    if (h->gb_sel_col == 0 && h->gb_sel_r0 >= 0 &&
+                        i >= h->gb_sel_r0 && i <= h->gb_sel_r1) {
+                        set_color(r, 0x2E, 0x48, 0x6E, 0xFF);
+                        fill_rect(r, x + 1, yy - 1, rw, lh);
+                    }
+                    /* Caja AGRUPADA: una sola caja alrededor del run contiguo. */
                     if (is_sel || is_hov) {
                         int bl = is_sel ? sel_line : hover_line;
-                        int prev = (i > 0) ? src[i - 1].line : -999;
-                        int next = (i + 1 < ns && i + 1 < body_rows)
-                                       ? src[i + 1].line
-                                       : -999;
-                        int rw = sepx - (x + 1);
+                        int prev = (si > 0) ? src[si - 1].line : -999;
+                        int next = (si + 1 < ns) ? src[si + 1].line : -999;
                         if (is_sel) { /* fondo solido (texto nitido) */
                             set_color_c(r, e->theme.col_tab_active);
                             fill_rect(r, x + 1, yy - 1, rw, lh);
@@ -1711,17 +1733,14 @@ void render_hover_popup(Editor *e) {
                     char pre[16];
                     snprintf(pre, sizeof pre, "L%-4d", ln);
                     draw_text(e, pre, body_x, yy, 0x6C, 0xB0, 0xE0);
-                    char tb[1024];
-                    int tc = (int)strlen(src[i].a);
-                    int lim = src_cols - 5;
-                    if (lim < 0) lim = 0;
-                    if (tc > lim) tc = lim;
-                    if (tc > 1023) tc = 1023;
-                    memcpy(tb, src[i].a, tc);
-                    tb[tc] = 0;
-                    draw_code_line(e, tb, tc, body_x + 5 * cw, yy);
+                    draw_code_line(e, src[si].a, (int)strlen(src[si].a),
+                                   body_x + 5 * cw, yy);
                     if (i < HOVER_GB_ROWS) h->gb_left_lines[i] = ln;
-                    if (i + 1 > h->gb_left_n) h->gb_left_n = i + 1;
+                    h->gb_left_n = i + 1;
+                    /* Captura para copiar si la seleccion es de esta columna. */
+                    if (h->gb_sel_col == 0 && i < HOVER_GB_ROWS)
+                        snprintf(h->gb_rowtext[i], sizeof h->gb_rowtext[i], "%s",
+                                 src[si].a ? src[si].a : "");
                 }
 
                 /* Columna IR central (modo 3col): listado ordenado con
@@ -1731,27 +1750,38 @@ void render_hover_popup(Editor *e) {
                     int irw = sep2x - (sepx + 1);
                     SDL_Rect ci = {sepx + 1, body_top, irw, body_clip_h};
                     SDL_SetRenderClipRect(r, &ci);
-                    for (int i = 0; i < nirl && i < body_rows; ++i) {
+                    for (int i = 0; i < body_rows; ++i) {
+                        int ii = skip + i;
+                        if (ii >= nirl) break;
                         int yy = by + (hrows + i) * lh;
-                        if (irl[i].is_label) {
+                        /* Seleccion por arrastre en esta columna (col 1). */
+                        if (h->gb_sel_col == 1 && h->gb_sel_r0 >= 0 &&
+                            i >= h->gb_sel_r0 && i <= h->gb_sel_r1) {
+                            set_color(r, 0x2E, 0x48, 0x6E, 0xFF);
+                            fill_rect(r, sepx + 1, yy - 1, irw, lh);
+                        }
+                        /* Captura para copiar (si la seleccion es de esta col). */
+                        if (h->gb_sel_col == 1 && i < HOVER_GB_ROWS)
+                            snprintf(h->gb_rowtext[i], sizeof h->gb_rowtext[i],
+                                     "%s", irl[ii].text ? irl[ii].text : "");
+                        if (irl[ii].is_label) {
                             char lbl[96];
-                            snprintf(lbl, sizeof lbl, "%s:", irl[i].text);
+                            snprintf(lbl, sizeof lbl, "%s:", irl[ii].text);
                             draw_text(e, lbl, ir_x, yy, 0xC8, 0xA0, 0x66);
                             set_color(r, 0x44, 0x40, 0x38, 0xFF);
                             fill_rect(r, sepx + 1, yy + lh - 2, irw, 1);
                             continue;
                         }
-                        int ln = irl[i].line;
+                        int ln = irl[ii].line;
                         int is_sel = (ln != 0 && ln == sel_line);
                         int is_hov = (ln != 0 && ln == hover_line);
                         if (is_sel || is_hov) {
                             int bl = is_sel ? sel_line : hover_line;
-                            int prev = (i > 0 && !irl[i - 1].is_label)
-                                           ? irl[i - 1].line
+                            int prev = (ii > 0 && !irl[ii - 1].is_label)
+                                           ? irl[ii - 1].line
                                            : -999;
-                            int next = (i + 1 < nirl && i + 1 < body_rows &&
-                                        !irl[i + 1].is_label)
-                                           ? irl[i + 1].line
+                            int next = (ii + 1 < nirl && !irl[ii + 1].is_label)
+                                           ? irl[ii + 1].line
                                            : -999;
                             if (is_sel) {
                                 set_color_c(r, e->theme.col_tab_active);
@@ -1766,7 +1796,7 @@ void render_hover_popup(Editor *e) {
                                     fill_rect(r, sepx + 1, yy + lh - 2, irw, 1);
                             }
                         }
-                        draw_code_line(e, irl[i].text, (int)strlen(irl[i].text),
+                        draw_code_line(e, irl[ii].text, (int)strlen(irl[ii].text),
                                        ir_x, yy);
                     }
                 }
@@ -1779,10 +1809,7 @@ void render_hover_popup(Editor *e) {
                                    (x + w - 1) - (asm_sep + 1), body_clip_h};
                     SDL_SetRenderClipRect(r, &ca);
                 }
-                int skip = h->scroll < 0 ? 0 : h->scroll;
                 int row = 0;
-                for (int q = 0; q < body_rows && q < HOVER_GB_ROWS; ++q)
-                    h->gb_rowtext[q][0] = 0; /* limpiar para la copia */
                 int grp = (e->settings.hover_ir_mode == 1);
                 int exa = (e->settings.hover_ir_mode == 4);
                 int prev_grp_line = -1;
@@ -1904,10 +1931,10 @@ void render_hover_popup(Editor *e) {
                     int is_hov = (ln != 0 && ln == hover_line);
                     int rw = (x + w - 1) - (asm_sep + 1);
                     /* Seleccion por arrastre (estilo terminal): fondo de
-                     * seleccion sobre las filas del rango; el texto se dibuja
-                     * encima. */
-                    if (h->gb_sel_r0 >= 0 && row >= h->gb_sel_r0 &&
-                        row <= h->gb_sel_r1) {
+                     * seleccion sobre las filas del rango (solo si la seleccion
+                     * es de ESTA columna, la asm=2); el texto se dibuja encima. */
+                    if (h->gb_sel_col == 2 && h->gb_sel_r0 >= 0 &&
+                        row >= h->gb_sel_r0 && row <= h->gb_sel_r1) {
                         set_color(r, 0x2E, 0x48, 0x6E, 0xFF);
                         fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
                     } else if ((grp || exa) && ir_par && !is_sel) {
@@ -1915,8 +1942,9 @@ void render_hover_popup(Editor *e) {
                         set_color(r, 0x26, 0x2B, 0x35, 0xFF);
                         fill_rect(r, asm_sep + 1, yy - 1, rw, lh);
                     }
-                    /* Guardar el texto plano de esta fila visual para copiar. */
-                    if (row < HOVER_GB_ROWS) {
+                    /* Guardar el texto de la fila para copiar (si la seleccion
+                     * es de la columna asm). */
+                    if (h->gb_sel_col == 2 && row < HOVER_GB_ROWS) {
                         snprintf(h->gb_rowtext[row], sizeof h->gb_rowtext[row],
                                  "%s", asml[i].b ? asml[i].b : "");
                     }

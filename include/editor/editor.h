@@ -174,11 +174,15 @@ typedef struct HoverPopup {
     /* -- Seleccion de texto por arrastre (estilo terminal) en la vista
      * godbolt: arrastrar selecciona un rango de FILAS visibles de la columna
      * asm; Ctrl+C copia su texto. -- */
-    char gb_rowtext[HOVER_GB_ROWS][200]; /* texto plano de cada fila visual asm */
+    char gb_rowtext[HOVER_GB_ROWS][200]; /* texto plano de la columna activa */
     int gb_sel_r0, gb_sel_r1; /* rango de filas seleccionado (-1 = ninguno) */
+    int gb_sel_col;           /* columna de la seleccion: 0=fuente 1=IR 2=asm */
     int gb_seldrag;           /* 1 = arrastrando una seleccion */
     int gb_down_x, gb_down_y; /* pos del mousedown (deteccion click vs drag) */
     int gb_down_row;          /* fila visual del mousedown (ancla) */
+    int gb_sep2x;             /* x (px) del 2o separador (3col: IR|asm) */
+    int gb_split2_drag;       /* 1 = arrastrando el 2o separador */
+    int gb_split2_pct;        /* % del ancho de la col. IR (3col); 0 = default */
 } HoverPopup;
 
 /* -- Estado global del editor --------------------------------------------- */

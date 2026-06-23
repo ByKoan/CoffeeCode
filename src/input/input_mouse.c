@@ -809,6 +809,19 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
             e->needs_redraw = 1;
             return;
         }
+        /* 2o separador (3col): el % es de la columna IR dentro del espacio
+         * tras la columna fuente (entre sepx y el borde derecho). */
+        if (hv->visible && hv->gb_split2_drag && hv->gb_sep2x > 0) {
+            int restpx = (hv->rect_x + hv->rect_w - 8) - hv->gb_sepx;
+            if (restpx < 1) restpx = 1;
+            int rel = mouse_x - hv->gb_sepx;
+            int pct = rel * 100 / restpx;
+            if (pct < 15) pct = 15;
+            if (pct > 80) pct = 80;
+            hv->gb_split2_pct = pct;
+            e->needs_redraw = 1;
+            return;
+        }
         /* Seleccion por arrastre (estilo terminal) en la vista godbolt: si el
          * boton izq esta pulsado y el mousedown empezo en el cuerpo, extender
          * la seleccion de filas desde el ancla hasta la fila actual. */
@@ -1899,6 +1912,12 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
                     e->needs_redraw = 1;
                     return;
                 }
+                if (h->gb_sep2x > 0 && mx >= h->gb_sep2x - 4 &&
+                    mx <= h->gb_sep2x + 4) {
+                    h->gb_split2_drag = 1; /* 2o separador (IR|asm) */
+                    e->needs_redraw = 1;
+                    return;
+                }
                 if (h->gb_lh > 0 && my >= h->gb_body_top) {
                     int vr = (my - h->gb_body_top) / h->gb_lh;
                     /* Mousedown en el cuerpo: registrar ancla para distinguir
@@ -1909,6 +1928,13 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
                     h->gb_down_row = vr;
                     h->gb_seldrag = 0;
                     h->gb_sel_r0 = h->gb_sel_r1 = -1; /* limpiar seleccion */
+                    /* Columna de la seleccion segun la x del mousedown. */
+                    if (mx < h->gb_sepx)
+                        h->gb_sel_col = 0; /* fuente */
+                    else if (h->gb_sep2x > 0 && mx < h->gb_sep2x)
+                        h->gb_sel_col = 1; /* IR */
+                    else
+                        h->gb_sel_col = 2; /* asm */
                     e->needs_redraw = 1;
                     return;
                 }

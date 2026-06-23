@@ -642,6 +642,7 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
             e->hover.dragging = 0;   /* fin del arrastre del popup de hover      */
             e->hover.resizing = 0;
             e->hover.gb_split_drag = 0; /* fin del arrastre del separador godbolt */
+            e->hover.gb_split2_drag = 0; /* fin del arrastre del 2o separador */
             /* Godbolt: si fue un CLICK (sin arrastre) en el cuerpo, fijar la
              * linea (cross-highlight); si fue DRAG, conservar la seleccion. */
             if (e->hover.visible && e->hover.gb_active &&
