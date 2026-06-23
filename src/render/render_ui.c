@@ -1490,6 +1490,17 @@ void render_hover_popup(Editor *e) {
                             char lbl[128];
                             memcpy(lbl, t + b2, ll);
                             lbl[ll] = 0;
+                            /* El destino suele venir como @Absolute("code.X")
+                             * o @StringRef("code.X"); extraer la etiqueta X. */
+                            char *dot = strstr(lbl, "code.");
+                            if (dot) {
+                                char *sX = dot + 5;
+                                char *eX = sX;
+                                while (*eX && *eX != '"' && *eX != ')') ++eX;
+                                ll = (int)(eX - sX);
+                                memmove(lbl, sX, ll);
+                                lbl[ll] = 0;
+                            }
                             for (int k = 0; k < na; ++k) {
                                 const char *bt = asml[k].b;
                                 if (!bt) continue;
@@ -1769,13 +1780,20 @@ void render_hover_popup(Editor *e) {
                      * (tras Lnnn). */
                     int code_x = asm_x + code_col * cw;
                     /* Nativo (JIT/AOT, con offset) -> coloreado x86; bytecode
-                     * (.vel, sin offset) -> sintaxis Vex. */
-                    if (asml[i].a && asml[i].a[0])
+                     * (.vel, sin offset) -> sintaxis Vex.  En bytecode, las
+                     * etiquetas (`X:`) van a la izquierda y su codigo se tabula
+                     * debajo, para distinguir que instrucciones caen en cada
+                     * etiqueta. */
+                    if (asml[i].a && asml[i].a[0]) {
                         draw_asm_line(e, asml[i].b, code_x, yy,
                                       e->settings.hover_notes);
-                    else
-                        draw_code_line(e, asml[i].b, (int)strlen(asml[i].b),
-                                       code_x, yy);
+                    } else {
+                        const char *bt = asml[i].b;
+                        int blen = (int)strlen(bt);
+                        int is_label = (blen > 0 && bt[blen - 1] == ':');
+                        int ind = is_label ? 0 : 2; /* tabular instrucciones */
+                        draw_code_line(e, bt, blen, code_x + ind * cw, yy);
+                    }
                     if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                     h->gb_right_n = row + 1;
                     if (asml_vrow) asml_vrow[i] = row; /* fila visual de este asm */
