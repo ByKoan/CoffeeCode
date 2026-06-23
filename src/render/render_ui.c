@@ -1497,13 +1497,7 @@ void render_hover_popup(Editor *e) {
                 }
                 /* Layout: canalon de flechas (gw columnas) entre el prefijo
                  * (Lnnn[+offset]) y el codigo, solo si hay flechas. */
-                /* En modo IR=grupo se intercalan cabeceras IR que desplazan las
-                 * filas; las flechas (que asumen 1 fila por asm) se desactivan
-                 * para no desalinearse. */
-                int gw = (narw > 0 && e->settings.hover_arrows &&
-                          e->settings.hover_ir_mode != 1)
-                             ? 4
-                             : 0;
+                int gw = (narw > 0 && e->settings.hover_arrows) ? 4 : 0;
                 int code_col = (is_native ? 11 : 5) + gw; /* col. del codigo */
                 int gx = asm_x + (is_native ? 11 : 5) * cw; /* base del canalon */
 
@@ -1631,6 +1625,13 @@ void render_hover_popup(Editor *e) {
                 int row = 0;
                 int grp = (e->settings.hover_ir_mode == 1);
                 int prev_grp_line = -1;
+                /* Fila VISUAL de cada asm (para que las flechas sigan alineadas
+                 * aunque el modo grupo intercale cabeceras IR).  -1 = no
+                 * visible este frame. */
+                int *asml_vrow = (int *)malloc(sizeof(int) * (na + 1));
+                if (asml_vrow)
+                    for (int q = 0; q <= na; ++q) asml_vrow[q] = -1;
+                int last_vis_idx = skip - 1;
                 for (int i = skip; i < na && row < body_rows; ++i) {
                     int ln = asml[i].line;
                     /* Modo IR=grupo: cabecera(s) IR antes del 1er asm de cada
@@ -1697,6 +1698,8 @@ void render_hover_popup(Editor *e) {
                                        code_x, yy);
                     if (row < HOVER_GB_ROWS) h->gb_right_lines[row] = ln;
                     h->gb_right_n = row + 1;
+                    if (asml_vrow) asml_vrow[i] = row; /* fila visual de este asm */
+                    last_vis_idx = i;
                     ++row;
                 }
 
@@ -1704,15 +1707,30 @@ void render_hover_popup(Editor *e) {
                  * Conector vertical en el canalon desde el salto hasta su
                  * destino, con cabeza de flecha; acento si el salto o el
                  * destino estan en la linea .vex apuntada/fijada. */
-                if (arw && e->settings.hover_arrows &&
-                    e->settings.hover_ir_mode != 1) {
+                if (arw && e->settings.hover_arrows) {
                     for (int a = 0; a < narw; ++a) {
                         int fr = arw[a].from, to = arw[a].to;
-                        int r0 = fr < to ? fr : to, r1 = fr < to ? to : fr;
-                        int r0v = r0 - skip, r1v = r1 - skip;
-                        if (r1v < 0 || r0v >= body_rows) continue; /* fuera */
-                        int cy0 = r0v < 0 ? 0 : r0v;
-                        int cy1 = r1v >= body_rows ? body_rows - 1 : r1v;
+                        /* Fila visual de cada extremo (NULL/fuera = -1).  Asi
+                         * las flechas siguen alineadas aunque el modo grupo
+                         * intercale cabeceras IR. */
+                        int fr_vis = (asml_vrow && fr >= skip &&
+                                      fr <= last_vis_idx)
+                                         ? asml_vrow[fr]
+                                         : -1;
+                        int to_vis = (asml_vrow && to >= skip &&
+                                      to <= last_vis_idx)
+                                         ? asml_vrow[to]
+                                         : -1;
+                        /* clamp: fuera por arriba (-1) o por abajo (body_rows) */
+                        int fr_row =
+                            fr_vis >= 0 ? fr_vis : (fr < skip ? -1 : body_rows);
+                        int to_row =
+                            to_vis >= 0 ? to_vis : (to < skip ? -1 : body_rows);
+                        int lo = fr_row < to_row ? fr_row : to_row;
+                        int hi = fr_row > to_row ? fr_row : to_row;
+                        if (hi < 0 || lo >= body_rows) continue; /* ambos fuera */
+                        int cy0 = lo < 0 ? 0 : lo;
+                        int cy1 = hi >= body_rows ? body_rows - 1 : hi;
                         int y0 = by + (hrows + cy0) * lh + lh / 2;
                         int y1 = by + (hrows + cy1) * lh + lh / 2;
                         int ax = gx + arw[a].lane * 3;
@@ -1723,27 +1741,25 @@ void render_hover_popup(Editor *e) {
                         if (hover_line != 0 &&
                             (fl == hover_line || tl == hover_line))
                             hot = 1;
-                        /* Color SIEMPRE visible (azul acero); acento cuando el
-                         * salto o destino estan en la linea apuntada/fijada. */
                         if (hot)
                             set_color_c(r, e->theme.col_tab_accent);
                         else
                             set_color(r, 0x6A, 0x8C, 0xB8, 0xFF);
                         fill_rect(r, ax, y0, 1, y1 - y0 + 1); /* vertical */
-                        int frv = fr - skip, tov = to - skip;
-                        if (tov >= 0 && tov < body_rows) { /* cabeza en destino */
-                            int ty = by + (hrows + tov) * lh + lh / 2;
+                        if (to_vis >= 0) { /* cabeza en destino (visible) */
+                            int ty = by + (hrows + to_vis) * lh + lh / 2;
                             fill_rect(r, ax, ty, cw, 1);
                             fill_rect(r, ax + cw - 3, ty - 2, 1, 5);
                             fill_rect(r, ax + cw - 4, ty - 1, 1, 3);
                         }
-                        if (frv >= 0 && frv < body_rows) { /* tick en origen */
-                            int fy = by + (hrows + frv) * lh + lh / 2;
+                        if (fr_vis >= 0) { /* tick en origen (visible) */
+                            int fy = by + (hrows + fr_vis) * lh + lh / 2;
                             fill_rect(r, ax, fy, cw / 2, 1);
                         }
                     }
                     free(arw);
                 }
+                free(asml_vrow);
 
                 /* Banda IR (modo panel=2): ops IR de la linea activa
                  * (fijada por click, o apuntada por el raton). */
