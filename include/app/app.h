@@ -173,3 +173,55 @@ int app_drop_tab_cross_window(App *a, Editor *src, int tab);
  * input.  Lo fija @c app_run al entrar y lo limpia al salir.
  */
 App *app_current(void);
+
+/* -- Terminal integrada en el panel inferior --------------------------------
+ *
+ * La terminal se incrusta en la pestaña «Terminal» del panel inferior: el proceso
+ * hijo (cmd.exe / bash) escribe en el canal «terminal» del PanelStore y el usuario
+ * teclea en una línea de input que se envía al proceso al pulsar Enter.
+ *
+ * Ciclo de vida:
+ *   1. term_start  — lanza el proceso hijo y abre las tuberías.
+ *   2. term_pump   — llamar cada frame (desde app_run) para leer stdout/stderr.
+ *   3. term_send   — enviar una línea de texto al stdin del proceso.
+ *   4. term_stop   — cierra tuberías y espera al proceso.
+ *
+ * El Editor almacena el estado opaco en term_proc (handle de proceso) y los
+ * descriptores de lectura/escritura en term_read_fd / term_write_fd.
+ * En Windows se usan HANDLE anonimizados en un puntero void*.
+ */
+
+/**
+ * @brief Lanza el shell integrado en la ruta @p path y conecta las tuberías.
+ *
+ * @param e    Editor cuyo panel «terminal» recibirá la salida.
+ * @param path Directorio de trabajo inicial (NULL → home del usuario).
+ * @return 1 si el proceso se inició, 0 si falló.
+ */
+int term_start(Editor *e, const char *path);
+
+/**
+ * @brief Lee toda la salida pendiente del proceso hijo y la vuelca en el canal.
+ *
+ * No bloquea; debe llamarse cada frame.  Devuelve el número de bytes leídos
+ * (útil para saber si hay que repintar).
+ *
+ * @param e Editor con una terminal activa.
+ * @return Bytes recibidos (>= 0).
+ */
+int term_pump(Editor *e);
+
+/**
+ * @brief Envía la cadena @p text al stdin del proceso hijo.
+ *
+ * @param e    Editor con una terminal activa.
+ * @param text Texto a enviar (no NULL).
+ */
+void term_send(Editor *e, const char *text);
+
+/**
+ * @brief Cierra la terminal integrada y libera sus recursos.
+ *
+ * @param e Editor con (o sin) terminal activa; no hace nada si ya está cerrada.
+ */
+void term_stop(Editor *e);

@@ -18,6 +18,7 @@
  * modificadores se usa @c SDL_GetModState (estado actual de Ctrl/Shift/Alt).
  */
 #include "input_internal.h"
+#include "app/app.h"
 
 /* ── Edición de los campos de la barra de búsqueda ──────────────────────────
  */
@@ -186,6 +187,35 @@ static void on_text_input(Editor *e, SDL_Event *ev, int ctrl) {
         else
             e->needs_redraw = 1;
         return;
+    }
+
+    /* Terminal integrada: si el canal activo es «terminal» y tiene foco,
+     * acumular el texto en el line-buffer de input en lugar de en el documento. */
+    if (e->bottom_panel_open && e->bottom_focused &&
+        e->bottom_active_chan >= 0 &&
+        (size_t)e->bottom_active_chan < e->panels.count) {
+        const PanelChannel *ch =
+            panel_at(&e->panels, (size_t)e->bottom_active_chan);
+        if (ch && strcmp(ch->id, "terminal") == 0) {
+#ifdef _WIN32
+            int term_active = (e->term_proc != NULL);
+#else
+            int term_active = (e->term_pid != -1);
+#endif
+            if (term_active) {
+                const char *txt = ev->text.text;
+                size_t tlen = strlen(txt);
+                int room = (int)(sizeof(e->term_input) - 1) - e->term_input_len;
+                if (room > 0) {
+                    int copy = (int)tlen < room ? (int)tlen : room;
+                    memcpy(e->term_input + e->term_input_len, txt, (size_t)copy);
+                    e->term_input_len += copy;
+                    e->term_input[e->term_input_len] = '\0';
+                }
+                e->needs_redraw = 1;
+                return;
+            }
+        }
     }
 
     editor_insert_text(e, ev->text.text);
@@ -511,6 +541,70 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
 
     /* Si la barra de búsqueda consume la tecla, terminar */
     if (e->find.visible && find_bar_key(e, key, ctrl, shift)) return;
+
+    /* Terminal integrada: interceptar teclas cuando tiene el foco */
+    if (e->bottom_panel_open && e->bottom_focused &&
+        e->bottom_active_chan >= 0 &&
+        (size_t)e->bottom_active_chan < e->panels.count) {
+        const PanelChannel *ch =
+            panel_at(&e->panels, (size_t)e->bottom_active_chan);
+        if (ch && strcmp(ch->id, "terminal") == 0) {
+#ifdef _WIN32
+            int term_active = (e->term_proc != NULL);
+#else
+            int term_active = (e->term_pid != -1);
+#endif
+            if (term_active) {
+                if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    /* Enviar la línea al proceso hijo (con \n) */
+                    e->term_input[e->term_input_len] = '\0';
+                    term_send(e, e->term_input);
+                    term_send(e, "\n");
+                    /* Eco local: mostrar lo que el usuario escribió */
+                    char echo[1026];
+                    int elen = snprintf(echo, sizeof(echo), "%s\n",
+                                        e->term_input);
+                    if (elen > 0)
+                        panel_append(&e->panels, "terminal", echo);
+                    /* Limpiar el line-buffer */
+                    e->term_input_len = 0;
+                    e->term_input[0]  = '\0';
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (key == SDLK_BACKSPACE && e->term_input_len > 0) {
+                    /* Borrar el último byte (respetando UTF-8) */
+                    e->term_input_len--;
+                    /* Retroceder mientras sea byte de continuación UTF-8 */
+                    while (e->term_input_len > 0 &&
+                           (e->term_input[e->term_input_len] & 0xC0) == 0x80)
+                        e->term_input_len--;
+                    e->term_input[e->term_input_len] = '\0';
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (ctrl && key == SDLK_C) {
+                    /* Ctrl+C: enviar interrupción al proceso */
+                    term_send(e, "\x03");
+                    e->term_input_len = 0;
+                    e->term_input[0]  = '\0';
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (ctrl && key == SDLK_L) {
+                    /* Ctrl+L: limpiar el scrollback del canal */
+                    panel_clear(&e->panels, "terminal");
+                    e->needs_redraw = 1;
+                    return;
+                }
+                /* El resto de teclas de navegación (flechas, Inicio, Fin, etc.)
+                 * se tragan para no mover el cursor del documento mientras
+                 * la terminal tiene foco. */
+                if (!ctrl)
+                    return;
+            }
+        }
+    }
 
     if (ctrl)
         ctrl_key(e, key, shift);

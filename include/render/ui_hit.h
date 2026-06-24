@@ -93,6 +93,8 @@ typedef enum {
     UI_HOVER_OPT_FRAME,  /**< Toggle banda del stack frame.       */
     UI_HOVER_OPT_NOTES,  /**< Toggle anotaciones del desensamblado. */
     UI_HOVER_OPT_IR,     /**< Selector ciclico del modo de correlacion IR. */
+    /* Terminal del sistema */
+    UI_TERMINAL_OPEN,    /**< Botón "Abrir terminal del sistema".  */
     UI_ID_COUNT
 } UiId;
 

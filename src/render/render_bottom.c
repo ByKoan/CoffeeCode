@@ -15,10 +15,15 @@
  * que el input resuelva clics, foco y rueda.
  */
 #include "render_internal.h"
+#include "app/app.h"
 #include "panel/panel.h"
 #include "layout/layout.h"
 #include "ui.h"
 #include <string.h>
+#include <stdio.h>
+
+/* Alto (px) reservado para la línea de input de la terminal integrada. */
+#define TERM_INPUT_H_LINES 1  /* una línea de texto + padding */
 
 /* -- Geometria (px) -------------------------------------------------------- */
 #define BOTTOM_PAD 6      /* margen interior del cuerpo de texto */
@@ -104,11 +109,208 @@ void render_bottom_panel(Editor *e) {
     const PanelChannel *ch = panel_at(&e->panels, (size_t)e->bottom_active_chan);
     if (!ch) return;
 
-    /* La pestana Terminal es hoy un placeholder (sin entrada interactiva). */
-    if (strcmp(ch->id, "terminal") == 0 && ch->len == 0) {
-        draw_text_c(e, "Terminal interactiva: proximamente.",
-                    left + BOTTOM_PAD, body_y + BOTTOM_PAD,
-                    e->theme.ftree_txt_file);
+    /* ── Pestaña Terminal: terminal integrada ────────────────────────────── */
+    if (strcmp(ch->id, "terminal") == 0) {
+        /* Si el proceso no está corriendo, mostrar botón para iniciarlo. */
+#ifdef _WIN32
+        int term_active = (e->term_proc != NULL);
+#else
+        int term_active = (e->term_pid != -1);
+#endif
+        if (!term_active) {
+            int btn_w = 30 * char_w;
+            int btn_h = e->font_size + 8;
+            int btn_x = left + BOTTOM_PAD;
+            int btn_y = body_y + BOTTOM_PAD;
+            Rect btn_rect = {btn_x, btn_y, btn_w, btn_h};
+            ui_button(e, UI_TERMINAL_OPEN, btn_rect,
+                      "  Iniciar Terminal  ", &e->theme.style_button, UI_NORMAL);
+            /* Registrar también el área de cuerpo para que los clics no caigan
+             * en el editor cuando el panel está abierto. */
+            SDL_SetRenderClipRect(r, NULL);
+            return;
+        }
+
+        /* ── Terminal activa: scrollback + barra de input ─────────────────
+         * Reservamos la última fila del cuerpo para la línea de input.
+         * El scrollback ocupa el resto. */
+        int line_h   = e->line_height;
+        int input_h  = line_h + 2 * BOTTOM_PAD;   /* alto de la barra de input */
+        int scroll_h = body_h - input_h;           /* alto del scrollback */
+        if (scroll_h < line_h) scroll_h = line_h; /* al menos una fila visible */
+
+        /* -- Scrollback del canal ---------------------------------------- */
+        SDL_Rect clip_scroll = {left, body_y, width, scroll_h};
+        SDL_SetRenderClipRect(r, &clip_scroll);
+
+        int scroll_visible = scroll_h / line_h;
+        int cols           = body_cols(e, width);
+        int total_rows     = panel_wrap_count(ch->text, cols);
+        int max_scroll     = total_rows - scroll_visible;
+        if (max_scroll < 0) max_scroll = 0;
+        int scroll = ch->scroll;
+        if (scroll < 0) scroll = 0;
+        if (scroll > max_scroll) scroll = max_scroll;
+
+        long sel_lo = -1, sel_hi = -1;
+        if (e->bottom_sel_active && e->bottom_sel_anchor >= 0 &&
+            e->bottom_sel_caret  >= 0 &&
+            e->bottom_sel_anchor != e->bottom_sel_caret) {
+            sel_lo = e->bottom_sel_anchor < e->bottom_sel_caret
+                         ? e->bottom_sel_anchor : e->bottom_sel_caret;
+            sel_hi = e->bottom_sel_anchor < e->bottom_sel_caret
+                         ? e->bottom_sel_caret  : e->bottom_sel_anchor;
+        }
+
+        Color err_col = {220, 80, 80, 255};
+        const char *text = ch->text;
+        size_t pos = 0;
+        PanelRow row;
+        int ri = 0;
+        int line_is_err = 0;
+        char line[1024];
+        line_is_err = (strstr(text, " fallo:") != NULL) &&
+                      (strchr(text, '\n') == NULL ||
+                       strstr(text, " fallo:") < strchr(text, '\n'));
+        for (;;) {
+            size_t next = panel_wrap_next(text, pos, cols, &row);
+            int vi = ri - scroll;
+            if (vi >= 0 && vi < scroll_visible) {
+                int ly = body_y + vi * line_h;
+                Color def_fg = line_is_err ? err_col : e->theme.ftree_txt_file;
+                size_t rend  = row.offset + row.len;
+
+                /* fondos ANSI */
+                if (row.len > 0) {
+                    size_t hint = 0;
+                    for (size_t seg = row.offset; seg < rend;) {
+                        const PanelColorSpan *sp = panel_span_at(ch, seg, &hint);
+                        size_t sub_end = rend;
+                        if (sp && sp->end < sub_end) sub_end = sp->end;
+                        if (!sp) {
+                            for (size_t k = 0; k < ch->span_count; ++k) {
+                                size_t st = ch->spans[k].start;
+                                if (st > seg && st < sub_end) sub_end = st;
+                            }
+                        }
+                        if (sp) {
+                            int bg_def = 1;
+                            unsigned char rr, gg, bb;
+                            panel_span_bg(ch, sp, &rr, &gg, &bb, &bg_def);
+                            if (!bg_def) {
+                                int sx = left + BOTTOM_PAD +
+                                         (int)(seg - row.offset) * char_w;
+                                Color bg = {rr, gg, bb, 255};
+                                set_color_c(r, bg);
+                                fill_rect(r, sx, ly,
+                                          (int)(sub_end - seg) * char_w, line_h);
+                            }
+                        }
+                        seg = sub_end;
+                    }
+                }
+
+                /* selección */
+                if (sel_lo >= 0) {
+                    long rs = (long)row.offset;
+                    long re = (long)(row.offset + row.len);
+                    long a  = sel_lo > rs ? sel_lo : rs;
+                    long b  = sel_hi < re ? sel_hi : re;
+                    if (b > a) {
+                        int hx = left + BOTTOM_PAD + (int)(a - rs) * char_w;
+                        int hw = (int)(b - a) * char_w;
+                        set_color_c(r, e->theme.col_sel_bg);
+                        fill_rect(r, hx, ly, hw, line_h);
+                    }
+                }
+
+                /* texto con colores ANSI */
+                if (row.len > 0) {
+                    size_t hint = 0;
+                    for (size_t seg = row.offset; seg < rend;) {
+                        const PanelColorSpan *sp = panel_span_at(ch, seg, &hint);
+                        size_t sub_end = rend;
+                        Color fg = def_fg;
+                        if (sp) {
+                            if (sp->end < sub_end) sub_end = sp->end;
+                            int is_def = 1;
+                            unsigned char rr, gg, bb;
+                            panel_span_fg(ch, sp, &rr, &gg, &bb, &is_def);
+                            if (!is_def) {
+                                fg.r = rr; fg.g = gg; fg.b = bb; fg.a = 255;
+                            }
+                        } else {
+                            for (size_t k = 0; k < ch->span_count; ++k) {
+                                size_t st = ch->spans[k].start;
+                                if (st > seg && st < sub_end) sub_end = st;
+                            }
+                        }
+                        size_t sub_len = sub_end - seg;
+                        int sx = left + BOTTOM_PAD +
+                                 (int)(seg - row.offset) * char_w;
+                        size_t cp = sub_len < sizeof(line) ? sub_len : sizeof(line) - 1;
+                        memcpy(line, text + seg, cp);
+                        line[cp] = '\0';
+                        draw_text_c(e, line, sx, ly, fg);
+                        seg = sub_end;
+                    }
+                }
+            }
+            if (next == (size_t)-1 || text[next] == '\0') break;
+            if (next > 0 && text[next - 1] == '\n') {
+                const char *ln_end = strchr(text + next, '\n');
+                const char *f      = strstr(text + next, " fallo:");
+                line_is_err = (f != NULL) && (ln_end == NULL || f < ln_end);
+            }
+            pos = next;
+            ++ri;
+            if (ri - scroll >= scroll_visible) break;
+        }
+
+        SDL_SetRenderClipRect(r, NULL);
+
+        /* -- Barra de input (prompt + texto del usuario) ------------------ */
+        int input_y = body_y + scroll_h;
+
+        /* Separador entre scrollback e input */
+        if (e->theme.col_ftree_sep.a) {
+            set_color_c(r, e->theme.col_ftree_sep);
+            fill_rect(r, left, input_y, width, 1);
+        }
+
+        /* Fondo de la barra de input (ligeramente más oscuro/claro) */
+        chrome_fill_bg(e, e->theme.col_ftree_header, left, input_y + 1,
+                       width, input_h - 1);
+
+        /* Prompt "> " */
+        Color prompt_col = {100, 180, 100, 255}; /* verde suave */
+        int   tx         = left + BOTTOM_PAD;
+        int   ty         = input_y + BOTTOM_PAD + 1;
+        draw_text_c(e, "> ", tx, ty, prompt_col);
+        tx += 2 * char_w; /* avanzar tras "> " */
+
+        /* Texto del usuario */
+        Color input_col = e->theme.ftree_txt_root;
+        if (e->term_input_len > 0) {
+            /* Asegurar null-termination por si acaso */
+            char safe[1025];
+            int  slen = e->term_input_len < 1024 ? e->term_input_len : 1024;
+            memcpy(safe, e->term_input, (size_t)slen);
+            safe[slen] = '\0';
+            draw_text_c(e, safe, tx, ty, input_col);
+            tx += slen * char_w;
+        }
+
+        /* Cursor parpadeante al final del input (solo cuando tiene foco) */
+        if (e->bottom_focused && e->cursor_visible) {
+            set_color_c(r, input_col);
+            fill_rect(r, tx, ty, 2, e->font_size);
+        }
+
+        /* Registrar el área de input para hit-test (clics dan foco) */
+        ui_put(&e->ui, UI_TERMINAL_OPEN,
+               (Rect){left, input_y, width, input_h});
+
         return;
     }
 

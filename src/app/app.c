@@ -428,6 +428,15 @@ void app_run(App *a) {
             a->focused < a->window_count && a->windows[a->focused])
             a->windows[a->focused]->needs_redraw = 1;
 
+        /* Leer salida pendiente de las terminales integradas (una por ventana).
+         * term_pump() no bloquea; si hay bytes, marca la ventana para repintar. */
+        for (int i = 0; i < a->window_count; i++) {
+            Editor *e = a->windows[i];
+            if (!e) continue;
+            if (term_pump(e) > 0)
+                e->needs_redraw = 1;
+        }
+
         /* tareas periodicas + render POR CADA ventana */
         for (int i = 0; i < a->window_count; i++) {
             Editor *e = a->windows[i];

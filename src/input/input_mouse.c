@@ -1792,6 +1792,45 @@ static int handle_bottom_panel_click(Editor *e, int mx, int my) {
         e->bottom_sel_anchor = -1;
         e->bottom_sel_caret = -1;
         e->needs_redraw = 1;
+
+        /* Si el canal seleccionado es "terminal" y no hay proceso activo,
+         * iniciar la terminal automáticamente sin necesidad de pulsar ningún botón. */
+        const PanelChannel *chan = panel_at(&e->panels, (size_t)tab);
+        if (chan && strcmp(chan->id, "terminal") == 0) {
+#ifdef _WIN32
+            int term_active = (e->term_proc != NULL);
+#else
+            int term_active = (e->term_pid != -1);
+#endif
+            if (!term_active) {
+                const char *path = (e->ftree.root_path[0] != '\0')
+                                  ? e->ftree.root_path
+                                  : NULL;
+                term_start(e, path);
+            }
+            e->bottom_focused = 1;
+        }
+
+        return 1;
+    }
+
+    /* Clic en el área de la terminal integrada (botón de inicio o barra de input) */
+    if (ui_hit(&e->ui, UI_TERMINAL_OPEN, mx, my)) {
+        const char *path = (e->ftree.root_path[0] != '\0')
+                          ? e->ftree.root_path
+                          : NULL;
+#ifdef _WIN32
+        int term_active = (e->term_proc != NULL);
+#else
+        int term_active = (e->term_pid != -1);
+#endif
+        if (!term_active) {
+            /* Primera vez: iniciar el proceso de shell integrado */
+            term_start(e, path);
+        }
+        /* El clic en la barra de input da foco al panel inferior */
+        e->bottom_focused = 1;
+        e->needs_redraw = 1;
         return 1;
     }
 

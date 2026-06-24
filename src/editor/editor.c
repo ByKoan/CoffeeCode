@@ -13,6 +13,7 @@
  * las funciones SDL devuelven
  * @c false / @c NULL en error y dejan el motivo en @c SDL_GetError().
  */
+#include "app/app.h"
 #include "builtin/lang_c.h"
 #include "editor_internal.h"
 #include "ext/ext_host.h"
@@ -623,6 +624,19 @@ int editor_init(Editor *e, const char *filepath) {
     e->bottom_sel_active = 0;
     e->bottom_selecting = 0;
 
+    /* Terminal integrada: inactiva hasta que el usuario abra la pestaña */
+#ifdef _WIN32
+    e->term_proc  = NULL;
+    e->term_read  = NULL;
+    e->term_write = NULL;
+#else
+    e->term_pid      = -1;
+    e->term_read_fd  = -1;
+    e->term_write_fd = -1;
+#endif
+    e->term_input_len = 0;
+    e->term_input[0]  = '\0';
+
     /* preferencias persistentes: cargarlas y aplicar las que afectan al estado
      * inicial (las demás las leen render/input directamente de e->settings). */
     settings_load(&e->settings);
@@ -858,6 +872,19 @@ int editor_init_secondary(Editor *e, Editor *primary, int w, int h) {
     e->bottom_sel_active = 0;
     e->bottom_selecting = 0;
 
+    /* Terminal integrada: inactiva en la secundaria también */
+#ifdef _WIN32
+    e->term_proc  = NULL;
+    e->term_read  = NULL;
+    e->term_write = NULL;
+#else
+    e->term_pid      = -1;
+    e->term_read_fd  = -1;
+    e->term_write_fd = -1;
+#endif
+    e->term_input_len = 0;
+    e->term_input[0]  = '\0';
+
     /* -- Recursos COMPARTIDOS de la ventana principal (por puntero/valor) ----
      * La fuente (TTF_Font*) es independiente del renderer en SDL_ttf: draw_text
      * crea la textura sobre e->renderer en cada llamada, asi que la MISMA fuente
@@ -940,6 +967,7 @@ void editor_free(Editor *e) {
             tab_free_resources(&e->tabs[i]);
         ftree_free(&e->ftree);
         /* PanelStore es POD de arrays fijos: no posee memoria que liberar. */
+        term_stop(e); /* cerrar el proceso hijo de la terminal si estaba activo */
         if (e->window) SDL_StopTextInput(e->window);
         if (e->renderer) SDL_DestroyRenderer(e->renderer);
         if (e->window) SDL_DestroyWindow(e->window);
@@ -957,6 +985,7 @@ void editor_free(Editor *e) {
 
     /* Destruir el host de extensiones ANTES de liberar las pestanas: emite
      * COFFEE_EVENT_SHUTDOWN y descarga las DLLs mientras los buffers aun viven. */
+    term_stop(e); /* cerrar proceso hijo de la terminal integrada */
     if (e->ext_host) {
         ext_host_destroy((CoffeeHost *)e->ext_host);
         e->ext_host = NULL;

@@ -364,6 +364,23 @@ typedef struct Editor {
     int bottom_sel_active;    /* 1 = hay seleccion viva en el panel inferior */
     int bottom_selecting;     /* 1 = arrastrando para seleccionar */
 
+    /* -- Terminal integrada (pestaña «Terminal» del panel inferior) --------
+     * Proceso hijo (shell) con tuberías stdin/stdout/stderr conectadas al
+     * canal «terminal» del PanelStore.  Cuando term_proc == NULL (o pid==-1
+     * en POSIX) la terminal no está arrancada. */
+#ifdef _WIN32
+    void   *term_proc;        /* HANDLE del proceso hijo (NULL = inactivo)   */
+    void   *term_read;        /* HANDLE de lectura  del pipe stdout del hijo  */
+    void   *term_write;       /* HANDLE de escritura del pipe stdin del hijo  */
+#else
+    int     term_pid;         /* PID del proceso hijo (-1 = inactivo)        */
+    int     term_read_fd;     /* fd de lectura  del pipe stdout del hijo      */
+    int     term_write_fd;    /* fd de escritura del pipe stdin del hijo      */
+#endif
+    /* Línea de input que el usuario está escribiendo antes de enviarla. */
+    char    term_input[1024]; /* buffer de la línea actual                   */
+    int     term_input_len;   /* bytes usados en term_input                  */
+
     /* -- Divisores arrastrables entre regiones (ver layout/layout.h) ------
      * Estado del arrastre del borde de un panel para redimensionarlo. */
     int dragging_divider; /* LayoutDivider en curso, o DIVIDER_NONE (-1) */
