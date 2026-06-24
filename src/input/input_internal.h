@@ -12,8 +12,10 @@
 /* Header PRIVADO del modulo input: macros y declaraciones compartidas. No es
  * API publica. */
 #include "editor/editor.h"
+#include "ext/ext_host.h"
 #include "filetree/filetree.h"
 #include "input/input.h"
+#include "layout/layout.h"
 #include "render/render.h"
 #include <ctype.h>    /* isalnum (clasificación de caracteres de palabra) */
 #include <stdbool.h>  /* bool/true/false */
@@ -33,6 +35,8 @@ int get_left_offset(Editor *e); /* ancho del panel lateral izquierdo */
 void handle_ftree_click(Editor *e, int mx, int my);
 /* hover en el explorador de archivos */
 void handle_ftree_hover(Editor *e, int mx, int my);
+/* clic en el panel de extensiones; 1 si lo consumio */
+int handle_ext_panel_click(Editor *e, int mx, int my);
 
 /* ── Movimiento del cursor y selección (input_keyboard.c) ───────────────────
  */
@@ -112,3 +116,7 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev); /* rueda del ratón → scroll */
 void on_mouse_motion(Editor *e, SDL_Event *ev);
 /* botón pulsado → clic/foco/selección */
 void on_mouse_button_down(Editor *e, SDL_Event *ev);
+/* botón soltado tras arrastrar una pestaña: si hay arrastre en curso, aplica el
+ * drop (mover/dividir) y limpia el estado.  Devuelve 1 si consumio un arrastre
+ * (el llamante no debe tratarlo como clic), 0 si no habia arrastre real. */
+int on_tab_drag_release(Editor *e, int mx, int my);

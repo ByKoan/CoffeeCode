@@ -192,6 +192,44 @@ void SDLCALL folder_dialog_cb(void *userdata, const char *const *filelist,
     (void)filter;
     Editor *e = (Editor *)userdata;
     if (!filelist || !filelist[0]) {
+        e->ext_install_mode = 0; /* dialogo cancelado: limpiar el modo */
+        e->needs_redraw = 1;
+        return;
+    }
+    /* Modo "instalar extension": cargar la carpeta elegida como una
+     * extension via el host, en lugar de abrirla en el explorador. */
+    if (e->ext_install_mode) {
+        e->ext_install_mode = 0;
+        if (e->ext_host) {
+            CoffeeHost *host = (CoffeeHost *)e->ext_host;
+            int rc = ext_host_load(host, filelist[0]);
+            const CoffeeApi *api = ext_host_api(host);
+            if (rc != 0) {
+                /* Fallo VISIBLE: el motivo concreto (DLL que no carga con el
+                 * texto del SO, manifiesto ausente, simbolo de entrada, etc.)
+                 * va al panel de salida y a la barra de estado, no solo a la
+                 * consola. */
+                const char *why = ext_host_last_error(host);
+                char msg[512];
+                snprintf(msg, sizeof(msg), "instalar '%s' fallo: %s",
+                         filelist[0], why && why[0] ? why : "causa desconocida");
+                if (api) {
+                    char line[520];
+                    snprintf(line, sizeof(line), "%s\n", msg);
+                    api->output_append(host, line); /* panel de salida */
+                    api->set_status(host, msg);     /* barra de estado */
+                }
+                fprintf(stderr, "[ext-host] %s\n", msg);
+            } else if (api) {
+                char msg[512];
+                snprintf(msg, sizeof(msg), "extension instalada desde '%s'",
+                         filelist[0]);
+                char line[520];
+                snprintf(line, sizeof(line), "%s\n", msg);
+                api->output_append(host, line);
+                api->set_status(host, msg);
+            }
+        }
         e->needs_redraw = 1;
         return;
     }
@@ -690,6 +728,7 @@ void menu_exec(Editor *e, int item) {
         break;
     case MENU_PREFS:
         e->settings_open = 1; /* abrir la pantalla de preferencias */
+        e->background_view_open = 0; /* arrancar en la pagina principal */
         break;
     default: break;
     }

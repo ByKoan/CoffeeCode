@@ -16,6 +16,35 @@
 #define SETTINGS_FONT_MIN 10
 #define SETTINGS_FONT_MAX 24
 
+/** Modo del fondo del area de texto. */
+typedef enum {
+    BG_MODE_NONE = 0,  /**< Sin fondo: solo el color del tema.        */
+    BG_MODE_IMAGE = 1, /**< Imagen cargada desde @c background_path.  */
+    BG_MODE_COLOR = 2, /**< Color solido @c background_color.         */
+    BG_MODE_TRANSPARENT = 3 /**< Area de texto translucida: deja ver el
+                             *   escritorio por detras de la ventana.  La
+                             *   opacidad va de 0 (totalmente transparente) a
+                             *   255 (opaco con el color del tema). */
+} BgMode;
+
+/** Forma de encajar la imagen de fondo dentro del area de texto. */
+typedef enum {
+    BG_SCALE_FIT = 0,     /**< Ajustar: cabe entera, conserva proporcion. */
+    BG_SCALE_FILL = 1,    /**< Rellenar: cubre el area, recorta sobrante. */
+    BG_SCALE_STRETCH = 2, /**< Estirar: deforma hasta llenar el area.     */
+    BG_SCALE_CENTER = 3,  /**< Centrar: tamano nativo, recortado al area. */
+    BG_SCALE_TILE = 4     /**< Mosaico: repite el tamano nativo.          */
+} BgScale;
+
+/** Color de fondo por defecto en modo color (gris muy oscuro 0xRRGGBB). */
+#define SETTINGS_BG_COLOR_DEFAULT 0x101015u
+
+/** Opacidad por defecto del fondo (0..255); coincide con el valor historico. */
+#define SETTINGS_BG_OPACITY_DEFAULT 180
+
+/** Tope de imagenes guardadas en la galeria de fondos. */
+#define BG_GALLERY_MAX 32
+
 /** Preferencias del editor. */
 typedef struct {
     int theme;     /**< Índice del preset de tema (0 = oscuro).        */
@@ -27,9 +56,43 @@ typedef struct {
                                  */
     int show_shortcuts;  /**< 1 = mostrar la barra de atajos inferior.       */
     char font_path[512]; /**< Ruta a la fuente; "" = fuente por defecto.     */
-    char background_path[512]; /**< Ruta a imagen de fondo personalizado.     */
-    int background_enabled; /**< 1 = usar fondo personalizado.                */
+    char background_path[512]; /**< Ruta a la imagen de fondo activa.         */
+    int background_mode; /**< Modo del fondo (::BgMode).                     */
+    unsigned int background_color; /**< Color solido 0xRRGGBB (modo color).  */
+    int background_opacity; /**< Opacidad del fondo [0..255].                */
+    int background_scaling; /**< Encaje de la imagen (::BgScale).            */
+    /** Galeria de imagenes de fondo: rutas que el usuario va acumulando para
+     *  elegir entre ellas en la sub-pantalla "Fondos". */
+    char background_gallery[BG_GALLERY_MAX][512];
+    int background_gallery_count; /**< Numero de rutas validas en la galeria. */
+    /* -- Opciones GENERICAS de la vista godbolt del hover (cualquier extension
+     *    que mande contenido 0x1D las hereda; no son especificas de ninguna). */
+    int hover_arrows;  /**< 1 = flechas de salto en el desensamblado.        */
+    int hover_frame;   /**< 1 = banda del stack frame.                       */
+    int hover_notes;   /**< 1 = anotaciones "; val" en el desensamblado.     */
+    int hover_ir_mode; /**< Correlacion IR: 0=off 1=grupo 2=panel 3=3col 4=exacto. */
 } Settings;
+
+/**
+ * @brief Anyade @p path a la galeria de fondos si no esta ya (dedup) y hay sitio.
+ *
+ * Ignora rutas nulas o vacias.  No persiste (el llamante decide cuando guardar).
+ *
+ * @return Indice de la entrada (nueva o existente), o -1 si no se pudo anyadir
+ *         (ruta invalida o galeria llena).
+ */
+int settings_gallery_add(Settings *s, const char *path);
+
+/**
+ * @brief Quita la entrada @p index de la galeria, compactando el resto.
+ *        No hace nada si @p index esta fuera de rango.
+ */
+void settings_gallery_remove(Settings *s, int index);
+
+/**
+ * @brief Indice de @p path en la galeria, o -1 si no esta (o es vacio).
+ */
+int settings_gallery_index_of(const Settings *s, const char *path);
 
 /** Rellena @p s con los valores por defecto. */
 void settings_defaults(Settings *s);

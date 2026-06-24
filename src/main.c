@@ -18,6 +18,7 @@
  * SDL_Init (eso ocurre dentro de editor.h / editor_init, no aquí). Este patrón
  * da control total sobre el arranque y evita el "WinMain mágico" de SDL.
  */
+#include "app/app.h"
 #include "editor/editor.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,14 +114,34 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Bucle principal: bloquea hasta que el usuario cierra la app. */
-    log_msg("editor_init OK, entrando en editor_run");
-    editor_run(e);
-    log_msg("editor_run terminado, saliendo");
+    /* Bucle principal multi-ventana: cada ventana del IDE es un Editor completo.
+     * Con una sola ventana es equivalente al editor_run de siempre (la principal
+     * es un Editor normal); la App enruta eventos por ventana y permite
+     * desprender paneles a ventanas nuevas y fusionarlas al cerrarlas. */
+    log_msg("editor_init OK, entrando en app_run");
+    App app;
+    app_init(&app, e);
+    /* Sin archivo por argumento, editor_init ya restauro la disposicion de la
+     * ventana PRINCIPAL; aqui recreamos las ventanas SECUNDARIAS de la ultima
+     * sesion.  Con un archivo por argumento no se restaura nada (arranque limpio
+     * sobre ese archivo), igual que la principal. */
+    if (!filepath || !filepath[0]) app_layout_restore(&app);
+    app_run(&app);
+    log_msg("app_run terminado, saliendo");
 
-    /* Cierre ordenado: recursos de SDL primero, luego la memoria del Editor. */
+    /* Cierre ordenado: liberar las ventanas secundarias, luego la principal. */
+    app_free(&app); /* libera secundarias (la principal la libera abajo) */
     editor_free(e);
     free(e);
     log_close();
-    return 0;
+
+    /* Salida dura: omite la limpieza atexit / DLL_PROCESS_DETACH del CRT al
+     * salir.  Una extension puede enlazar un runtime de terceros cuya
+     * destruccion global aborta en el cierre; el IDE ya libero sus recursos
+     * (editor_free) y cerro su log, asi que terminar aqui evita arrastrar ese
+     * fallo de terceros al cerrar la ventana. */
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(0);
+    return 0; /* inalcanzable: _Exit no retorna */
 }

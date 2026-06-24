@@ -175,6 +175,43 @@ static void test_utf8_width(void) {
     buf_free(&b);
 }
 
+/** (linea, columna-en-caracteres) -> offset logico (convencion LSP/goto). */
+static void test_offset_from_line_col_chars(void) {
+    Buffer b;
+    buf_init(&b);
+    /* a \n b b \n c c c -> offsets 0..7 */
+    buf_insert_str(&b, "a\nbb\nccc", 8);
+    /* linea 0, col 0 = inicio del archivo */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 0, 0), 0);
+    /* linea 1, col 0 = inicio de "bb" (offset 2) */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 1, 0), 2);
+    /* linea 1, col 1 = segundo caracter de "bb" (offset 3) */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 1, 1), 3);
+    /* linea 2, col 2 = tercer caracter de "ccc" (offset 7) */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 2, 2), 7);
+    /* col mas alla del fin de linea: se recorta al '\n'/fin (offset 4 = fin "bb") */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 1, 99), 4);
+    /* linea fuera de rango: se recorta a la ultima */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 99, 0), 5);
+    /* col negativa: se recorta a 0 */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&b, 2, -5), 5);
+    buf_free(&b);
+
+    /* UTF-8: la columna cuenta CARACTERES (no celdas ni bytes).  En "a<CJK>b"
+     * el caracter CJK (E6 97 A5) ocupa 3 bytes y 2 celdas de display, pero 1
+     * caracter: col 1 = el CJK (offset 1), col 2 = 'b' (offset 4). */
+    Buffer u;
+    buf_init(&u);
+    buf_insert_str(&u,
+                   "a\xE6\x97\xA5"
+                   "b",
+                   5);
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&u, 0, 0), 0); /* 'a'  */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&u, 0, 1), 1); /* CJK  */
+    EXPECT_EQ_INT((int)buf_offset_from_line_col_chars(&u, 0, 2), 4); /* 'b'  */
+    buf_free(&u);
+}
+
 int main(void) {
     tt_suite("buffer");
     tt_run("init deja un buffer vacio con 1 linea", test_init_vacio);
@@ -186,5 +223,7 @@ int main(void) {
            test_borrar_salto_une_lineas);
     tt_run("cursor y borrado UTF-8 (caracter completo)", test_utf8_cursor);
     tt_run("columnas por ancho de display (CJK = 2 celdas)", test_utf8_width);
+    tt_run("(linea,col-caracteres) -> offset (convencion LSP)",
+           test_offset_from_line_col_chars);
     return tt_summary();
 }

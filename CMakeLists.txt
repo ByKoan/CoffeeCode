@@ -27,7 +27,15 @@ option(COFFEE_BUILD_TESTS "Compilar los tests unitarios (ctests)" ON)
 # Compilar la aplicación CoffeeCode (y sus dependencias SDL3/SDL3_ttf).
 option(COFFEE_BUILD_APP  "Compilar la aplicación CoffeeCode (requiere SDL)" ON)
 
-# Force static everywhere — must be set before any FetchContent configures
+# Compilar las extensiones de ejemplo (DLLs que solo enlazan coffee_ext.h).
+# El extension host (src/ext/ext_host.c) se compila SIEMPRE dentro de la app
+# (se auto-incluye por el glob de src/*.c); esta opcion solo controla las DLLs
+# de ejemplo + su smoke test headless.
+option(COFFEE_BUILD_EXTENSIONS "Compilar las extensiones de ejemplo (DLLs)" ON)
+
+# Force static everywhere — must be set before any FetchContent configures.
+# Nota: las extensiones usan add_library(... SHARED) explicito, que ignora este
+# default y se compilan como DLL igualmente.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 # ---------------------------------------------------------------------------
@@ -248,7 +256,17 @@ endif()
 
 endif() # COFFEE_BUILD_APP
 
-# -- Tests unitarios ----------------------------------------------------------
+# -- Extensiones de ejemplo (DLLs) -------------------------------------------
+# Debe procesarse ANTES de los tests: el smoke test del host depende del target
+# coffee_hello (la DLL de la extension de ejemplo).
+if(COFFEE_BUILD_EXTENSIONS)
+    add_subdirectory(extensions)
+endif()
+
+# -- Tests unitarios (ctests) -------------------------------------------------
+# La librería de tests se auto-descarga con FetchContent (no hay que instalarla).
+# Solo cubre los módulos "puros" (sin SDL): structs, buffer y lexer.
+# Ejecuta la batería con:   ctest --test-dir <build> --output-on-failure
 if(COFFEE_BUILD_TESTS)
     FetchContent_Declare(
         ctests
@@ -268,5 +286,6 @@ message(STATUS "   build type   : ${CMAKE_BUILD_TYPE}")
 message(STATUS "   native       : ${COFFEE_NATIVE}")
 message(STATUS "   sanitizers   : ${COFFEE_SANITIZE}")
 message(STATUS "   tests        : ${COFFEE_BUILD_TESTS}")
+message(STATUS "   extensions   : ${COFFEE_BUILD_EXTENSIONS}")
 message(STATUS "   LTO (Release): ${COFFEE_IPO_OK}")
 message(STATUS "----------------------------------------------")

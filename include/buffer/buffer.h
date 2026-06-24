@@ -94,6 +94,8 @@ int buf_decode_at(const Buffer *b, size_t pos, size_t end, uint32_t *cp);
 int buf_line_col(const Buffer *b, size_t pos, int *line, int *col);
 size_t buf_line_start(const Buffer *b, size_t pos); /* inicio de la línea   */
 size_t buf_line_end(const Buffer *b, size_t pos);   /* fin de la línea      */
+/* (linea, columna-en-caracteres, base 0) -> offset logico (convencion LSP) */
+size_t buf_offset_from_line_col_chars(const Buffer *b, int line, int col);
 int buf_line_count(const Buffer *b);                /* nº de líneas (O(1))  */
 /* offset de inicio de la línea `line` (O(1)) */
 size_t buf_line_offset(const Buffer *b, int line);
