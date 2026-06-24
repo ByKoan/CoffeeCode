@@ -17,15 +17,38 @@
  * funciones @c on_mouse_* de aquí.
  */
 #include "input_internal.h"
+#include "app/app.h"
+#include "settings/settings.h"
+#include "editor/tab_reorder.h"
+#include "ext/coffee_ext.h" /* COFFEE_EVENT_TEXT_HOVER, CoffeeHoverPos */
+#include "ext/ext_host.h"   /* ext_host_emit */
+/* render_detached_window (refresca el hit-test antes del clic) viene de
+ * render/render.h, incluido por input_internal.h. */
 
 #define FALLBACK_CHAR_W 8 /* ancho de carácter por defecto              */
 /* líneas desplazadas por "muesca" de rueda */
 #define SCROLL_LINES_PER_NOTCH 3
+/* desplazamiento (px) que debe superar el cursor con el boton pulsado sobre el
+ * titulo de una pestana para que un clic se convierta en arrastre */
+#define TAB_DRAG_THRESHOLD 5
 
 /* Única medida fija que aún necesita el input para el hit-test (el resto de la
  * geometría de controles ya viene del registro e->ui). */
 /* alto mínimo del thumb de la scrollbar */
 #define HIT_SB_MIN_THUMB_H 20
+
+/* Adelanto: lo usa on_mouse_motion (arrastre de seleccion) antes de su
+ * definicion, que vive junto al resto de helpers del panel inferior. */
+static int bottom_offset_at(Editor *e, int mx, int my);
+
+/* Adelantos: handle_float_click los usa antes de sus definiciones (mapeo de
+ * pixel->linea/columna y clic en la barra de pestanas, mas abajo). */
+static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
+                              int *col);
+static int click_tabbar(Editor *e, int mx, int my);
+/* Adelanto: on_mouse_motion lo usa durante el arrastre (definido mas abajo,
+ * junto al resto de helpers del reordenado de pestanas). */
+static void update_tab_reorder_target(Editor *e, int mx, int my);
 
 /**
  * @brief Offset horizontal del área de texto (tras el panel y el gutter).
@@ -39,9 +62,342 @@
  * @return X en píxeles donde empieza la zona a la derecha del panel.
  */
 int get_left_offset(Editor *e) {
+    /* Con el editor dividido, el origen del área de texto es el del panel que se
+     * está procesando (lo fija el llamante en e->pane_left con pane_active=1).
+     * Sin división (pane_active==0) se usa el origen global de siempre. */
+    if (e->pane_active) return e->pane_left;
     /* panel abierto: su ancho actual */
     if (e->ftree.open) return e->ftree.width;
     return FTREE_TOGGLE_BTN_W; /* panel cerrado: solo el botón   */
+}
+
+/* ── División del editor (split panes): geometría e hit-test ────────────────
+ */
+
+/**
+ * @brief Grupo (hoja) del editor dividido bajo el punto (@p mx,@p my), o -1 si
+ *        el editor no está dividido o el punto cae fuera de toda hoja.
+ *
+ * Recorre los rects de las hojas del árbol de dock (la misma geometría que el
+ * render) y devuelve el group_id de la que contiene el punto.
+ */
+/* group_id de la hoja del DOCK bajo el cursor.  Con varias hojas, la que
+ * contiene el punto; con una sola, la hoja raiz (editor_leaf_at_point devuelve
+ * -1 ahi).  Sirve para reclamar el foco al dock aunque lo tuviera un flotante. */
+static int editor_dock_group_at(Editor *e, int mx, int my);
+
+static int editor_leaf_at_point(Editor *e, int mx, int my) {
+    if (e->dock.leaf_count <= 1) return -1;
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    for (int i = 0; i < n; i++) {
+        DockRect r = leaves[i].rect;
+        if (mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h)
+            return leaves[i].group_id;
+    }
+    return -1;
+}
+
+static int editor_dock_group_at(Editor *e, int mx, int my) {
+    if (e->dock.leaf_count > 1) return editor_leaf_at_point(e, mx, my);
+    /* hoja unica: la raiz ES una hoja; su group_id es el del dock entero */
+    return e->dock.nodes[e->dock.root].group_id;
+}
+
+/**
+ * @brief Fija el override de área (e->pane_*) al sub-rect de contenido de la
+ *        hoja con group_id @p g.
+ *
+ * Lo usa el input para que get_left_offset/point_to_line_col operen sobre la
+ * hoja correcta al mapear un clic.  El override apunta al área de CONTENIDO (ya
+ * bajo la barra de pestañas de la hoja).  El llamante debe limpiar pane_active
+ * tras usarlo (clear_pane_override).
+ */
+static void set_pane_override(Editor *e, int g) {
+    DockRect area = editor_dock_area(e);
+    DockLeafRect leaves[DOCK_MAX_LEAVES];
+    int n = dock_compute_leaf_rects(&e->dock, area, leaves, DOCK_MAX_LEAVES);
+    for (int i = 0; i < n; i++) {
+        if (leaves[i].group_id != g) continue;
+        DockRect r = leaves[i].rect;
+        e->pane_active = 1;
+        e->pane_left = r.x;
+        e->pane_top = r.y + TAB_BAR_HEIGHT; /* contenido bajo la barra de pestañas */
+        e->pane_width = r.w;
+        e->pane_height = r.h - TAB_BAR_HEIGHT;
+        if (e->pane_height < 0) e->pane_height = 0;
+        return;
+    }
+    e->pane_active = 0; /* group_id sin hoja: sin override */
+}
+
+/** Limpia el override de área tras un mapeo de clic. */
+static void clear_pane_override(Editor *e) { e->pane_active = 0; }
+
+/* -- Paneles flotantes: hit-test e interaccion ----------------------------- */
+
+/**
+ * @brief Indice del flotante bajo (@p mx,@p my) en z-order de DELANTE hacia
+ *        atras (el del frente gana), o -1 si ninguno lo contiene.
+ */
+static int float_at_point(Editor *e, int mx, int my) {
+    for (int i = e->float_count - 1; i >= 0; i--)
+        if (rect_has(e->floats[i].rect, mx, my)) return i;
+    return -1;
+}
+
+/**
+ * @brief Fija el override de area (e->pane_*) al rect de CONTENIDO del flotante
+ *        @p fi, para que point_to_line_col mapee el clic dentro de el.
+ */
+static void set_float_pane_override(Editor *e, int fi) {
+    if (fi < 0 || fi >= e->float_count) { e->pane_active = 0; return; }
+    Rect c = float_content_rect(&e->floats[fi]);
+    e->pane_active = 1;
+    e->pane_left = c.x;
+    e->pane_top = c.y;
+    e->pane_width = c.w;
+    e->pane_height = c.h;
+    if (e->pane_height < 0) e->pane_height = 0;
+}
+
+/**
+ * @brief Procesa un clic sobre los paneles flotantes (consultados antes que el
+ *        dock por estar encima).
+ *
+ * Resuelve, en z-order de delante hacia atras: botones de la barra de titulo
+ * (cerrar/acoplar), arrastre por la barra de titulo (mover + traer al frente),
+ * la tira de pestanas (reusa click_tabbar via la geometria registrada por el
+ * render), la esquina de redimension, y el cuerpo (enfocar + colocar cursor).
+ *
+ * @return 1 si el clic fue consumido por algun flotante, 0 si no.
+ */
+static int handle_float_click(Editor *e, int mx, int my) {
+    int fi = float_at_point(e, mx, my);
+    if (fi < 0) return 0; /* el clic no cae sobre ningun flotante */
+
+    FloatPanel *fp0 = &e->floats[fi]; /* valido hasta editor_float_focus */
+
+    /* Borde redimensionable (cualquier lado/esquina, como una ventana normal),
+     * salvo sobre los botones de la barra de titulo, que tienen prioridad. */
+    int redges = float_resize_edges(fp0, mx, my);
+    if (redges && !rect_has(float_close_rect(fp0), mx, my) &&
+        !rect_has(float_dock_rect(fp0), mx, my) &&
+        !rect_has(float_detach_rect(fp0), mx, my)) {
+        editor_float_focus(e, fi);
+        fi = e->float_count - 1;
+        e->float_drag = fi;
+        e->float_resizing = 1;
+        e->float_resize_edges = redges;
+        return 1;
+    }
+
+    FloatHit hit = float_hit_test(fp0, mx, my);
+
+    /* cualquier interaccion trae el flotante al frente y enfoca su grupo.  Tras
+     * editor_float_focus el flotante queda como el ultimo del array. */
+    editor_float_focus(e, fi);
+    fi = e->float_count - 1; /* su nuevo indice tras subir al frente */
+
+    switch (hit) {
+    case FLOAT_HIT_CLOSE:
+        editor_float_close(e, fi);
+        return 1;
+    case FLOAT_HIT_DOCK:
+        editor_float_dock(e, fi);
+        return 1;
+    case FLOAT_HIT_DETACH: {
+        /* desprender este flotante a una VENTANA NUEVA completa (otro IDE): la
+         * App crea un Editor secundario y le mueve las pestanas del flotante. */
+        App *a = app_current();
+        if (a) app_detach_float_to_window(a, e, fi);
+        return 1;
+    }
+    case FLOAT_HIT_TITLEBAR: {
+        /* iniciar arrastre de movimiento: guardar el desfase cursor->esquina */
+        e->float_drag = fi;
+        e->float_resizing = 0;
+        e->float_drag_off_x = mx - e->floats[fi].rect.x;
+        e->float_drag_off_y = my - e->floats[fi].rect.y;
+        return 1;
+    }
+    case FLOAT_HIT_RESIZE:
+        e->float_drag = fi;
+        e->float_resizing = 1;
+        e->float_resize_edges = FLOAT_EDGE_RIGHT | FLOAT_EDGE_BOTTOM;
+        return 1;
+    case FLOAT_HIT_TABBAR: {
+        /* la geometria de las pestanas del flotante la registro render_tabbar_group
+         * (UI_LIST_TAB / _CLOSE / UI_LIST_SPLIT_NEW); click_tabbar la resuelve
+         * (cambiar/cerrar/nueva pestana, mas el candidato a arrastre). */
+        int group = e->floats[fi].group_id;
+        click_tabbar(e, mx, my);
+        /* si al cerrar la ultima pestana el flotante quedo vacio, retirarlo */
+        int still = 0;
+        for (int i = 0; i < e->tab_count; i++)
+            if (e->tabs[i].group == group) { still = 1; break; }
+        if (!still) {
+            int gi = -1;
+            for (int i = 0; i < e->float_count; i++)
+                if (e->floats[i].group_id == group) { gi = i; break; }
+            if (gi >= 0) {
+                for (int i = gi; i < e->float_count - 1; i++)
+                    e->floats[i] = e->floats[i + 1];
+                e->float_count--;
+            }
+        }
+        return 1;
+    }
+    case FLOAT_HIT_CONTENT: {
+        /* enfocar + colocar el cursor mapeando con el area del flotante */
+        set_float_pane_override(e, fi);
+        if (e->tab_count > 0 && e->buf) {
+            int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
+            if (mx >= text_x) {
+                int line, col;
+                point_to_line_col(e, mx, my, &line, &col);
+                editor_sel_clear(e);
+                e->sel_anchor_line = line;
+                e->sel_anchor_col = col;
+                e->mouse_selecting = 1; /* permitir arrastrar para seleccionar */
+                buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+            }
+        }
+        clear_pane_override(e);
+        e->needs_redraw = 1;
+        return 1;
+    }
+    default:
+        return 1; /* dentro del marco pero sin accion: consumir igualmente */
+    }
+}
+
+/* ── Divisores arrastrables (redimension de paneles) ────────────────────────
+ */
+
+/**
+ * @brief Aplica el cursor del sistema de redimension (o lo restaura).
+ *
+ * Cachea el cursor de redimension horizontal (EW) y el normal en estaticos para
+ * no recrearlos en cada movimiento.  Si SDL no puede crear el cursor del sistema
+ * (entorno sin tema de cursores, etc.), degrada sin tocar el cursor: nunca
+ * crashea.
+ *
+ * @param want_resize 1 para mostrar el cursor de redimension, 0 para el normal.
+ */
+static void set_divider_cursor(int which, int dock_orient) {
+    static SDL_Cursor *cur_ew = NULL;    /* cursor de redimension horizontal */
+    static SDL_Cursor *cur_ns = NULL;    /* cursor de redimension vertical   */
+    static SDL_Cursor *cur_arrow = NULL; /* cursor normal (flecha)           */
+    static int tried = 0;                /* ya se intento crear (evita reintentos) */
+
+    if (!tried) { /* crear una sola vez, perezosamente */
+        tried = 1;
+        cur_ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        cur_ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+        cur_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    }
+
+    /* El divisor inferior es horizontal -> cursor NS; un divisor de dock toma su
+     * orientacion (split horizontal = borde horizontal -> NS; vertical -> EW);
+     * los demas son verticales -> cursor EW; DIVIDER_NONE -> flecha normal. */
+    SDL_Cursor *target = cur_arrow;
+    if (which == DIVIDER_BOTTOM_TOP)
+        target = cur_ns;
+    else if (which == DIVIDER_DOCK)
+        target = (dock_orient == DOCK_HORIZONTAL) ? cur_ns : cur_ew;
+    else if (which != DIVIDER_NONE)
+        target = cur_ew;
+    if (target) SDL_SetCursor(target); /* solo si SDL pudo crearlo */
+}
+
+/**
+ * @brief Conmuta el cursor del sistema al de redimension del flotante segun los
+ *        bordes @p edges (EW lados, NS arriba/abajo, NWSE/NESW esquinas).
+ */
+static void set_float_cursor(int edges) {
+    static SDL_Cursor *c_ew = NULL, *c_ns = NULL, *c_nwse = NULL, *c_nesw = NULL,
+                      *c_arrow = NULL;
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        c_ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        c_ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+        c_nwse = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+        c_nesw = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+        c_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    }
+    int lr = edges & (FLOAT_EDGE_LEFT | FLOAT_EDGE_RIGHT);
+    int tb = edges & (FLOAT_EDGE_TOP | FLOAT_EDGE_BOTTOM);
+    SDL_Cursor *t = c_arrow;
+    if (lr && tb) {
+        int tl = (edges & FLOAT_EDGE_TOP) && (edges & FLOAT_EDGE_LEFT);
+        int br = (edges & FLOAT_EDGE_BOTTOM) && (edges & FLOAT_EDGE_RIGHT);
+        t = (tl || br) ? c_nwse : c_nesw; /* TL/BR -> NWSE; TR/BL -> NESW */
+    } else if (lr) {
+        t = c_ew;
+    } else if (tb) {
+        t = c_ns;
+    }
+    if (t) SDL_SetCursor(t);
+}
+
+/**
+ * @brief Actualiza el divisor bajo el cursor y conmuta su cursor del sistema.
+ *
+ * Pura consulta de hover: no inicia arrastre.  Pide redibujar solo si cambio el
+ * resaltado.  No hace nada mientras hay un arrastre en curso (ese caso lo lleva
+ * on_mouse_motion).
+ *
+ * @param e  Editor.
+ * @param mx X del raton en pixeles.
+ * @param my Y del raton en pixeles.
+ */
+static void update_divider_hover(Editor *e, int mx, int my) {
+    /* Los flotantes van ENCIMA del dock.  Si el cursor esta sobre un flotante:
+     * en un borde -> cursor de redimension; dentro pero no en un borde -> flecha;
+     * en ningun caso es un divisor del dock. */
+    if (e->float_count > 0) {
+        int fi = float_at_point(e, mx, my);
+        if (fi >= 0) {
+            int edges = float_resize_edges(&e->floats[fi], mx, my);
+            if (e->hovered_divider != DIVIDER_NONE) {
+                e->hovered_divider = DIVIDER_NONE;
+                e->needs_redraw = 1;
+            }
+            set_float_cursor(edges); /* edges==0 -> flecha normal */
+            return;
+        }
+    }
+    int hit = layout_hit_divider(e, mx, my);
+    if (hit != e->hovered_divider) { /* solo trabajo si cambio el estado */
+        e->hovered_divider = hit;
+        set_divider_cursor(hit, e->dock_drag_orient);
+        e->needs_redraw = 1;
+    }
+}
+
+/**
+ * @brief Si (mx,my) cae sobre un divisor, inicia su arrastre y consume el clic.
+ *
+ * @param e  Editor.
+ * @param mx X del clic en pixeles.
+ * @param my Y del clic en pixeles.
+ * @return 1 si empezo a arrastrar un divisor (clic consumido), 0 si no.
+ */
+static int try_start_divider_drag(Editor *e, int mx, int my) {
+    /* Un flotante (encima del dock) tiene prioridad sobre cualquier divisor: si
+     * el cursor esta sobre uno, no arrancar un arrastre de divisor (asi su
+     * esquina de resize no se la roba el divisor del panel inferior). */
+    if (e->float_count > 0 && float_at_point(e, mx, my) >= 0) return 0;
+    int hit = layout_hit_divider(e, mx, my);
+    if (hit == DIVIDER_NONE) return 0;
+    e->dragging_divider = hit; /* entrar en modo arrastre */
+    set_divider_cursor(hit, e->dock_drag_orient); /* cursor de redimension */
+    return 1;
 }
 
 /**
@@ -78,10 +434,12 @@ static void point_to_line_col(Editor *e, int mouse_x, int mouse_y, int *line,
      */
     int char_px = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
 
-    /* fila en pantalla: quitar navbar + pestañas y dividir por el alto de línea
-     */
-    int visual_line =
-        (mouse_y - NAVBAR_HEIGHT - TAB_BAR_HEIGHT) / e->line_height;
+    /* fila en pantalla: quitar la franja superior y dividir por el alto de
+     * línea.  Con el editor dividido, el origen vertical del texto es el de la
+     * hoja (pane_top, fijado por set_pane_override); sin dividir, es la posición
+     * global de siempre (navbar + barra de pestañas). */
+    int text_y = e->pane_active ? e->pane_top : (NAVBAR_HEIGHT + TAB_BAR_HEIGHT);
+    int visual_line = (mouse_y - text_y) / e->line_height;
     if (visual_line < 0) visual_line = 0;  /* clic sobre las barras → fila 0 */
     int ln = e->scroll_line + visual_line; /* fila visible → línea real      */
     int total = buf_line_count(e->buf);
@@ -205,13 +563,22 @@ void handle_scroll(Editor *e, float wheel_dy) {
  * @param my Coordenada Y del clic en píxeles.
  */
 void handle_text_click(Editor *e, int mx, int my) {
+    if (e->dock.leaf_count > 1) {
+        int g = editor_leaf_at_point(e, mx, my);
+        if (g >= 0) editor_focus_group(e, g);
+        set_pane_override(e, e->active_group);
+    }
     int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
     /* fuera del texto */
-    if (mx < text_x || e->tab_count == 0 || !e->buf) return;
+    if (mx < text_x || e->tab_count == 0 || !e->buf) {
+        clear_pane_override(e);
+        return;
+    }
     int line, col;
     point_to_line_col(e, mx, my, &line, &col);
     editor_sel_clear(e);
     move_cursor(e, line, col);
+    clear_pane_override(e);
 }
 
 /* ── Manejadores de eventos de ratón (invocados por input_handle_event) ── */
@@ -235,11 +602,29 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
     int cursor_x = (int)cursor_xf;
     int cursor_y = (int)cursor_yf;
 
+    /* Rueda sobre el popup de hover: desplazar su contenido. */
+    if (e->hover.visible) {
+        HoverPopup *h = &e->hover;
+        if (cursor_x >= h->rect_x && cursor_x < h->rect_x + h->rect_w &&
+            cursor_y >= h->rect_y && cursor_y < h->rect_y + h->rect_h) {
+            h->scroll -= (int)ev->wheel.y;
+            if (h->scroll < 0) h->scroll = 0;
+            e->needs_redraw = 1;
+            return;
+        }
+    }
+
     /* Preferencias abiertas: la rueda sobre la lista de fuentes la desplaza
      * (ui_list recorta el scroll a un rango válido al dibujar). */
     if (e->settings_open) {
-        if (ui_hit(&e->ui, UI_PREF_FONT_LIST, cursor_x, cursor_y))
+        if (e->background_view_open) {
+            /* Sub-pantalla Fondos: la rueda sobre la rejilla desplaza la galeria
+             * (el render recorta el scroll a un rango valido al dibujar). */
+            if (ui_hit(&e->ui, UI_BG_GALLERY, cursor_x, cursor_y))
+                e->bg_gallery_scroll -= (int)ev->wheel.y;
+        } else if (ui_hit(&e->ui, UI_PREF_FONT_LIST, cursor_x, cursor_y)) {
             e->font_list_scroll -= (int)ev->wheel.y;
+        }
         e->needs_redraw = 1;
         return;
     }
@@ -248,6 +633,36 @@ void on_mouse_wheel(Editor *e, SDL_Event *ev) {
     if (e->enc_popup) {
         if (ui_hit(&e->ui, UI_ENC_LIST, cursor_x, cursor_y))
             e->enc_popup_scroll -= (int)ev->wheel.y;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Rueda sobre el panel inferior: desplazar el scrollback del canal activo. */
+    if (e->bottom_panel_open && ui_hit(&e->ui, UI_BOTTOM_PANEL, cursor_x, cursor_y)) {
+        if (e->bottom_active_chan >= 0 &&
+            (size_t)e->bottom_active_chan < e->panels.count) {
+            PanelChannel *c = &e->panels.chans[e->bottom_active_chan];
+            c->scroll -= (int)(ev->wheel.y * SCROLL_LINES_PER_NOTCH);
+            if (c->scroll < 0) c->scroll = 0;
+            /* el tope inferior lo recorta el render segun las lineas visibles */
+        }
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Rueda sobre la barra de pestañas (barra global, sin división): la
+     * convertimos en scroll HORIZONTAL de pestañas (una pestaña por muesca).
+     * Así, con muchos archivos abiertos, se navega cómodamente con la rueda. */
+    if (e->dock.leaf_count <= 1 && cursor_y >= NAVBAR_HEIGHT &&
+        cursor_y < NAVBAR_HEIGHT + TAB_BAR_HEIGHT &&
+        cursor_x >= get_left_offset(e) && cursor_x < e->win_w) {
+        int dir = (ev->wheel.y > 0) ? -1 : (ev->wheel.y < 0 ? 1 : 0);
+        e->tab_scroll += dir;
+        if (e->tab_scroll < 0) e->tab_scroll = 0;
+        if (e->tab_scroll > e->tab_count - 1) e->tab_scroll = e->tab_count - 1;
+        /* marcar la activa como ya centrada para que el auto-scroll del render
+         * no devuelva la vista a ella: permite explorar otras pestañas. */
+        e->tab_scroll_seen = e->active_tab;
         e->needs_redraw = 1;
         return;
     }
@@ -322,9 +737,213 @@ static void drag_scrollbar(Editor *e, int mouse_y) {
  * @param e  Editor.
  * @param ev Evento SDL; se usan @c ev->motion.x / @c ev->motion.y.
  */
+/* Tiempo (ms) que el raton debe permanecer quieto sobre texto para disparar el
+ * hover. */
+#define HOVER_REST_MS 450
+
+void editor_hover_tick(Editor *e) {
+    if (!e || !e->buf || e->tab_count == 0) return;
+    HoverPopup *hv = &e->hover;
+    if (hv->dragging || hv->resizing) return; /* manipulando el popup */
+    if (hv->rest_fired || hv->last_move_ms == 0) return;
+    uint32_t now = (uint32_t)SDL_GetTicks();
+    if (now - hv->last_move_ms < HOVER_REST_MS) return;
+    hv->rest_fired = 1; /* una sola emision por reposo */
+    int mx = hv->last_mx, my = hv->last_my;
+    /* No re-disparar el hover si el raton esta SOBRE el propio popup (mirar su
+     * contenido no debe pedir otro simbolo). */
+    if (hv->visible && mx >= hv->rect_x && mx < hv->rect_x + hv->rect_w &&
+        my >= hv->rect_y && my < hv->rect_y + hv->rect_h)
+        return;
+    /* Solo dentro del area de texto (no barras superiores ni panel lateral). */
+    if (my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) return;
+    if (mx < get_left_offset(e)) return;
+    int line = 0, col = 0;
+    point_to_line_col(e, mx, my, &line, &col);
+    hv->anchor_line = line;
+    hv->anchor_col = col;
+    hv->anchor_x = mx;
+    hv->anchor_y = my;
+    /* Disparar el evento; la extension (LSP) decide si hay simbolo y abre el
+     * popup con show_hover.  Si no hay nada, no pasa nada. */
+    if (e->ext_host) {
+        CoffeeHoverPos pos;
+        pos.line = (uint32_t)line;
+        pos.col = (uint32_t)col;
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_TEXT_HOVER, &pos);
+    }
+}
+
 void on_mouse_motion(Editor *e, SDL_Event *ev) {
     int mouse_x = (int)ev->motion.x;
     int mouse_y = (int)ev->motion.y;
+
+    /* Popup de hover: arrastre / redimension (tienen prioridad).  NO se cierra
+     * por movimiento: persiste hasta Esc / boton cerrar / clic-fuera / otro
+     * hover (que lo reemplaza).  Solo registramos el movimiento para el
+     * temporizador de mouse-rest. */
+    {
+        HoverPopup *hv = &e->hover;
+        if (hv->visible && hv->dragging) {
+            hv->rect_x = mouse_x - hv->drag_off_x;
+            hv->rect_y = mouse_y - hv->drag_off_y;
+            e->needs_redraw = 1;
+            return;
+        }
+        if (hv->visible && hv->resizing) {
+            hv->rect_w = mouse_x - hv->rect_x + 4;
+            hv->rect_h = mouse_y - hv->rect_y + 4;
+            e->needs_redraw = 1;
+            return;
+        }
+        /* Arrastre del separador de columnas de la vista godbolt: recalcular
+         * el % de ancho de la columna fuente desde la x del raton. */
+        if (hv->visible && hv->gb_split_drag) {
+            int inner = hv->rect_w - 16; /* ~ ancho util (menos paddings) */
+            if (inner < 1) inner = 1;
+            int rel = mouse_x - (hv->rect_x + 8);
+            int pct = rel * 100 / inner;
+            if (pct < 20) pct = 20;
+            if (pct > 75) pct = 75;
+            hv->gb_split_pct = pct;
+            e->needs_redraw = 1;
+            return;
+        }
+        /* 2o separador (3col): el % es de la columna IR dentro del espacio
+         * tras la columna fuente (entre sepx y el borde derecho). */
+        if (hv->visible && hv->gb_split2_drag && hv->gb_sep2x > 0) {
+            int restpx = (hv->rect_x + hv->rect_w - 8) - hv->gb_sepx;
+            if (restpx < 1) restpx = 1;
+            int rel = mouse_x - hv->gb_sepx;
+            int pct = rel * 100 / restpx;
+            if (pct < 15) pct = 15;
+            if (pct > 80) pct = 80;
+            hv->gb_split2_pct = pct;
+            e->needs_redraw = 1;
+            return;
+        }
+        /* Seleccion por arrastre (estilo terminal) en la vista godbolt: si el
+         * boton izq esta pulsado y el mousedown empezo en el cuerpo, extender
+         * la seleccion de filas desde el ancla hasta la fila actual. */
+        if (hv->visible && hv->gb_active && hv->gb_lh > 0 &&
+            (ev->motion.state & SDL_BUTTON_LMASK) &&
+            hv->gb_down_y >= hv->gb_body_top) {
+            int dx = mouse_x - hv->gb_down_x, dy = mouse_y - hv->gb_down_y;
+            if (hv->gb_seldrag || dx * dx + dy * dy > 16) {
+                hv->gb_seldrag = 1;
+                int cur = (mouse_y - hv->gb_body_top) / hv->gb_lh;
+                if (cur < 0) cur = 0;
+                int a = hv->gb_down_row, b = cur;
+                hv->gb_sel_r0 = a < b ? a : b;
+                hv->gb_sel_r1 = a < b ? b : a;
+                e->needs_redraw = 1;
+                return;
+            }
+        }
+        hv->last_mx = mouse_x;
+        hv->last_my = mouse_y;
+        hv->last_move_ms = (uint32_t)SDL_GetTicks();
+        hv->rest_fired = 0;
+        /* Vista godbolt: re-dibujar al mover el raton por encima para que el
+         * cross-highlight de hover siga al cursor en vivo (el resto del popup
+         * no necesita redibujo continuo). */
+        if (hv->visible && hv->gb_active && mouse_x >= hv->rect_x &&
+            mouse_x < hv->rect_x + hv->rect_w && mouse_y >= hv->rect_y &&
+            mouse_y < hv->rect_y + hv->rect_h) {
+            e->needs_redraw = 1;
+        }
+    }
+
+    /* Arrastrando un flotante (mover por la barra de titulo o redimensionar por
+     * la esquina): tiene prioridad sobre el resto del hit-testing. */
+    if (e->float_drag >= 0 && e->float_drag < e->float_count) {
+        FloatPanel *fp = &e->floats[e->float_drag];
+        Rect bounds = editor_float_bounds(e);
+        if (e->float_resizing) {
+            fp->rect = float_clamp_resize_edges(fp->rect, e->float_resize_edges,
+                                                mouse_x, mouse_y, bounds);
+            set_float_cursor(e->float_resize_edges); /* mantener el cursor */
+        } else {
+            int nx = mouse_x - e->float_drag_off_x;
+            int ny = mouse_y - e->float_drag_off_y;
+            fp->rect = float_clamp_move(fp->rect, nx, ny, bounds);
+            /* Re-acople por arrastre: si el cursor cae sobre una hoja del dock (y
+             * no sobre otro flotante), anotar el destino para la guia y el drop. */
+            int tg = -1, tz = DOCK_DZ_NONE;
+            if (editor_float_dock_target(e, e->float_drag, mouse_x, mouse_y, &tg,
+                                         &tz)) {
+                e->float_dock_target_group = tg;
+                e->float_dock_zone = tz;
+            } else {
+                e->float_dock_target_group = -1;
+                e->float_dock_zone = DOCK_DZ_NONE;
+            }
+        }
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Arrastrando un divisor: redimensiona el panel y nada mas (prioridad
+     * sobre todo el resto del hit-testing). */
+    if (e->dragging_divider != DIVIDER_NONE) {
+        layout_apply_divider_drag(e, e->dragging_divider, mouse_x, mouse_y);
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Candidato a arrastre de pestana: si el cursor se aleja mas que el umbral
+     * con el boton pulsado, entrar en modo arrastre.  Mientras dura, solo se
+     * actualiza la posicion (el render dibuja la guia) y se consume el motion
+     * para no caer en hover/seleccion. */
+    if (e->drag_tab >= 0) {
+        e->drag_mx = mouse_x;
+        e->drag_my = mouse_y;
+        if (!e->dragging_tab) {
+            int dx = mouse_x - e->drag_start_x;
+            int dy = mouse_y - e->drag_start_y;
+            if (dx * dx + dy * dy > TAB_DRAG_THRESHOLD * TAB_DRAG_THRESHOLD) {
+                e->dragging_tab = 1; /* umbral superado: arrastre real */
+                /* capturar el raton para seguir recibiendo motion/up aunque el
+                 * cursor salga de esta ventana (a otra ventana o al escritorio):
+                 * permite mover la pestana entre ventanas y el tear-off. */
+                SDL_CaptureMouse(true);
+            }
+        }
+        if (e->dragging_tab) {
+            /* Sin Ctrl: comprobar si el cursor esta sobre una barra de pestanas
+             * para reordenar/insertar ahi (la barra manda sobre el dock).  Con
+             * Ctrl el destino es un flotante: no buscar barra. */
+            if (SDL_GetModState() & SDL_KMOD_CTRL)
+                e->tab_reorder_group = -1;
+            else
+                update_tab_reorder_target(e, mouse_x, mouse_y);
+
+            /* MULTI-VENTANA: resaltar la ventana DESTINO bajo el cursor global
+             * cuando es DISTINTA de la origen, para que su render dibuje el borde
+             * de "soltar aqui".  Limpiar el resaltado en las demas ventanas.  Con
+             * una sola ventana no hay destino distinto: el flag queda en 0. */
+            App *app = app_current();
+            if (app && app->window_count > 1) {
+                float gxf = 0.0f, gyf = 0.0f;
+                SDL_GetGlobalMouseState(&gxf, &gyf);
+                int dst_wi = app_window_at_global(app, (int)gxf, (int)gyf);
+                for (int wi = 0; wi < app->window_count; wi++) {
+                    Editor *w = app->windows[wi];
+                    if (!w) continue;
+                    int hl = (w != e && wi == dst_wi) ? 1 : 0;
+                    if (w->drag_hover_highlight != hl) {
+                        w->drag_hover_highlight = hl;
+                        w->needs_redraw = 1; /* repintar la ventana destino */
+                    }
+                }
+            }
+            e->needs_redraw = 1; /* repintar la guia de la zona destino */
+            return;              /* arrastre en curso: consume el motion */
+        }
+    }
+
+    /* Hover sobre divisores: cambia el cursor a redimension cuando procede. */
+    update_divider_hover(e, mouse_x, mouse_y);
 
     if (e->menu_open) { /* menú desplegado: actualizar el item resaltado */
         int prev = e->menu_hovered;
@@ -354,8 +973,19 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* arrastre para seleccionar caracteres en el panel inferior */
+    if (e->bottom_selecting) {
+        int off = bottom_offset_at(e, mouse_x, mouse_y);
+        if (off >= 0) e->bottom_sel_caret = off;
+        e->bottom_sel_active = 1;
+        e->needs_redraw = 1;
+        return;
+    }
+
     /* arrastre para seleccionar texto (el ancla se fijó en BUTTON_DOWN) */
     if (e->mouse_selecting && e->tab_count > 0) {
+        /* la selección sigue en la hoja enfocada */
+        if (e->dock.leaf_count > 1) set_pane_override(e, e->active_group);
         int line, col;
         /* punto bajo el ratón */
         point_to_line_col(e, mouse_x, mouse_y, &line, &col);
@@ -365,6 +995,7 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
         editor_sync_cursor(e); /* reflejar el cursor en (línea, columna) */
         /* auto-scroll si se arrastra fuera de la vista */
         editor_ensure_visible(e);
+        clear_pane_override(e);
         e->needs_redraw = 1;
     }
 }
@@ -383,24 +1014,57 @@ void on_mouse_motion(Editor *e, SDL_Event *ev) {
  * @param mx Coordenada X del clic en píxeles.
  * @param my Coordenada Y del clic en píxeles.
  */
-static void click_tabbar(Editor *e, int mx, int my) {
+static int click_tabbar(Editor *e, int mx, int my) {
+    /* Botón "+" por grupo (hojas del editor dividido Y paneles flotantes): cada
+     * uno registra su "+" con UI_LIST_SPLIT_NEW indexado por group_id. */
+    if (e->dock.leaf_count > 1 || e->float_count > 0) {
+        int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
+        if (gnew >= 0) {
+            editor_focus_group(e, gnew); /* enfocar ese grupo */
+            editor_tab_new(e);           /* nueva pestaña en él */
+            return 1;
+        }
+    }
     if (ui_hit(&e->ui, UI_TAB_NEW, mx, my)) {
-        editor_tab_new(e); /* botón "+": pestaña nueva */
-        return;
+        /* el "+" de la barra global pertenece al DOCK: si el foco lo tenia un
+         * panel flotante, devolverlo a la hoja del dock antes de crear ahi. */
+        int dg = e->dock.nodes[e->dock.focused_leaf].group_id;
+        if (dg >= 0 && dg != e->active_group) editor_focus_group(e, dg);
+        editor_tab_new(e); /* botón "+": pestaña nueva en el dock */
+        return 1;
     }
     /* La geometría de cada pestaña y de su "x" la registró el render por
      * índice; el botón de cerrar está dentro de la pestaña, así que se
      * comprueba antes. */
     int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
     int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
-    if (close_i < 0 && tab_i < 0) return; /* no se pulsó ninguna pestaña */
+    if (close_i < 0 && tab_i < 0) return 0; /* no se pulsó ninguna pestaña */
 
     if (close_i >= 0) {           /* "x": cerrar esa pestaña */
         editor_tab_save_state(e); /* guardar estado de la pestaña actual */
+        /* enfocar la hoja/flotante de la pestaña que se cierra (reclama el foco
+         * si lo tenia otro grupo, p.ej. un flotante con el dock sin dividir) */
+        if (e->tabs[close_i].group != e->active_group)
+            editor_focus_group(e, e->tabs[close_i].group);
         e->active_tab = close_i;  /* apuntar a la que se va a cerrar      */
         editor_tab_close(e);
     } else {
+        /* enfocar primero el grupo de la pestaña pulsada para no robarla a otro
+         * (editor_tab_switch la asigna al grupo enfocado) */
+        if (e->tabs[tab_i].group != e->active_group)
+            editor_focus_group(e, e->tabs[tab_i].group);
         editor_tab_switch(e, tab_i); /* cuerpo: cambiar a esa pestaña */
+
+        /* Registrar un CANDIDATO a arrastre sobre el TITULO de la pestaña: el
+         * arrastre real solo empieza si el cursor se mueve mas que el umbral
+         * (on_mouse_motion).  Hasta entonces esto no altera el clic normal. */
+        e->drag_tab = tab_i;
+        e->drag_from_group = e->tabs[tab_i].group;
+        e->dragging_tab = 0;
+        e->drag_start_x = mx;
+        e->drag_start_y = my;
+        e->drag_mx = mx;
+        e->drag_my = my;
     }
     /* título = ruta de la pestaña activa, o texto por defecto si no hay/sin
      * nombre */
@@ -408,6 +1072,183 @@ static void click_tabbar(Editor *e, int mx, int my) {
                            ? e->tabs[e->active_tab].filepath
                            : "CoffeeCode - Sin título";
     SDL_SetWindowTitle(e->window, path);
+    return 1;
+}
+
+/**
+ * @brief Recolecta los rects de las pestanas del grupo @p group en orden visual
+ *        desde el registro de hit-test del frame, y devuelve la Y de su barra.
+ *
+ * El render dibuja (y registra en UI_LIST_TAB por indice global) las pestanas de
+ * un grupo en su orden dentro de e->tabs[].  Aqui se filtran las de @p group y
+ * se ordenan por X de pantalla (que coincide con el orden de dibujo).
+ *
+ * @param e         Editor.
+ * @param group     group_id de la barra.
+ * @param[out] rects   Array destino (capacidad @p cap) con (x,w) de cada pestana.
+ * @param[out] gidx    Array paralelo con el indice GLOBAL de cada pestana.
+ * @param cap       Capacidad de @p rects / @p gidx.
+ * @param[out] bar_y   Y de la barra (top del rect de la primera pestana).
+ * @return Numero de pestanas recolectadas del grupo.
+ */
+static int collect_group_tab_rects(Editor *e, int group, TabRect *rects,
+                                    int *gidx, int cap, int *bar_y) {
+    int n = 0;
+    for (int i = 0; i < e->ui.indexed_count && n < cap; i++) {
+        const UiIndexed *u = &e->ui.indexed[i];
+        if (u->list != UI_LIST_TAB) continue;
+        int ti = u->idx; /* indice global de la pestana */
+        if (ti < 0 || ti >= e->tab_count) continue;
+        if (e->tabs[ti].group != group) continue;
+        rects[n].x = u->r.x;
+        rects[n].w = u->r.w;
+        gidx[n] = ti;
+        if (bar_y) *bar_y = u->r.y;
+        n++;
+    }
+    /* ordenar por X (orden visual); UI_LIST_TAB ya suele venir en orden, pero el
+     * registro mezcla varias barras, asi que se ordena por seguridad. */
+    for (int a = 1; a < n; a++) {
+        TabRect tr = rects[a];
+        int tg = gidx[a];
+        int b = a - 1;
+        while (b >= 0 && rects[b].x > tr.x) {
+            rects[b + 1] = rects[b];
+            gidx[b + 1] = gidx[b];
+            b--;
+        }
+        rects[b + 1] = tr;
+        gidx[b + 1] = tg;
+    }
+    return n;
+}
+
+/**
+ * @brief Durante un arrastre de pestana, detecta si el cursor esta sobre una
+ *        BARRA de pestanas y, en tal caso, anota el grupo + la posicion de
+ *        insercion (por X) y la geometria de la linea de insercion para el
+ *        render.  Si no hay barra bajo el cursor, deja tab_reorder_group = -1.
+ *
+ * La barra se identifica por la BANDA VERTICAL de los rects registrados en
+ * UI_LIST_TAB: cualquier grupo cuyas pestanas ocupen una franja [bar_y,
+ * bar_y+TAB_BAR_HEIGHT) que contenga @p my es candidato (asi se detecta tambien
+ * la zona a la derecha de la ultima pestana, donde no hay rect pero si barra).
+ */
+static void update_tab_reorder_target(Editor *e, int mx, int my) {
+    e->tab_reorder_group = -1; /* por defecto: sin objetivo de barra */
+
+    /* buscar la barra (grupo) cuya banda vertical contiene my; nos quedamos con
+     * la del grupo de la primera pestana cuyo rect contiene my en Y. */
+    int target_group = -1, bar_y = 0;
+    for (int i = 0; i < e->ui.indexed_count; i++) {
+        const UiIndexed *u = &e->ui.indexed[i];
+        if (u->list != UI_LIST_TAB) continue;
+        int ti = u->idx;
+        if (ti < 0 || ti >= e->tab_count) continue;
+        if (my >= u->r.y && my < u->r.y + u->r.h) {
+            target_group = e->tabs[ti].group;
+            bar_y = u->r.y;
+            break;
+        }
+    }
+    if (target_group < 0) return; /* el cursor no esta sobre ninguna barra */
+
+    /* recolectar las pestanas del grupo en orden visual y calcular la posicion
+     * de insercion bajo la X del cursor. */
+    TabRect rects[MAX_TABS];
+    int gidx[MAX_TABS];
+    int n = collect_group_tab_rects(e, target_group, rects, gidx, MAX_TABS,
+                                    &bar_y);
+    int pos = tab_reorder_insert_index(rects, n, mx);
+
+    /* X de la linea de insercion: borde izquierdo de la pestana en `pos`, o el
+     * borde derecho de la ultima si pos == n (al final). */
+    int line_x;
+    if (n == 0)
+        line_x = mx; /* barra sin pestanas: junto al cursor */
+    else if (pos < n)
+        line_x = rects[pos].x;
+    else
+        line_x = rects[n - 1].x + rects[n - 1].w;
+
+    e->tab_reorder_group = target_group;
+    e->tab_reorder_pos = pos;
+    e->tab_reorder_x = line_x;
+    e->tab_reorder_bar_y = bar_y;
+}
+
+int on_tab_drag_release(Editor *e, int mx, int my) {
+    if (e->drag_tab < 0) return 0; /* no habia candidato */
+    int was_dragging = e->dragging_tab;
+    int tab = e->drag_tab;
+    int reorder_group = e->tab_reorder_group; /* objetivo de barra (o -1) */
+    int reorder_pos = e->tab_reorder_pos;
+    /* limpiar el estado de arrastre ANTES de cualquier reorganizacion para no
+     * arrastrar indices viejos si tab[] cambia (drop puede recolocar pestanas) */
+    e->drag_tab = -1;
+    e->dragging_tab = 0;
+    e->tab_reorder_group = -1; /* limpiar el objetivo de reordenado siempre */
+    /* fin del arrastre: soltar la captura global del raton (la pidio el motion al
+     * superar el umbral).  Se hace siempre que hubo arrastre, gane quien gane. */
+    if (was_dragging) SDL_CaptureMouse(false);
+
+    /* limpiar el resaltado de "soltar aqui" en TODAS las ventanas (multi-ventana);
+     * con una sola ventana no hay ninguno puesto. */
+    if (was_dragging) {
+        App *app = app_current();
+        if (app)
+            for (int wi = 0; wi < app->window_count; wi++) {
+                Editor *w = app->windows[wi];
+                if (w && w->drag_hover_highlight) {
+                    w->drag_hover_highlight = 0;
+                    w->needs_redraw = 1;
+                }
+            }
+    }
+    if (!was_dragging) return 0; /* fue un clic normal: ya lo gestiono el down */
+
+    /* validar el indice por si tab_count cambio entre tanto */
+    if (tab < 0 || tab >= e->tab_count) {
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* MULTI-VENTANA: si el cursor (global) cae sobre OTRA ventana o fuera de toda
+     * ventana, la App mueve la pestana ahi / crea una ventana nueva (tear-off) y
+     * devuelve 1.  Si el drop es en ESTA misma ventana devuelve 0 y seguimos con
+     * la logica local de abajo (cero regresion con una sola ventana). */
+    {
+        App *app = app_current();
+        if (app && app_drop_tab_cross_window(app, e, tab)) return 1;
+    }
+
+    /* Con Ctrl pulsado al soltar: DESPRENDER la pestana a un panel flotante nuevo
+     * centrado en el cursor, en vez de acoplarla al arbol de dock. */
+    if (SDL_GetModState() & SDL_KMOD_CTRL) {
+        editor_float_detach_tab(e, tab, mx, my);
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Objetivo de BARRA: insertar/reordenar la pestana en esa posicion.  La barra
+     * manda sobre las zonas del dock (CENTER/borde). */
+    if (reorder_group >= 0) {
+        editor_tab_reorder(e, tab, reorder_group, reorder_pos);
+        editor_float_gc_empty(e); /* si salio de un flotante y lo dejo vacio */
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    int group = -1, zone = DOCK_DZ_NONE;
+    if (editor_drag_target(e, mx, my, &group, &zone, NULL) &&
+        zone != DOCK_DZ_NONE)
+        editor_tab_drop(e, tab, group, zone);
+
+    /* si la pestana arrastrada salio de un flotante y lo dejo vacio, retirarlo */
+    editor_float_gc_empty(e);
+
+    e->needs_redraw = 1; /* repintar sin la guia de arrastre */
+    return 1;            /* arrastre consumido */
 }
 
 /**
@@ -484,6 +1325,14 @@ static int click_find_bar(Editor *e, int mx, int my) {
  */
 static void start_text_selection(Editor *e, int mx, int my) {
     if (e->tab_count == 0) return;
+    /* Reclamar el foco para la hoja del DOCK pulsada: si lo tenia un panel
+     * flotante, el teclado y la edicion vuelven al dock al clicar aqui. */
+    int g = editor_dock_group_at(e, mx, my);
+    if (g >= 0 && g != e->active_group) editor_focus_group(e, g);
+    if (e->dock.leaf_count > 1)
+        set_pane_override(e, e->active_group); /* mapear al sub-rect de la hoja */
+    else
+        e->pane_active = 0; /* hoja unica: area completa */
     int line, col;
     point_to_line_col(e, mx, my, &line, &col);
     editor_sel_clear(e);
@@ -495,6 +1344,7 @@ static void start_text_selection(Editor *e, int mx, int my) {
     buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
     editor_sync_cursor(e);
     editor_ensure_visible(e);
+    clear_pane_override(e);
     e->needs_redraw = 1;
 }
 
@@ -530,13 +1380,149 @@ static void SDLCALL bg_file_dialog_cb(void *userdata,
     (void)filter;
     Editor *e = (Editor *)userdata;
     if (!filelist || !filelist[0]) { e->needs_redraw = 1; return; }
-    const char *path = filelist[0];
-    if (editor_load_background(e, path)) {
-        strncpy(e->settings.background_path, path,
+    /* SDL admite multi-seleccion: agregar TODAS las elegidas a la galeria
+     * (dedup) y dejar la ultima como imagen activa. */
+    const char *last_ok = NULL;
+    for (const char *const *p = filelist; *p; p++) {
+        if (settings_gallery_add(&e->settings, *p) >= 0) last_ok = *p;
+    }
+    if (last_ok && editor_load_background(e, last_ok)) {
+        strncpy(e->settings.background_path, last_ok,
                 sizeof e->settings.background_path - 1);
         e->settings.background_path[sizeof e->settings.background_path - 1] = '\0';
-        e->settings.background_enabled = 1;
-        settings_save(&e->settings);
+        e->settings.background_mode = BG_MODE_IMAGE; /* elegir imagen activa el modo imagen */
+    }
+    editor_bg_thumbs_invalidate(e); /* la galeria cambio: reconstruir miniaturas */
+    settings_save(&e->settings);
+    e->needs_redraw = 1;
+}
+
+/** Abre el dialogo del sistema para elegir una imagen de fondo. */
+static void open_bg_file_dialog(Editor *e) {
+    SDL_DialogFileFilter filters[] = {
+        {"Imagenes", "png;jpg;jpeg;bmp;gif;tiff;tif;webp"},
+        {"Todos los archivos", "*"},
+    };
+    SDL_ShowOpenFileDialog(bg_file_dialog_cb, e, e->window, filters, 2, NULL,
+                           false);
+}
+
+/** Recorta @p v al rango [@p lo, @p hi]. */
+static int bg_clampi(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+/** Sustituye la componente @p shift (0/8/16) del color por @p comp (0..255). */
+static unsigned int bg_set_comp(unsigned int color, int shift, int comp) {
+    comp = bg_clampi(comp, 0, 255);
+    color &= ~(0xFFu << shift);             /* limpiar la componente */
+    color |= ((unsigned int)comp << shift); /* y volver a ponerla */
+    return color & 0xFFFFFFu;
+}
+
+/**
+ * @brief Procesa un clic en la sub-pantalla "Fondos" de preferencias.
+ *
+ * Resuelve los controles con ui_hit y aplica cada cambio en vivo (cargando o
+ * limpiando la textura cuando hace falta), guardando con settings_save.  Los
+ * botones de imagen/escalado solo existen en modo Imagen y los de color solo en
+ * modo Color, asi que no hay forma de pulsar un control que no aplique.
+ */
+static void handle_background_view_click(Editor *e, int mx, int my) {
+    Settings *s = &e->settings;
+    int paso_op = 15; /* paso de la opacidad */
+    int idx;          /* indice de celda/quitar de la galeria (-1 = ninguno) */
+
+    if (ui_hit(&e->ui, UI_BG_BACK, mx, my)) {
+        e->background_view_open = 0; /* volver a preferencias */
+    } else if (ui_hit(&e->ui, UI_BG_MODE, mx, my)) {
+        /* ciclo Ninguno -> Imagen -> Color -> Transparente -> Ninguno */
+        s->background_mode = (s->background_mode + 1) % 4;
+        /* cargar/limpiar la textura al entrar/salir del modo imagen */
+        if (s->background_mode == BG_MODE_IMAGE && s->background_path[0])
+            editor_load_background(e, s->background_path);
+        else
+            editor_load_background(e, ""); /* libera la textura si la habia */
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               ui_hit(&e->ui, UI_BG_ADD, mx, my)) {
+        open_bg_file_dialog(e); /* el callback agrega a la galeria + guarda */
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               ui_hit(&e->ui, UI_BG_SCALE, mx, my)) {
+        s->background_scaling = (s->background_scaling + 1) % 5;
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               (idx = ui_hit_idx(&e->ui, UI_LIST_BG_THUMB_DEL, mx, my)) >= 0) {
+        /* quitar la imagen idx de la galeria.  Si era la activa, pasar a la
+         * siguiente disponible (o sin imagen si la galeria queda vacia). */
+        int was_active = (settings_gallery_index_of(s, s->background_path) == idx);
+        settings_gallery_remove(s, idx);
+        if (was_active) {
+            if (s->background_gallery_count > 0) {
+                int ni = idx < s->background_gallery_count
+                             ? idx
+                             : s->background_gallery_count - 1;
+                strncpy(s->background_path, s->background_gallery[ni],
+                        sizeof s->background_path - 1);
+                s->background_path[sizeof s->background_path - 1] = '\0';
+                editor_load_background(e, s->background_path);
+            } else {
+                s->background_path[0] = '\0';
+                editor_load_background(e, ""); /* sin imagen */
+            }
+        }
+        editor_bg_thumbs_invalidate(e); /* la galeria cambio */
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_IMAGE &&
+               (idx = ui_hit_idx(&e->ui, UI_LIST_BG_THUMB, mx, my)) >= 0) {
+        /* seleccionar la imagen idx como fondo activo (aplica en vivo). */
+        if (idx < s->background_gallery_count) {
+            strncpy(s->background_path, s->background_gallery[idx],
+                    sizeof s->background_path - 1);
+            s->background_path[sizeof s->background_path - 1] = '\0';
+            editor_load_background(e, s->background_path);
+            settings_save(s);
+        }
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_R_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 16, (int)((s->background_color >> 16) & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_R_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 16, (int)((s->background_color >> 16) & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_G_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 8, (int)((s->background_color >> 8) & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_G_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 8, (int)((s->background_color >> 8) & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_B_DEC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 0, (int)(s->background_color & 0xFF) - 16);
+        settings_save(s);
+    } else if (s->background_mode == BG_MODE_COLOR &&
+               ui_hit(&e->ui, UI_BG_B_INC, mx, my)) {
+        s->background_color = bg_set_comp(
+            s->background_color, 0, (int)(s->background_color & 0xFF) + 16);
+        settings_save(s);
+    } else if (s->background_mode != BG_MODE_NONE &&
+               ui_hit(&e->ui, UI_BG_OPACITY_DEC, mx, my)) {
+        s->background_opacity = bg_clampi(s->background_opacity - paso_op, 0, 255);
+        settings_save(s);
+    } else if (s->background_mode != BG_MODE_NONE &&
+               ui_hit(&e->ui, UI_BG_OPACITY_INC, mx, my)) {
+        s->background_opacity = bg_clampi(s->background_opacity + paso_op, 0, 255);
+        settings_save(s);
     }
     e->needs_redraw = 1;
 }
@@ -556,6 +1542,8 @@ static void handle_settings_click(Editor *e, int mx, int my) {
 
         /* Sin fondo personalizado por defecto: limpiar la textura si había */
         editor_load_background(e, "");
+        editor_bg_thumbs_invalidate(e); /* la galeria queda vacia: reconstruir */
+        e->bg_gallery_scroll = 0;
 
         e->font_list_scroll = 0; /* "Predeterminada" vuelve a ser la fila 0 */
         settings_save(s);
@@ -591,22 +1579,11 @@ static void handle_settings_click(Editor *e, int mx, int my) {
         if (s->font_size < SETTINGS_FONT_MAX) s->font_size++;
         editor_reload_font(e);
         settings_save(s);
-    } else if (ui_hit(&e->ui, UI_PREF_BG_ENABLED, mx, my)) {
-        /* Toggle: habilitar/deshabilitar fondo personalizado */
-        s->background_enabled = !s->background_enabled;
-        if (s->background_enabled && s->background_path[0])
-            editor_load_background(e, s->background_path);
-        else if (!s->background_enabled)
-            editor_load_background(e, ""); /* limpiar textura */
-        settings_save(s);
-    } else if (ui_hit(&e->ui, UI_PREF_BG_LOAD, mx, my)) {
-        /* Abrir diálogo de archivo para elegir imagen de fondo */
-        SDL_DialogFileFilter filters[] = {
-            {"Imagenes", "png;jpg;jpeg;bmp;gif;tiff;tif;webp"},
-            {"Todos los archivos", "*"},
-        };
-        SDL_ShowOpenFileDialog(bg_file_dialog_cb, e, e->window,
-                               filters, 2, NULL, false);
+    } else if (ui_hit(&e->ui, UI_PREF_BG, mx, my)) {
+        /* Abrir la sub-pantalla "Fondos" con todos los controles del fondo. */
+        e->background_view_open = 1;
+        editor_bg_thumbs_invalidate(e); /* reconstruir miniaturas al entrar */
+        e->bg_gallery_scroll = 0;
     } else {
         /* Lista de fuentes: un clic sobre una fila la selecciona. La fila 0 es
          * "Predeterminada" (vuelve a la fuente por defecto). */
@@ -655,14 +1632,197 @@ static void handle_enc_popup_click(Editor *e, int mx, int my) {
     e->needs_redraw = 1;
 }
 
+/**
+ * @brief Vuelca un fallo de accion del panel (recargar/descargar) a la UI.
+ *
+ * Toma el motivo concreto de @c ext_host_last_error y lo muestra en el panel
+ * de salida y en la barra de estado, para que el usuario VEA por que la accion
+ * no surtio efecto en lugar de quedarse en silencio.
+ */
+static void ext_panel_report_error(Editor *e, const char *action,
+                                   const char *id) {
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+    if (!host) return;
+    const CoffeeApi *api = ext_host_api(host);
+    if (!api) return;
+    const char *why = ext_host_last_error(host);
+    char msg[512];
+    snprintf(msg, sizeof(msg), "%s '%s' fallo: %s", action ? action : "accion",
+             id ? id : "?", why && why[0] ? why : "causa desconocida");
+    char line[520];
+    snprintf(line, sizeof(line), "%s\n", msg);
+    api->output_append(host, line); /* panel de salida */
+    api->set_status(host, msg);     /* barra de estado */
+}
+
+/**
+ * @brief Procesa un clic dentro del panel de extensiones.
+ *
+ * Resuelve, en orden: el boton "Instalar extension" (abre el dialogo de
+ * carpeta en modo instalacion), los botones "recargar"/"descargar" de cada
+ * fila (por indice de slot del host) y, por ultimo, cualquier clic dentro del
+ * marco del panel (se consume para no caer en el editor de debajo).
+ *
+ * @return 1 si el clic fue consumido por el panel, 0 si no.
+ */
+int handle_ext_panel_click(Editor *e, int mx, int my) {
+    CoffeeHost *host = (CoffeeHost *)e->ext_host;
+
+    /* Instalar extension: lanzar el dialogo de carpeta en modo instalacion. */
+    if (ui_hit(&e->ui, UI_EXT_INSTALL, mx, my)) {
+        e->ext_install_mode = 1;
+        open_folder_dialog(e);
+        return 1;
+    }
+
+    /* Recargar la extension de la fila pulsada (idx = slot del host). */
+    int rel = ui_hit_idx(&e->ui, UI_LIST_EXT_RELOAD, mx, my);
+    if (rel >= 0 && host) {
+        const char *id = NULL;
+        if (ext_host_info(host, (size_t)rel, &id, NULL, NULL, NULL) && id) {
+            /* copiar el id: si el reload falla en el unload, la cadena del
+             * host puede quedar liberada antes de poder reportar el fallo. */
+            char idbuf[128];
+            snprintf(idbuf, sizeof(idbuf), "%s", id);
+            int rc = ext_host_reload(host, idbuf);
+            if (rc != 0) ext_panel_report_error(e, "recargar", idbuf);
+        }
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Descargar la extension de la fila pulsada. */
+    int unl = ui_hit_idx(&e->ui, UI_LIST_EXT_UNLOAD, mx, my);
+    if (unl >= 0 && host) {
+        const char *id = NULL;
+        /* copiar el id: ext_host_unload libera la cadena del host */
+        if (ext_host_info(host, (size_t)unl, &id, NULL, NULL, NULL) && id) {
+            char idbuf[128];
+            snprintf(idbuf, sizeof(idbuf), "%s", id);
+            int rc = ext_host_unload(host, idbuf);
+            if (rc != 0) ext_panel_report_error(e, "descargar", idbuf);
+        }
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* Clic en cualquier otra parte del marco del panel: consumirlo. */
+    if (ui_hit(&e->ui, UI_EXT_PANEL, mx, my)) return 1;
+    return 0;
+}
+
+/* margen interior del cuerpo del panel (debe coincidir con render_bottom.c) */
+#define BOTTOM_BODY_PAD 6
+
+/**
+ * @brief Columnas (en bytes) que caben en el cuerpo del panel inferior.
+ *
+ * Usa el ancho del cuerpo registrado por el render (UI_BOTTOM_BODY) y el ancho
+ * de caracter monoespaciado.  Debe replicar exactamente el calculo de
+ * render_bottom.c::body_cols para que el clic cuadre con lo dibujado.
+ */
+static int bottom_body_cols(Editor *e, int width) {
+    int char_w = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
+    int cols = (width - 2 * BOTTOM_BODY_PAD) / char_w;
+    if (cols < 1) cols = 1;
+    return cols;
+}
+
+/**
+ * @brief Byte-offset del canal activo bajo el cursor dentro del cuerpo del panel.
+ *
+ * Traduce (mx,my) a una posicion visual (fila, columna) usando la geometria
+ * registrada por el render (UI_BOTTOM_BODY) + el scroll del canal, y luego a un
+ * byte-offset del texto con el MISMO layout de envoltura que el render
+ * (panel_rowcol_to_offset).  Devuelve un offset >= 0, o -1 si el panel no esta
+ * abierto, no hay cuerpo o no hay canal.
+ */
+static int bottom_offset_at(Editor *e, int mx, int my) {
+    if (!e->bottom_panel_open) return -1;
+    Rect body = e->ui.single[UI_BOTTOM_BODY];
+    if (body.w <= 0) return -1;
+    const PanelChannel *c = panel_at(&e->panels, (size_t)e->bottom_active_chan);
+    if (!c) return -1;
+
+    int char_w = (e->char_w > 0 ? e->char_w : FALLBACK_CHAR_W);
+    int line_h = e->line_height > 0 ? e->line_height : 16;
+    int cols = bottom_body_cols(e, body.w);
+
+    int scroll = c->scroll;
+    if (scroll < 0) scroll = 0;
+
+    int rel_y = my - body.y;
+    if (rel_y < 0) rel_y = 0;
+    int row = scroll + rel_y / line_h; /* fila visual del documento */
+
+    int rel_x = mx - (body.x + BOTTOM_BODY_PAD);
+    if (rel_x < 0) rel_x = 0;
+    int col = rel_x / char_w; /* columna dentro de la fila */
+
+    return (int)panel_rowcol_to_offset(c->text, cols, row, col);
+}
+
+/**
+ * @brief Procesa un clic dentro del panel inferior (pestanas + cuerpo).
+ *
+ * Da el foco al panel (para que Ctrl+C copie su canal), cambia de pestana si se
+ * pulso una, o inicia una seleccion de lineas si el clic cayo en el cuerpo.
+ *
+ * @return 1 si el clic fue consumido por el panel, 0 si no.
+ */
+static int handle_bottom_panel_click(Editor *e, int mx, int my) {
+    if (!e->bottom_panel_open) return 0;
+    if (!ui_hit(&e->ui, UI_BOTTOM_PANEL, mx, my)) {
+        /* clic fuera del panel: pierde el foco (sin consumir el clic) */
+        if (e->bottom_focused) {
+            e->bottom_focused = 0;
+            e->needs_redraw = 1;
+        }
+        return 0;
+    }
+
+    /* el clic esta dentro del panel: tomar el foco */
+    e->bottom_focused = 1;
+
+    /* pestana pulsada (por indice de canal) */
+    int tab = ui_hit_idx(&e->ui, UI_LIST_BOTTOM_TAB, mx, my);
+    if (tab >= 0) {
+        e->bottom_active_chan = tab;
+        e->bottom_sel_active = 0; /* limpiar seleccion al cambiar de canal */
+        e->bottom_sel_anchor = -1;
+        e->bottom_sel_caret = -1;
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* clic en el cuerpo: fijar el ancla de la seleccion (vacia hasta arrastrar).
+     * anchor==caret => sin resaltado: un clic simple no resalta nada. */
+    if (ui_hit(&e->ui, UI_BOTTOM_BODY, mx, my)) {
+        int off = bottom_offset_at(e, mx, my);
+        e->bottom_sel_anchor = off;
+        e->bottom_sel_caret = off;
+        e->bottom_sel_active = 1;   /* viva, pero vacia (anchor==caret) */
+        e->bottom_selecting = 1;
+        e->needs_redraw = 1;
+        return 1;
+    }
+
+    /* clic en otra parte del marco (tira de pestanas vacia): consumir */
+    return 1;
+}
+
 void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     int mx = (int)ev->button.x;
     int my = (int)ev->button.y;
     if (ev->button.button != SDL_BUTTON_LEFT) return; /* solo botón izquierdo */
 
-    /* Preferencias abiertas: la pantalla es modal y consume todo el ratón. */
+    /* Preferencias abiertas: la pantalla es modal y consume todo el raton.
+     * Si ademas esta abierta la sub-pantalla "Fondos", el clic va a ella. */
     if (e->settings_open) {
-        handle_settings_click(e, mx, my);
+        if (e->background_view_open)
+            handle_background_view_click(e, mx, my);
+        else
+            handle_settings_click(e, mx, my);
         return;
     }
 
@@ -672,6 +1832,123 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
+    /* Popup de hover abierto: clic en cerrar / redimension / pestana / barra de
+     * arrastre / cuerpo; un clic FUERA lo cierra. */
+    if (e->hover.visible) {
+        HoverPopup *h = &e->hover;
+        int hdr_h = e->font_size + 12;
+        int close_w = hdr_h;
+        int in_rect = mx >= h->rect_x && mx < h->rect_x + h->rect_w &&
+                      my >= h->rect_y && my < h->rect_y + h->rect_h;
+        if (in_rect) {
+            /* boton cerrar (x): esquina superior derecha de la franja */
+            if (mx >= h->rect_x + h->rect_w - close_w &&
+                my < h->rect_y + hdr_h) {
+                editor_hover_hide(e);
+                return;
+            }
+            /* tirador de redimension: esquina inferior derecha */
+            if (mx >= h->rect_x + h->rect_w - 16 &&
+                my >= h->rect_y + h->rect_h - 16) {
+                h->resizing = 1;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* pestana */
+            int tab = ui_hit_idx(&e->ui, UI_LIST_HOVER_TAB, mx, my);
+            if (tab >= 0 && tab < h->n_tabs) {
+                h->active_tab = tab;
+                h->scroll = 0;
+                h->gb_sel_line = -1; /* la linea fijada es por-pestana */
+                e->needs_redraw = 1;
+                return;
+            }
+            /* Toggles de opciones de vista (componente generico ui_toggle;
+             * valores host-globales en Settings, compartidos por todas las
+             * extensiones que usen la vista godbolt). */
+            {
+                int changed = 1;
+                if (ui_hit(&e->ui, UI_HOVER_OPT_ARROWS, mx, my))
+                    e->settings.hover_arrows = !e->settings.hover_arrows;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_FRAME, mx, my))
+                    e->settings.hover_frame = !e->settings.hover_frame;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_NOTES, mx, my))
+                    e->settings.hover_notes = !e->settings.hover_notes;
+                else if (ui_hit(&e->ui, UI_HOVER_OPT_IR, mx, my))
+                    e->settings.hover_ir_mode =
+                        (e->settings.hover_ir_mode + 1) % 5;
+                else
+                    changed = 0;
+                if (changed) {
+                    settings_save(&e->settings);
+                    e->needs_redraw = 1;
+                    return;
+                }
+            }
+            /* resto de la franja de cabecera: arrastrar el popup */
+            if (my < h->rect_y + hdr_h) {
+                h->dragging = 1;
+                h->drag_off_x = mx - h->rect_x;
+                h->drag_off_y = my - h->rect_y;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* Pestana IR multi-vista: clic en la fila selectora alterna entre
+             * "lado a lado" y "unificado". */
+            if (h->ir_active && my >= h->ir_sel_y &&
+                my < h->ir_sel_y + (e->line_height > 0 ? e->line_height : 16) &&
+                mx >= h->ir_sel_x0 && mx <= h->ir_sel_x1) {
+                h->ir_submode = (mx < h->ir_sel_mid) ? 0 : 1;
+                h->scroll = 0;
+                e->needs_redraw = 1;
+                return;
+            }
+            /* Cuerpo de la vista "Godbolt": (a) clic cerca del separador ->
+             * empezar a arrastrarlo para redimensionar las columnas; (b) clic
+             * en una fila -> FIJAR su linea .vex (cross-highlight persistente). */
+            if (h->gb_active) {
+                if (mx >= h->gb_sepx - 4 && mx <= h->gb_sepx + 4) {
+                    h->gb_split_drag = 1;
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (h->gb_sep2x > 0 && mx >= h->gb_sep2x - 4 &&
+                    mx <= h->gb_sep2x + 4) {
+                    h->gb_split2_drag = 1; /* 2o separador (IR|asm) */
+                    e->needs_redraw = 1;
+                    return;
+                }
+                if (h->gb_lh > 0 && my >= h->gb_body_top) {
+                    int vr = (my - h->gb_body_top) / h->gb_lh;
+                    /* Mousedown en el cuerpo: registrar ancla para distinguir
+                     * CLICK (fija linea) de DRAG (selecciona texto).  La accion
+                     * se decide en el motion (drag) o en el button-up (click).*/
+                    h->gb_down_x = mx;
+                    h->gb_down_y = my;
+                    h->gb_down_row = vr;
+                    h->gb_seldrag = 0;
+                    h->gb_sel_r0 = h->gb_sel_r1 = -1; /* limpiar seleccion */
+                    /* Columna de la seleccion segun la x del mousedown. */
+                    if (mx < h->gb_sepx)
+                        h->gb_sel_col = 0; /* fuente */
+                    else if (h->gb_sep2x > 0 && mx < h->gb_sep2x)
+                        h->gb_sel_col = 1; /* IR */
+                    else
+                        h->gb_sel_col = 2; /* asm */
+                    e->needs_redraw = 1;
+                    return;
+                }
+            }
+            return; /* cuerpo: consumir el clic */
+        }
+        editor_hover_hide(e); /* clic fuera: cerrar y seguir con el clic normal */
+    }
+
+    /* Divisor de panel bajo el cursor: empezar a arrastrarlo.  Tiene prioridad
+     * sobre los clics de los paneles (handle_ext_panel_click / explorador) y
+     * del editor, para no robar el clic del borde redimensionable. */
+    if (try_start_divider_drag(e, mx, my)) return;
+
     /* Clic en la codificación de la barra de estado: abrir el selector. */
     if (ui_hit(&e->ui, UI_STATUS_ENC, mx, my)) {
         e->enc_popup = 1;
@@ -679,6 +1956,44 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         e->needs_redraw = 1;
         return;
     }
+
+    /* Boton "Extensiones" de la navbar: abrir/cerrar el panel. */
+    if (ui_hit(&e->ui, UI_EXT_TOGGLE, mx, my)) {
+        e->ext_panel_open = !e->ext_panel_open;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Boton "Panel" de la navbar: abrir/cerrar el panel inferior. */
+    if (ui_hit(&e->ui, UI_BOTTOM_TOGGLE, mx, my)) {
+        e->bottom_panel_open = !e->bottom_panel_open;
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Botones de division del editor (split panes) de la navbar. */
+    if (ui_hit(&e->ui, UI_SPLIT_V, mx, my)) {
+        editor_split_dir(e, DOCK_VERTICAL);
+        e->needs_redraw = 1;
+        return;
+    }
+    if (ui_hit(&e->ui, UI_SPLIT_H, mx, my)) {
+        editor_split_dir(e, DOCK_HORIZONTAL);
+        e->needs_redraw = 1;
+        return;
+    }
+
+    /* Paneles flotantes: estan dibujados ENCIMA del dock y de los paneles
+     * inferior/extensiones, asi que se consultan antes que ellos (pero despues
+     * de los botones de la navbar y de los popups modales).  Si el clic cae sobre
+     * un flotante, lo consume. */
+    if (e->float_count > 0 && handle_float_click(e, mx, my)) return;
+
+    /* Clic dentro del panel inferior: foco + pestanas + seleccion. */
+    if (e->bottom_panel_open && handle_bottom_panel_click(e, mx, my)) return;
+
+    /* Clic dentro del panel de extensiones: acciones + consumir el clic. */
+    if (e->ext_panel_open && handle_ext_panel_click(e, mx, my)) return;
 
     /* Menú "Archivo" abierto: tiene prioridad máxima sobre cualquier otra zona.
      * Debe comprobarse ANTES de la barra de pestañas porque el menú se dibuja
@@ -699,11 +2014,12 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* Barra de pestañas */
-    if (my >= NAVBAR_HEIGHT && my < NAVBAR_HEIGHT + TAB_BAR_HEIGHT) {
-        click_tabbar(e, mx, my);
-        return;
-    }
+    /* Barra de pestañas: global en modo simple, por-hoja en modo dividido.  Sus
+     * controles (pestañas, "x", "+") se registran en su rect real, asi que basta
+     * preguntar si el clic cae en alguno; click_tabbar devuelve 0 si no.  Esto
+     * cubre la barra de pestañas de CADA panel este donde este (p.ej. la del
+     * panel inferior de un split horizontal, fuera del rango de la barra global). */
+    if (click_tabbar(e, mx, my)) return;
 
     /* Botón "Archivo" en la navbar (geometría registrada por render) */
     if (ui_hit(&e->ui, UI_BTN_FILE, mx, my)) {
@@ -733,4 +2049,156 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
     /* clic en el texto: empezar selección */
     else
         start_text_selection(e, mx, my);
+}
+
+/* -- Ventanas desprendidas: clic en la tira de pestanas / contenido --------- */
+
+/**
+ * @brief Procesa un clic sobre la tira de pestanas de una ventana desprendida.
+ *
+ * Reusa el registro de hit-test que render_detached_window acaba de poblar para
+ * ESA ventana (UI_LIST_TAB / UI_LIST_TAB_CLOSE por indice global, UI_LIST_SPLIT_NEW
+ * por group_id).  A diferencia de click_tabbar (que enfoca via editor_focus_group,
+ * valido solo para grupos del dock), aqui el grupo NO es una hoja del dock, asi
+ * que se opera directamente sobre el grupo desprendido: cambiar de pestana
+ * (editor_focus_detached_group + asignar), cerrar (editor_tab_close con base
+ * coherente) o crear (editor_tab_new en el grupo desprendido).
+ *
+ * @return 1 si el clic cayo sobre la tira de pestanas (consumido), 0 si no.
+ */
+static int detached_tabbar_click(Editor *e, int group, int mx, int my) {
+    /* boton "+" del grupo desprendido */
+    int gnew = ui_hit_idx(&e->ui, UI_LIST_SPLIT_NEW, mx, my);
+    if (gnew == group) {
+        editor_focus_detached_group(e, group); /* enfocar el grupo desprendido */
+        editor_tab_new(e); /* nueva pestana: queda en e->active_group (==group) */
+        return 1;
+    }
+
+    int close_i = ui_hit_idx(&e->ui, UI_LIST_TAB_CLOSE, mx, my);
+    int tab_i = ui_hit_idx(&e->ui, UI_LIST_TAB, mx, my);
+    /* solo pestanas de ESTE grupo (el registro mezcla todas las barras) */
+    if (close_i >= 0 && (close_i >= e->tab_count || e->tabs[close_i].group != group))
+        close_i = -1;
+    if (tab_i >= 0 && (tab_i >= e->tab_count || e->tabs[tab_i].group != group))
+        tab_i = -1;
+    if (close_i < 0 && tab_i < 0) return 0; /* no se pulso ninguna pestana */
+
+    if (close_i >= 0) { /* "x": cerrar esa pestana del grupo desprendido */
+        editor_focus_detached_group(e, group);
+        e->active_tab = close_i;
+        e->active_group = group; /* base coherente para editor_tab_close */
+        editor_tab_close(e);
+    } else { /* cuerpo de la pestana: cambiar a ella dentro del grupo */
+        editor_focus_detached_group(e, group);
+        e->active_group = group;          /* editor_tab_switch la deja en este grupo */
+        editor_tab_switch(e, tab_i);
+    }
+    e->needs_redraw = 1;
+    return 1;
+}
+
+void editor_detached_handle_event(Editor *e, int di, void *ev_void) {
+    if (di < 0 || di >= e->detached_count) return;
+    SDL_Event *ev = (SDL_Event *)ev_void;
+    DetachedWindow *dw = &e->detached[di];
+    int group = dw->group_id;
+
+    switch (ev->type) {
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        editor_detached_close(e, di); /* X del SO: re-acoplar + destruir ventana */
+        return;
+    case SDL_EVENT_WINDOW_RESIZED:
+        dw->win_w = ev->window.data1; /* nuevo tamano de ESTA ventana */
+        dw->win_h = ev->window.data2;
+        e->needs_redraw = 1;
+        return;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        e->detached_focus_group = group; /* el teclado va a esta ventana */
+        editor_focus_detached_group(e, group);
+        e->needs_redraw = 1;
+        return;
+    case SDL_EVENT_MOUSE_WHEEL:
+        e->detached_focus_group = group;
+        editor_focus_detached_group(e, group);
+        handle_scroll(e, -ev->wheel.y * SCROLL_LINES_PER_NOTCH);
+        return;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (ev->button.button == SDL_BUTTON_LEFT) e->mouse_selecting = 0;
+        return;
+    case SDL_EVENT_MOUSE_MOTION:
+        /* arrastre de seleccion dentro del contenido de la ventana desprendida */
+        if (e->mouse_selecting && e->detached_focus_group == group && e->buf) {
+            int mx = (int)ev->motion.x, my = (int)ev->motion.y;
+            Rect content = detached_content_rect(dw->win_w, dw->win_h);
+            e->pane_active = 1;
+            e->pane_left = content.x;
+            e->pane_top = content.y;
+            e->pane_width = content.w;
+            e->pane_height = content.h;
+            int line, col;
+            point_to_line_col(e, mx, my, &line, &col);
+            e->sel_active = 1;
+            buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+            editor_sync_cursor(e);
+            e->pane_active = 0;
+            e->needs_redraw = 1;
+        }
+        return;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+        if (ev->button.button != SDL_BUTTON_LEFT) return;
+        int mx = (int)ev->button.x, my = (int)ev->button.y;
+
+        /* el teclado pasa a esta ventana */
+        e->detached_focus_group = group;
+        editor_focus_detached_group(e, group);
+
+        /* refrescar el registro de hit-test con la geometria de ESTA ventana
+         * (varias ventanas comparten un unico e->ui; el ultimo render gana).
+         * Salvar el registro de la ventana principal antes y reponerlo despues
+         * del hit-test, por si en el mismo drenado de eventos llega luego un clic
+         * de la ventana principal. */
+        UiRegistry saved_ui = e->ui;
+        render_detached_window(e, (SDL_Renderer *)dw->renderer, group, dw->win_w,
+                               dw->win_h);
+        /* render_detached_window dejo e->buf en la pestana activa del grupo: como
+         * ya enfocamos el grupo, sigue siendo la correcta. */
+
+        Rect tabbar = detached_tabbar_rect(dw->win_w, dw->win_h);
+        if (rect_has(tabbar, mx, my)) {
+            detached_tabbar_click(e, group, mx, my);
+            e->ui = saved_ui; /* reponer hit-test de la principal */
+            return;
+        }
+
+        /* clic en el contenido: colocar el cursor mapeando con el area de la
+         * ventana desprendida (pane override a su rect de contenido). */
+        Rect content = detached_content_rect(dw->win_w, dw->win_h);
+        if (rect_has(content, mx, my) && e->tab_count > 0 && e->buf) {
+            e->pane_active = 1;
+            e->pane_left = content.x;
+            e->pane_top = content.y;
+            e->pane_width = content.w;
+            e->pane_height = content.h;
+            int text_x = get_left_offset(e) + editor_gutter_w(e) + PADDING_LEFT;
+            if (mx >= text_x) {
+                int line, col;
+                point_to_line_col(e, mx, my, &line, &col);
+                editor_sel_clear(e);
+                e->sel_anchor_line = line;
+                e->sel_anchor_col = col;
+                e->mouse_selecting = 1; /* permitir arrastrar para seleccionar */
+                buf_move_to(e->buf, editor_pos_from_line_col(e, line, col));
+                editor_sync_cursor(e);
+                editor_ensure_visible(e);
+            }
+            e->pane_active = 0;
+        }
+        e->ui = saved_ui; /* reponer hit-test de la principal */
+        e->needs_redraw = 1;
+        return;
+    }
+    default:
+        return; /* el teclado/texto los maneja input.c (input_detached_event) */
+    }
 }

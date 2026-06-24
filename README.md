@@ -70,6 +70,7 @@ integran con CLion / VS Code.
 | Documento | Contenido |
 |-----------|-----------|
 | [Cómo compilar](doc/how_build.md) | Requisitos y compilación en Windows / Linux |
+| [Sistema de extensiones](doc/extensiones.md) | ABI C, manifiesto y cómo cualquier lenguaje hace extensiones |
 | [Roadmap](doc/roadmap.md) | Futuras características planificadas |
 | [Bugs conocidos](doc/known_issues.md) | Problemas pendientes de corregir |
 | [Contribuir](CONTRIBUTING.md) | Flujo de ramas, formato de commits y pull requests |

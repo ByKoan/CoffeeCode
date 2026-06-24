@@ -27,12 +27,26 @@
  * @param e          Editor.
  * @param dirty_line Primera línea que hay que volver a resaltar.
  */
+/**
+ * @brief Notifica a las extensiones que el buffer activo cambio.
+ *
+ * Emite COFFEE_EVENT_BUFFER_CHANGED al host de extensiones (opaco, en
+ * e->ext_host).  Lo consumen, por ejemplo, los clientes LSP para re-analizar el
+ * documento (con su propio debounce).  No hace nada si no hay host cargado.
+ */
+static void notify_buffer_changed(Editor *e) {
+    if (e->ext_host)
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_BUFFER_CHANGED,
+                      NULL);
+}
+
 static void after_edit(Editor *e, int dirty_line) {
     editor_update_lexer(e, dirty_line);
     editor_ensure_visible(e);
     e->modified = 1;
     e->needs_redraw = 1;
     editor_cursor_blink_reset(e); /* cursor siempre visible tras editar */
+    notify_buffer_changed(e);     /* avisar a las extensiones (p.ej. LSP) */
 }
 
 /**
@@ -417,6 +431,7 @@ void do_delete(Editor *e) {
     editor_update_lexer(e, e->cursor_line);
     e->modified = 1;
     e->needs_redraw = 1;
+    notify_buffer_changed(e); /* avisar a las extensiones (p.ej. LSP) */
 }
 
 /* ── Selección global ───────────────────────────────────────────────────────
@@ -448,7 +463,61 @@ void select_all(Editor *e) {
  *
  * @param e Editor.
  */
+/**
+ * @brief Copia el contenido del canal activo del panel inferior al
+ *        portapapeles.
+ *
+ * Si hay una seleccion de lineas viva, copia solo esas lineas (rango ordenado
+ * [anchor, caret]); si no, copia TODO el scrollback del canal activo.  Esto es
+ * el "copy-todo / copy-seleccion" del panel inferior.
+ *
+ * @param e Editor.
+ * @return 1 si copio algo (o el canal estaba vacio pero era el destino), 0 si no
+ *         habia panel/canal del que copiar.
+ */
+static int bottom_panel_copy(Editor *e) {
+    if (!e->bottom_panel_open || !e->bottom_focused) return 0;
+    if (e->bottom_active_chan < 0 ||
+        (size_t)e->bottom_active_chan >= e->panels.count)
+        return 0;
+    const PanelChannel *c =
+        panel_at(&e->panels, (size_t)e->bottom_active_chan);
+    if (!c) return 0;
+
+    /* sin seleccion (o seleccion vacia anchor==caret): copiar todo el canal */
+    if (!e->bottom_sel_active || e->bottom_sel_anchor < 0 ||
+        e->bottom_sel_caret < 0 ||
+        e->bottom_sel_anchor == e->bottom_sel_caret) {
+        SDL_SetClipboardText(c->text);
+        return 1;
+    }
+
+    /* con seleccion: copiar el substring [lo, hi) de byte-offsets.  Las '\n'
+     * reales del texto se preservan; las roturas por word-wrap NO anyaden '\n'
+     * porque no estan en `text`. */
+    int lo = e->bottom_sel_anchor, hi = e->bottom_sel_caret;
+    if (hi < lo) {
+        int t = lo;
+        lo = hi;
+        hi = t;
+    }
+    if (lo < 0) lo = 0;
+    if ((size_t)hi > c->len) hi = (int)c->len;
+    if (lo > hi) lo = hi;
+
+    size_t len = (size_t)(hi - lo);
+    char *tmp = malloc(len + 1);
+    if (!tmp) return 1;
+    memcpy(tmp, c->text + lo, len);
+    tmp[len] = '\0';
+    SDL_SetClipboardText(tmp);
+    free(tmp);
+    return 1;
+}
+
 void do_copy(Editor *e) {
+    /* Si el panel inferior tiene el foco, Ctrl+C copia su canal activo. */
+    if (bottom_panel_copy(e)) return;
     size_t from, to;
     if (!editor_sel_range(e, &from, &to)) return;
     size_t len = to - from;

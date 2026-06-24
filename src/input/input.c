@@ -135,13 +135,24 @@ static void field_select_all(FindField *fld) {
  */
 static void editor_insert_text(Editor *e, const char *text) {
     if (e->tab_count == 0) return; /* sin documento abierto, nada que editar */
-    buf_insert_str(e->buf, text, strlen(text));
+    size_t pos = buf_cursor_pos(e->buf);
+    size_t len = strlen(text);
+    /* Registrar la insercion en la pila de undo: sin esto, el texto TECLEADO no
+     * se podia deshacer con Ctrl+Z (este es el camino del evento TEXT_INPUT,
+     * distinto de las teclas especiales que pasan por input_keyboard.c). */
+    editor_undo_push_insert(e, pos, text, len);
+    buf_insert_str(e->buf, text, len);
     editor_sync_cursor(e); /* recalcular (línea, columna) del cursor */
     editor_update_lexer(
         e, e->cursor_line);   /* re-tokenizar desde la línea editada */
     editor_ensure_visible(e); /* asegurar que el cursor sigue visible */
     e->modified = 1;
     e->needs_redraw = 1;
+    /* Avisar a las extensiones del cambio (p.ej. el cliente LSP re-analiza con
+     * debounce).  Sin esto, escribir texto no actualizaba los diagnosticos. */
+    if (e->ext_host)
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_BUFFER_CHANGED,
+                      NULL);
 }
 
 /* ── Manejadores ────────────────────────────────────────────────────────────
@@ -309,6 +320,7 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
     case SDLK_Q: e->running = 0; break; /* salir del bucle principal */
     case SDLK_COMMA:                    /* Ctrl+, abre las preferencias */
         e->settings_open = 1;
+        e->background_view_open = 0; /* arrancar en la pagina principal */
         e->needs_redraw = 1;
         break;
     case SDLK_F: open_find_bar(e); break;
@@ -317,6 +329,19 @@ static void ctrl_key(Editor *e, SDL_Keycode key, int shift) {
     case SDLK_TAB: /* Ctrl+Tab: pasar a la siguiente pestaña (cíclico) */
         if (e->tab_count > 0)
             editor_tab_switch(e, (e->active_tab + 1) % e->tab_count);
+        break;
+    case SDLK_BACKSLASH:
+        /* Ctrl+\: dividir la hoja enfocada en vertical (lado a lado).
+         * Ctrl+Shift+\: dividirla en horizontal (arriba/abajo). */
+        editor_split_dir(e, shift ? DOCK_HORIZONTAL : DOCK_VERTICAL);
+        break;
+    case SDLK_C:
+        /* Ctrl+C con el panel inferior enfocado: copiar su canal (funciona
+         * aunque no haya ningun archivo abierto). */
+        if (e->bottom_panel_open && e->bottom_focused) {
+            do_copy(e);
+            return;
+        }
         break;
     default: break;
     }
@@ -416,11 +441,49 @@ static void edit_key(Editor *e, SDL_Keycode key, int shift) {
 static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
     SDL_Keycode key = ev->key.key; /* tecla lógica (keycode) de la pulsación */
 
-    /* Preferencias abiertas: pantalla modal; solo ESC la cierra. */
+    /* Preferencias abiertas: pantalla modal; ESC retrocede.  Si esta abierta la
+     * sub-pantalla "Fondos", ESC vuelve a preferencias; si no, cierra. */
     if (e->settings_open) {
         if (key == SDLK_ESCAPE) {
-            e->settings_open = 0;
+            if (e->background_view_open)
+                e->background_view_open = 0;
+            else
+                e->settings_open = 0;
             e->needs_redraw = 1;
+        }
+        return;
+    }
+
+    /* Popup de hover abierto: ESC lo cierra. */
+    if (e->hover.visible && key == SDLK_ESCAPE) {
+        editor_hover_hide(e);
+        return;
+    }
+
+    /* Popup de hover: Ctrl+C copia el texto de la pestana activa al
+     * portapapeles (decodificando los formatos internos godbolt/diff/IR a
+     * texto plano legible). */
+    if (e->hover.visible && key == SDLK_C &&
+        (SDL_GetModState() & SDL_KMOD_CTRL)) {
+        /* Si hay una seleccion por arrastre en la vista godbolt, copiar SOLO
+         * esas filas (su texto); si no, copiar toda la pestana activa. */
+        if (e->hover.gb_active && e->hover.gb_sel_r0 >= 0 &&
+            e->hover.gb_sel_r1 >= e->hover.gb_sel_r0) {
+            char buf[HOVER_GB_ROWS * 200];
+            int o = 0;
+            for (int rr = e->hover.gb_sel_r0;
+                 rr <= e->hover.gb_sel_r1 && rr < HOVER_GB_ROWS; ++rr) {
+                const char *t = e->hover.gb_rowtext[rr];
+                if (t[0])
+                    o += snprintf(buf + o, (int)sizeof buf - o, "%s\n", t);
+            }
+            if (o > 0) SDL_SetClipboardText(buf);
+        } else {
+            char *txt = hover_copy_active_text(&e->hover);
+            if (txt) {
+                SDL_SetClipboardText(txt);
+                free(txt);
+            }
         }
         return;
     }
@@ -468,10 +531,82 @@ static void on_key_down(Editor *e, SDL_Event *ev, int ctrl, int shift) {
  * @param e  Editor cuyo estado se actualiza.
  * @param ev Evento de SDL ya leído de la cola.
  */
+/**
+ * @brief SDL_WindowID al que pertenece un evento, o 0 si el evento no esta
+ *        ligado a una ventana concreta (p.ej. SDL_EVENT_QUIT).
+ *
+ * SDL_Event es una union: cada tipo guarda el windowID en un miembro distinto
+ * (window/key/text/button/motion/wheel).  Se centraliza aqui para el enrutado
+ * multi-ventana (ver editor_detached_by_window_id).
+ */
+static unsigned int event_window_id(const SDL_Event *ev) {
+    switch (ev->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        return ev->window.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        return ev->key.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+        return ev->text.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return ev->button.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+        return ev->motion.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return ev->wheel.windowID;
+    default:
+        return 0; /* evento sin ventana asociada */
+    }
+}
+
+/**
+ * @brief Maneja teclado/texto de una ventana desprendida reusando los
+ *        manejadores de la principal sobre la pestana activa del grupo.
+ *
+ * Enfoca el grupo desprendido (e->buf pasa a su pestana activa) y delega en
+ * on_text_input / on_key_down, que ya operan sobre e->buf y los escalares de
+ * vista.  El resto de eventos (raton, ventana) los lleva
+ * editor_detached_handle_event (input_mouse.c).
+ */
+static void input_detached_event(Editor *e, int di, SDL_Event *ev, int ctrl,
+                                 int shift) {
+    int group = e->detached[di].group_id;
+    switch (ev->type) {
+    case SDL_EVENT_TEXT_INPUT:
+        editor_focus_detached_group(e, group);
+        on_text_input(e, ev, ctrl);
+        return;
+    case SDL_EVENT_KEY_DOWN:
+        editor_focus_detached_group(e, group);
+        on_key_down(e, ev, ctrl, shift);
+        return;
+    default:
+        /* raton + eventos de ventana: al manejador de input_mouse.c */
+        editor_detached_handle_event(e, di, ev);
+        return;
+    }
+}
+
 void input_handle_event(Editor *e, SDL_Event *ev) {
     SDL_Keymod mods = SDL_GetModState(); /* máscara de modificadores actuales */
     int ctrl = (mods & SDL_KMOD_CTRL) != 0;   /* ¿algún Ctrl pulsado? */
     int shift = (mods & SDL_KMOD_SHIFT) != 0; /* ¿algún Shift pulsado? */
+
+    /* Enrutado multi-ventana: si hay ventanas desprendidas y el evento pertenece
+     * a una de ellas (por SDL_WindowID), lo maneja su camino aparte.  Con
+     * detached_count==0 esto es un unico chequeo barato y el camino de la ventana
+     * principal de abajo queda EXACTAMENTE como siempre: cero regresion. */
+    if (e->detached_count > 0) {
+        int di = editor_detached_by_window_id(e, event_window_id(ev));
+        if (di >= 0) {
+            input_detached_event(e, di, ev, ctrl, shift);
+            return;
+        }
+    }
 
     switch (ev->type) {
     case SDL_EVENT_QUIT: e->running = 0; break; /* cerrar la ventana → salir */
@@ -483,10 +618,51 @@ void input_handle_event(Editor *e, SDL_Event *ev) {
     case SDL_EVENT_MOUSE_WHEEL: on_mouse_wheel(e, ev); break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (ev->button.button == SDL_BUTTON_LEFT) {
+            /* soltar tras arrastrar una pestana: aplicar el drop (mover/dividir)
+             * antes de limpiar el resto de estados de arrastre */
+            on_tab_drag_release(e, (int)ev->button.x, (int)ev->button.y);
             /* soltar el botón izquierdo termina cualquier arrastre en curso */
             e->ftree.dragging_border = 0;
+            e->dragging_divider = DIVIDER_NONE; /* fin del arrastre de divisor */
+            e->dock_drag_split = DOCK_NONE;     /* fin del arrastre de dock     */
             e->mouse_selecting = 0;
             e->scrollbar_dragging = 0;
+            e->bottom_selecting = 0; /* fin de la seleccion del panel inferior */
+            /* Si se solto un flotante (movido por su titulo, no redimensionado)
+             * sobre una hoja del dock, acoplarlo ahi antes de limpiar el estado. */
+            if (e->float_drag >= 0 && e->float_drag < e->float_count &&
+                !e->float_resizing && e->float_dock_target_group >= 0 &&
+                e->float_dock_zone != DOCK_DZ_NONE)
+                editor_float_dock_to(e, e->float_drag, e->float_dock_target_group,
+                                     e->float_dock_zone);
+            e->float_dock_target_group = -1; /* limpiar el destino siempre */
+            e->float_dock_zone = DOCK_DZ_NONE;
+            e->float_drag = -1;      /* fin del arrastre de un flotante         */
+            e->float_resizing = 0;
+            e->hover.dragging = 0;   /* fin del arrastre del popup de hover      */
+            e->hover.resizing = 0;
+            e->hover.gb_split_drag = 0; /* fin del arrastre del separador godbolt */
+            e->hover.gb_split2_drag = 0; /* fin del arrastre del 2o separador */
+            /* Godbolt: si fue un CLICK (sin arrastre) en el cuerpo, fijar la
+             * linea (cross-highlight); si fue DRAG, conservar la seleccion. */
+            if (e->hover.visible && e->hover.gb_active &&
+                e->hover.gb_down_y >= e->hover.gb_body_top) {
+                if (!e->hover.gb_seldrag) {
+                    int vr = e->hover.gb_down_row;
+                    int ln = 0;
+                    if (e->hover.gb_down_x < e->hover.gb_sepx) {
+                        if (vr >= 0 && vr < e->hover.gb_left_n)
+                            ln = e->hover.gb_left_lines[vr];
+                    } else if (vr >= 0 && vr < e->hover.gb_right_n) {
+                        ln = e->hover.gb_right_lines[vr];
+                    }
+                    e->hover.gb_sel_line =
+                        (ln != 0 && ln == e->hover.gb_sel_line) ? -1 : ln;
+                    e->needs_redraw = 1;
+                }
+                e->hover.gb_down_y = -1; /* desarmar el ancla */
+                e->hover.gb_seldrag = 0;
+            }
         }
         break;
     case SDL_EVENT_MOUSE_MOTION: on_mouse_motion(e, ev); break;

@@ -37,12 +37,46 @@ int draw_text_font(Editor *e, TTF_Font *font, const char *text, int x, int y,
  */
 int get_line_text(Editor *e, int line, char *out, int max);
 
+/* Bordes del area de contenido del editor (respetan la division en paneles).
+ * Sin division devuelven 0 y e->win_w; con division, el sub-rect del panel. */
+int render_content_left(Editor *e);
+int render_content_right(Editor *e);
+
 /* Renderizadores de seccion (invocados desde render_frame) */
 void render_navbar(Editor *e);   /* barra superior + título      */
 void render_menu(Editor *e);     /* desplegable "Archivo"        */
 void render_filetree(Editor *e); /* panel lateral abierto        */
 void render_filetree_toggle_closed(Editor *e); /* botón para abrir el panel */
 void render_tabbar(Editor *e);    /* barra de pestañas + botón "+"*/
+/* Barra de pestañas de UNA hoja del editor dividido: dibuja solo las pestañas
+ * cuyo tab.group == @p group dentro de la franja [pane_left, pane_right) y a la
+ * altura @p bar_y (borde superior del rect de la hoja), y registra su geometría
+ * (UI_LIST_TAB / UI_LIST_TAB_CLOSE por índice global, y UI_LIST_SPLIT_NEW por
+ * número de grupo para el botón "+"). */
+void render_tabbar_group(Editor *e, int group, int bar_y, int pane_left,
+                         int pane_right);
+/* Guia visual del arrastre de una pestana (drag-to-dock): superpone un overlay
+ * translucido sobre la zona destino (hoja completa para CENTER, mitad/banda para
+ * los bordes) y un "fantasma" del titulo junto al cursor.  No dibuja nada si no
+ * hay un arrastre en curso (e->dragging_tab == 0). */
+void render_tab_drag(Editor *e);
+/* Multi-ventana: resalta esta ventana como DESTINO de una pestana arrastrada
+ * desde otra ventana (velo translucido + marco de acento de "soltar aqui").  No
+ * dibuja nada si e->drag_hover_highlight == 0 (caso por defecto y con una sola
+ * ventana): cero regresion. */
+void render_drag_window_highlight(Editor *e);
+/* Dibuja los paneles flotantes (overlay dentro de la ventana) ENCIMA del dock:
+ * por cada flotante en z-order (atras->delante) su marco, barra de titulo (con
+ * nombre de la pestana activa + botones acoplar y cerrar), su tira de pestanas y
+ * su contenido recortado, y la esquina de redimension.  No dibuja nada si no hay
+ * flotantes (e->float_count == 0): cero regresion. */
+void render_floats(Editor *e);
+/* Guia visual del re-acople de un flotante por arrastre de su barra de titulo:
+ * superpone el MISMO overlay de zona destino que render_tab_drag sobre la hoja
+ * del dock donde caera (hoja completa para CENTER, mitad/banda para los bordes).
+ * No dibuja nada si no hay un flotante en arrastre con destino de acople
+ * (e->float_dock_target_group < 0). */
+void render_float_dock_guide(Editor *e);
 void render_find_bar(Editor *e);  /* barra de búsqueda (Ctrl+F)   */
 void render_shortcuts(Editor *e); /* banda de atajos (badges)     */
 void render_scrollbar(Editor *e, int left_offset); /* scroll vertical */
@@ -51,5 +85,49 @@ void render_selection(Editor *e, int left_offset, int text_top,
                       int visible_lines);
 /* pantalla de preferencias (a pantalla completa) */
 void render_settings_view(Editor *e);
+/* sub-pantalla "Fondos" de preferencias (a pantalla completa) */
+void render_background_view(Editor *e);
+/* dibuja el fondo configurado bajo el area de texto del editor */
+void render_background_area(Editor *e);
+/* dibuja el fondo configurado cubriendo TODA la ventana (capa bajo el cromo) */
+void render_background_window(Editor *e);
+/* 1 si el editor esta en modo see-through (el fondo se ve a traves del cromo) */
+int render_is_see_through(Editor *e);
+/* rellena el fondo de una banda del cromo: opaco en BG_MODE_NONE, semi-
+ * transparente (compone con el fondo) en los modos see-through */
+void chrome_fill_bg(Editor *e, Color c, int x, int y, int w, int h);
+/* pinta el fondo configurado (color/imagen) dentro de un rectangulo dado;
+ * lo usa la previsualizacion de la sub-pantalla "Fondos" */
+void render_background_preview(Editor *e, SDL_FRect area);
 /* popup del selector de codificación (desde la barra de estado) */
 void render_enc_popup(Editor *e);
+/* popup de hover con pestanas (info de simbolo del LSP) */
+void render_hover_popup(Editor *e);
+
+/* -- Sistema de extensiones ----------------------------------------- */
+/* Dibuja las vistas registradas por extensiones (register_view): paneles y
+ * sidebars de extension, con un CoffeePainter recortado a su area. */
+void render_ext_views(Editor *e);
+/* Dibuja el panel de extensiones del IDE (lista de cargadas + acciones). */
+void render_ext_panel(Editor *e);
+/* Pinta los fondos de linea decorados por extensiones (set_line_background) del
+ * buffer en vivo (e->buf), como banda completa del panel desde render_content_
+ * left hasta @p content_right.  No pinta nada si no hay host/buffer/decoraciones. */
+void render_ext_line_backgrounds(Editor *e, int content_right, int text_top,
+                                 int visible_lines, int total_lines);
+/* Pinta el marcador de gutter decorado por extensiones (set_gutter_marker) de la
+ * linea visible @p li, en la franja del gutter [@p gutter_x, ancho GUTTER_WIDTH)
+ * a la altura @p y.  Devuelve 1 si pinto un marcador (el numero de linea no se
+ * dibuja sobre el), 0 si la linea no tiene marcador. */
+int render_ext_gutter_marker(Editor *e, int li, int gutter_x, int y);
+/* Geometria de la X (px) donde el panel de extensiones empieza, para que el
+ * resto del cromo no lo pise. 0 si el panel esta cerrado. */
+int render_ext_panel_width(Editor *e);
+
+/* -- Panel inferior (Salida/Logs/Terminal) -------------------------------- */
+/* Dibuja el panel inferior con su tira de pestanas y el canal activo. */
+void render_bottom_panel(Editor *e);
+/* Alto (px) que ocupa el panel inferior, 0 si esta cerrado. */
+int render_bottom_panel_height(Editor *e);
+/* Alto (px) de la tira de pestanas del panel inferior. */
+#define BOTTOM_TAB_H 26

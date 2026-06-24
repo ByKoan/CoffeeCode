@@ -16,6 +16,8 @@
  */
 #include "editor_internal.h"
 
+#include "ext/ext_host.h" /* ext_host_emit: avisar a las extensiones (LSP) */
+
 /**
  * @brief Libera el texto malloc'd de una entrada de undo y la deja vacía.
  * @param ue Entrada cuyo @c text se libera (queda a NULL, @c len a 0).
@@ -143,6 +145,12 @@ static void after_undo_redo(Editor *e) {
     editor_ensure_visible(e);
     e->modified = 1;
     e->needs_redraw = 1;
+    /* Deshacer/rehacer tambien cambia el texto: notificar a las extensiones
+     * (p.ej. el cliente LSP) para que re-analicen y los diagnosticos no queden
+     * obsoletos tras un Ctrl+Z / Ctrl+Y. */
+    if (e->ext_host)
+        ext_host_emit((CoffeeHost *)e->ext_host, COFFEE_EVENT_BUFFER_CHANGED,
+                      NULL);
 }
 
 /**
