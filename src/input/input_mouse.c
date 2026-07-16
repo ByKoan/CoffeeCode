@@ -2010,18 +2010,6 @@ void on_mouse_button_down(Editor *e, SDL_Event *ev) {
         return;
     }
 
-    /* Botones de division del editor (split panes) de la navbar. */
-    if (ui_hit(&e->ui, UI_SPLIT_V, mx, my)) {
-        editor_split_dir(e, DOCK_VERTICAL);
-        e->needs_redraw = 1;
-        return;
-    }
-    if (ui_hit(&e->ui, UI_SPLIT_H, mx, my)) {
-        editor_split_dir(e, DOCK_HORIZONTAL);
-        e->needs_redraw = 1;
-        return;
-    }
-
     /* Paneles flotantes: estan dibujados ENCIMA del dock y de los paneles
      * inferior/extensiones, asi que se consultan antes que ellos (pero despues
      * de los botones de la navbar y de los popups modales).  Si el clic cae sobre

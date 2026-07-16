@@ -1,0 +1,46 @@
+[
+  {
+    "id": "clangd",
+    "exts": [".c", ".h", ".cpp", ".cc", ".cxx", ".hpp"],
+    "server_exe": "clangd",
+    "args": ["--background-index"],
+    "language_id": "c"
+  },
+  {
+    "id": "pyright",
+    "exts": [".py"],
+    "server_exe": "pyright-langserver",
+    "args": ["--stdio"],
+    "language_id": "python"
+  },
+  {
+    "id": "gopls",
+    "exts": [".go"],
+    "server_exe": "gopls",
+    "args": [],
+    "language_id": "go"
+  },
+  {
+    "id": "rust-analyzer",
+    "exts": [".rs"],
+    "server_exe": "rust-analyzer",
+    "args": [],
+    "language_id": "rust"
+  },
+  {
+    "id": "ts-ls",
+    "exts": [".ts", ".tsx", ".js", ".jsx"],
+    "server_exe": "typescript-language-server",
+    "args": ["--stdio"],
+    "language_id": "typescript"
+  },
+
+  {
+    "_comment": "EJEMPLO: asi se anyade un lenguaje propio con su propio LSP. Borra este objeto o edita sus campos -- server_exe debe estar en PATH (o darle ruta absoluta), 'exts' es la lista de extensiones que atiende, y 'language_id' es el languageId que se manda en textDocument/didOpen (lo define TU servidor).",
+    "id": "mi-lenguaje",
+    "exts": [".milang"],
+    "server_exe": "mi-lenguaje-lsp",
+    "args": ["--stdio"],
+    "language_id": "milenguaje"
+  }
+]

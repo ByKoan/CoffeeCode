@@ -27,24 +27,28 @@
 /**
  * @brief Abre la fuente TrueType del editor desde disco.
  *
- * La fuente ya no va embebida en el binario, así que hay que localizar el
- * archivo
- * @c .ttf en tiempo de ejecución. Se prueba, en orden:
- *   1. La ruta de la variable de entorno @c COFFEECODE_FONT (permite al usuario
- *      elegir su propia fuente).
- *   2. @c font.ttf y @c assets/font.ttf junto al ejecutable. @c
- * SDL_GetBasePath() devuelve la carpeta donde está el binario (con separador
- * final), de modo que la app funciona aunque se lance desde otro directorio de
- * trabajo.
- *   3. Rutas relativas al directorio de trabajo actual (último recurso).
+ * Ya no se distribuye ninguna fuente propia junto al ejecutable: por defecto
+ * el editor usa una fuente del propio sistema operativo (localizada con
+ * ::fonts_scan, la misma lista que alimenta el selector de preferencias). Se
+ * prueba, en orden:
+ *   1. La ruta elegida explícitamente en preferencias (@c settings.font_path).
+ *   2. La ruta de la variable de entorno @c COFFEECODE_FONT (permite al
+ *      usuario forzar otra fuente sin tocar preferencias).
+ *   3. La primera fuente encontrada por ::fonts_scan en las carpetas
+ *      estándar del sistema (@p sys_fonts), es decir, la fuente
+ *      "predeterminada del sistema".
  *
- * @param size Tamaño de la fuente en puntos (lo que SDL_ttf llama "point
- * size").
- * @return La fuente abierta, o @c NULL si no se encontró ninguna en esas rutas.
+ * @param size      Tamaño de la fuente en puntos (lo que SDL_ttf llama "point
+ *                  size").
+ * @param path      Ruta elegida en preferencias, o "" para usar la del
+ *                  sistema.
+ * @param sys_fonts Lista de fuentes del sistema ya escaneada (::fonts_scan).
+ * @return La fuente abierta, o @c NULL si no se encontró ninguna válida.
  *         El llamante es dueño del puntero y debe cerrarlo con @c
  * TTF_CloseFont.
  */
-static TTF_Font *load_editor_font(float size, const char *path) {
+static TTF_Font *load_editor_font(float size, const char *path,
+                                   const FontList *sys_fonts) {
     /* 1) ruta explícita elegida en preferencias (settings.font_path) */
     if (path && path[0]) {
         TTF_Font *f = TTF_OpenFont(path, size);
@@ -60,24 +64,17 @@ static TTF_Font *load_editor_font(float size, const char *path) {
         if (f) return f;
     }
 
-    /* SDL_GetBasePath: carpeta del ejecutable (p. ej. "C:\\app\\"), con la
-     * barra final incluida. Así construimos rutas absolutas robustas frente al
-     * cwd. */
-    const char *base = SDL_GetBasePath();
-    if (base) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%sfont.ttf", base);
-        TTF_Font *f = TTF_OpenFont(path, size);
-        if (f) return f;
-        snprintf(path, sizeof(path), "%sassets/font.ttf", base);
-        f = TTF_OpenFont(path, size);
-        if (f) return f;
+    /* Sin preferencia explícita: usar la fuente predeterminada del sistema,
+     * es decir, la primera que haya encontrado fonts_scan(). Si alguna falla
+     * al abrir (archivo corrupto, formato no soportado por SDL_ttf...) se
+     * prueba con la siguiente antes de rendirse. */
+    if (sys_fonts) {
+        for (int i = 0; i < sys_fonts->count; i++) {
+            TTF_Font *f = TTF_OpenFont(sys_fonts->items[i].path, size);
+            if (f) return f;
+        }
     }
-
-    /* Último recurso: relativas al directorio de trabajo. */
-    TTF_Font *f = TTF_OpenFont("assets/font.ttf", size);
-    if (f) return f;
-    return TTF_OpenFont("font.ttf", size);
+    return NULL;
 }
 
 void editor_reload_font(Editor *e) {
@@ -88,8 +85,8 @@ void editor_reload_font(Editor *e) {
     if (e->is_secondary) return;
     /* Cargar la nueva fuente en una variable temporal: si falla (ruta inválida
      * o tamaño imposible) se conserva la actual y no se rompe el editor. */
-    TTF_Font *nf =
-        load_editor_font(e->settings.font_size, e->settings.font_path);
+    TTF_Font *nf = load_editor_font(e->settings.font_size, e->settings.font_path,
+                                     &e->fonts);
     if (!nf) return;
 
     if (e->font) TTF_CloseFont(e->font);
@@ -594,7 +591,8 @@ static int ext_hook_goto_location(void *ud, const char *path, int line,
  * SDL_EVENT_TEXT_INPUT), que entregan caracteres ya compuestos (acentos, IME) —
  * distinto de las teclas crudas. Imprescindible para escribir texto
  * correctamente.
- *   6. @c TTF_Init + ::load_editor_font: arranca SDL_ttf y abre la fuente.
+ *   6. @c TTF_Init + ::load_editor_font: arranca SDL_ttf y abre la fuente
+ *      predeterminada del sistema (o la elegida en preferencias).
  *
  * @param e        Editor a inicializar (se pone a cero al entrar).
  * @param filepath Archivo a abrir al arrancar, o @c NULL/"" para empezar vacío.
@@ -717,12 +715,13 @@ int editor_init(Editor *e, const char *filepath) {
 #endif
     e->font_size = e->settings.font_size;
     e->line_height = e->settings.font_size + 4; /* alto de línea (16 -> 20) */
-    e->font = load_editor_font(e->font_size, e->settings.font_path);
+    e->font =
+        load_editor_font(e->font_size, e->settings.font_path, &e->fonts);
     if (!e->font) {
-        fprintf(
-            stderr,
-            "No se pudo cargar la fuente (font.ttf). Coloca font.ttf junto al "
-            "ejecutable o define COFFEECODE_FONT.\n");
+        fprintf(stderr,
+                "No se pudo cargar ninguna fuente del sistema. Instala alguna "
+                "fuente TrueType o define COFFEECODE_FONT con la ruta a una "
+                ".ttf.\n");
         return 0;
     }
 

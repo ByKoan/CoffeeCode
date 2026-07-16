@@ -1,0 +1,10 @@
+[extension]
+id           = "lang-basic"
+name         = "Resaltado basico multi-lenguaje"
+version      = "0.1.0"
+author       = "tu-nombre"
+entry        = "coffee_lang_basic@COFFEE_EXT_DLL_SUFFIX@"
+abi          = 4
+description  = "Resaltado sincrono inmediato (keywords/strings/comentarios/numeros) para Python, Java, JavaScript/TypeScript, Go y Rust, sin depender de un LSP"
+dependencies = []
+provides     = []

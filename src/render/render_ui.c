@@ -177,19 +177,6 @@ void render_navbar(Editor *e) {
         ui_button(e, UI_BOTTOM_TOGGLE, panel_box, "  Panel  ",
                   &e->theme.style_nav,
                   e->bottom_panel_open ? UI_ACTIVE : UI_NORMAL);
-
-        /* Botones de division del editor (split panes), a la izquierda de
-         * "Panel".  Dan una via de division independiente del teclado (en
-         * algunas distribuciones el atajo con '\' no es comodo de teclear). */
-        int sw = 0, sph = 0;
-        TTF_GetStringSize(e->font, " [|] ", 0, &sw, &sph);
-        if (sw < 24) sw = 44;
-        Rect splitv_box = {panel_box.x - sw - 6, NAV_BTN_Y, sw, btn_h};
-        ui_button(e, UI_SPLIT_V, splitv_box, " [|] ", &e->theme.style_nav,
-                  UI_NORMAL);
-        Rect splith_box = {splitv_box.x - sw - 6, NAV_BTN_Y, sw, btn_h};
-        ui_button(e, UI_SPLIT_H, splith_box, " [-] ", &e->theme.style_nav,
-                  UI_NORMAL);
     }
 }
 

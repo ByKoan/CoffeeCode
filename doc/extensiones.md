@@ -125,6 +125,10 @@ Resumen de capacidades por area:
 | **Config / datos** | `get_config`, `set_config`, `ext_dir` | Preferencias y directorio privado de la extension |
 | **Lenguajes embebidos** | `register_native_fn` | Exponer el `CoffeeApi` a un interprete/compilador embebido (ver seccion 5) |
 
+> El resaltado de sintaxis (fila "Resaltado" de arriba) tiene su propia guia
+> detallada, con como anyadir un lenguaje o conectar un language server
+> propio sin recompilar: [resaltado-sintaxis.md](resaltado-sintaxis.md).
+
 El **dibujo** sigue un modelo de capacidades: una extension no pinta "donde
 quiere", sino que registra una **vista** (`COFFEE_VIEW_SIDEBAR` / `PANEL` /
 `OVERLAY` / `STATUSBAR`) y el IDE la invoca con un `CoffeePainter` recortado a
@@ -222,3 +226,5 @@ Historial de versiones de ABI (extracto de `coffee_ext.h`):
   (documentado con Doxygen, fuente de verdad del contrato).
 - Implementacion del cargador/host: `src/ext/ext_host.c`.
 - Extension de ejemplo minima: `extensions/hello-c/`.
+- Resaltado de sintaxis (sincrono + via LSP, y como anyadir un lenguaje o un
+  language server propio sin recompilar): [resaltado-sintaxis.md](resaltado-sintaxis.md).

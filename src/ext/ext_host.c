@@ -802,15 +802,22 @@ static const char *host_path_ext(const char *path) {
     return (dot && dot[1]) ? dot : NULL;
 }
 
-/* Busca el resaltador registrado para la extension @p ext; NULL si no hay. */
+/* Busca el resaltador registrado para la extension @p ext; NULL si no hay.
+ * Una extension puede registrar "*" como comodin de PRIORIDAD MINIMA (p.ej.
+ * un resaltador generico para lenguajes sin regla especifica): se devuelve
+ * solo si ninguna regla exacta coincide, sin alterar el orden/resultado para
+ * quien nunca use "*". */
 static HostHighlighter *host_find_highlighter(CoffeeHost *h, const char *ext) {
     if (!h || !ext) return NULL;
+    HostHighlighter *wildcard = NULL;
     for (size_t i = 0; i < h->hl_count; ++i) {
         HostHighlighter *hl = &h->hls[i];
-        for (size_t k = 0; k < hl->n_exts; ++k)
+        for (size_t k = 0; k < hl->n_exts; ++k) {
             if (host_ext_eq(hl->exts[k], ext)) return hl;
+            if (!wildcard && strcmp(hl->exts[k], "*") == 0) wildcard = hl;
+        }
     }
-    return NULL;
+    return wildcard;
 }
 
 static int api_register_highlighter(CoffeeHost *h, const char *const *exts,

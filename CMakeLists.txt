@@ -172,11 +172,9 @@ endif()
 
 add_executable(CoffeeCode ${SOURCES})
 
-add_custom_command(TARGET CoffeeCode POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/assets/font.ttf"
-            "$<TARGET_FILE_DIR:CoffeeCode>/font.ttf"
-    COMMENT "Copiando font.ttf junto al ejecutable")
+# Ya no se empaqueta ninguna fuente propia junto al ejecutable: el editor usa
+# por defecto una fuente del sistema (ver load_editor_font en editor.c) y el
+# usuario puede elegir cualquier otra instalada desde Preferencias.
 
 target_include_directories(CoffeeCode PRIVATE "${CMAKE_SOURCE_DIR}/include")
 

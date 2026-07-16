@@ -1,0 +1,10 @@
+[extension]
+id           = "lsp-highlight"
+name         = "Resaltado via LSP"
+version      = "0.1.0"
+author       = "tu-nombre"
+entry        = "coffee_lsp_highlight@COFFEE_EXT_DLL_SUFFIX@"
+abi          = 4
+description  = "Semantic tokens de servidores LSP (clangd, pyright, gopls, rust-analyzer, ts-ls) como resaltado de sintaxis"
+dependencies = []
+provides     = ["coffee.svc.lsp"]

@@ -71,6 +71,7 @@ integran con CLion / VS Code.
 |-----------|-----------|
 | [Cómo compilar](doc/how_build.md) | Requisitos y compilación en Windows / Linux |
 | [Sistema de extensiones](doc/extensiones.md) | ABI C, manifiesto y cómo cualquier lenguaje hace extensiones |
+| [Resaltado de sintaxis](doc/resaltado-sintaxis.md) | Resaltado sincrono + via LSP, y cómo añadir un lenguaje o un language server propio |
 | [Roadmap](doc/roadmap.md) | Futuras características planificadas |
 | [Bugs conocidos](doc/known_issues.md) | Problemas pendientes de corregir |
 | [Contribuir](CONTRIBUTING.md) | Flujo de ramas, formato de commits y pull requests |
@@ -99,13 +100,15 @@ integran con CLion / VS Code.
 CoffeeCode/
 ├-- CMakeLists.txt
 ├-- Compile.bat            ← build en Windows (modos release/debug/native/asan/clean)
-├-- assets/                ← logo, icono y fuente (font.ttf se carga en runtime)
+├-- assets/                ← logo e icono
 ├-- include/<modulo>/      ← cabeceras (una carpeta por modulo)
 └-- src/<modulo>/          ← fuentes  (una carpeta por modulo)
 ```
 
-> La fuente se lee de `font.ttf` en runtime (junto al ejecutable, o vía la
-> variable de entorno `COFFEECODE_FONT`); ya no va embebida en el binario.
+> Ya no se empaqueta ninguna fuente propia: por defecto la app usa una fuente
+> del sistema (detectada en runtime igual que en el selector de
+> Preferencias). Puedes elegir cualquier otra fuente instalada desde
+> Preferencias, o forzarla con la variable de entorno `COFFEECODE_FONT`.
 
 Módulos: `buffer` (gap buffer de texto), `editor` (núcleo: pestañas, undo/redo), `lexer` (resaltado), `filetree` (explorador), `input` (entrada) y `render` (renderizador). Los includes de módulo usan prefijo de carpeta, p. ej. `#include "editor/editor.h"`.
 

@@ -1,0 +1,204 @@
+[
+  {
+    "id": "python",
+    "exts": [".py", ".pyw"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["def","class","import","from","as","return","if","elif","else","for","while","try","except","finally","with","lambda","yield","pass","break","continue","global","nonlocal","in","is","not","and","or","None","True","False","self","raise","assert","del","async","await"],
+    "types": []
+  },
+  {
+    "id": "java",
+    "exts": [".java"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["class","public","private","protected","static","void","if","else","for","while","return","new","import","package","extends","implements","try","catch","finally","throw","throws","this","super","interface","enum","break","continue","switch","case","default","null","true","false","final","abstract","synchronized","volatile","transient","instanceof"],
+    "types": ["int","long","short","byte","char","float","double","boolean","String","Object","var"]
+  },
+  {
+    "id": "csharp",
+    "exts": [".cs"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["class","public","private","protected","internal","static","void","if","else","for","foreach","while","return","new","using","namespace","try","catch","finally","throw","this","base","interface","enum","break","continue","switch","case","default","null","true","false","readonly","sealed","abstract","override","virtual","async","await","var"],
+    "types": ["int","long","short","byte","char","float","double","decimal","bool","string","object"]
+  },
+  {
+    "id": "javascript-typescript",
+    "exts": [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["function","var","let","const","if","else","for","while","return","class","extends","new","this","import","export","from","default","try","catch","finally","throw","typeof","instanceof","in","of","null","undefined","true","false","async","await","yield","break","continue","switch","case","static","get","set","interface","type","implements","public","private","protected","readonly","enum","namespace","declare"],
+    "types": []
+  },
+  {
+    "id": "go",
+    "exts": [".go"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["func","package","import","var","const","type","struct","interface","map","chan","if","else","for","range","return","break","continue","switch","case","default","go","defer","select","fallthrough","goto","nil","true","false"],
+    "types": ["int","int8","int16","int32","int64","uint","uint8","uint16","uint32","uint64","string","bool","byte","rune","float32","float64","error"]
+  },
+  {
+    "id": "rust",
+    "exts": [".rs"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["fn","let","mut","const","struct","enum","impl","trait","pub","use","mod","if","else","for","while","loop","match","return","break","continue","self","Self","super","crate","as","in","where","unsafe","async","await","move","ref","static","dyn","true","false"],
+    "types": ["i8","i16","i32","i64","i128","u8","u16","u32","u64","u128","f32","f64","bool","char","str","String","Vec","Option","Result"]
+  },
+  {
+    "id": "ruby",
+    "exts": [".rb"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["def","end","class","module","require","require_relative","if","elsif","else","unless","for","while","until","begin","rescue","ensure","raise","yield","return","break","next","self","nil","true","false","and","or","not","in","do","then","case","when","attr_accessor","attr_reader","attr_writer","private","public","protected"],
+    "types": []
+  },
+  {
+    "id": "php",
+    "exts": [".php"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["function","class","public","private","protected","static","if","else","elseif","for","foreach","while","return","new","namespace","use","try","catch","finally","throw","this","extends","implements","interface","enum","break","continue","switch","case","default","null","true","false","echo","require","require_once","include","include_once","abstract","final","var"],
+    "types": ["int","float","string","bool","array","object","mixed","void"]
+  },
+  {
+    "id": "kotlin",
+    "exts": [".kt", ".kts"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["fun","val","var","class","object","interface","if","else","for","while","return","when","try","catch","finally","throw","this","super","package","import","is","in","as","null","true","false","break","continue","companion","data","sealed","enum","override","private","public","protected","internal","suspend"],
+    "types": ["Int","Long","Short","Byte","Char","Float","Double","Boolean","String","Any","Unit"]
+  },
+  {
+    "id": "swift",
+    "exts": [".swift"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["func","var","let","class","struct","enum","protocol","extension","if","else","for","while","return","switch","case","default","try","catch","throw","throws","this","self","super","import","guard","in","is","as","nil","true","false","break","continue","private","public","internal","fileprivate","static","override"],
+    "types": ["Int","Double","Float","Bool","String","Character","Any","Void"]
+  },
+  {
+    "id": "lua",
+    "exts": [".lua"],
+    "line_comment": "--",
+    "block_comment": false,
+    "keywords": ["function","local","end","if","then","elseif","else","for","while","repeat","until","return","break","do","in","nil","true","false","and","or","not","require"],
+    "types": []
+  },
+  {
+    "id": "bash",
+    "exts": [".sh", ".bash", ".zsh"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["if","then","elif","else","fi","for","while","until","do","done","case","esac","function","return","break","continue","local","export","readonly","in","echo","exit","true","false"],
+    "types": []
+  },
+  {
+    "id": "perl",
+    "exts": [".pl", ".pm"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["sub","my","our","local","if","elsif","else","unless","for","foreach","while","until","return","last","next","use","package","require","print","die","undef"],
+    "types": []
+  },
+  {
+    "id": "haskell",
+    "exts": [".hs"],
+    "line_comment": "--",
+    "block_comment": false,
+    "keywords": ["module","import","where","let","in","if","then","else","case","of","do","data","type","newtype","class","instance","deriving","return"],
+    "types": ["Int","Integer","Float","Double","Bool","Char","String"]
+  },
+  {
+    "id": "scala",
+    "exts": [".scala"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["def","val","var","class","object","trait","extends","with","if","else","for","while","return","match","case","try","catch","finally","throw","this","super","import","package","new","null","true","false","override","private","protected","implicit","sealed"],
+    "types": ["Int","Long","Short","Byte","Char","Float","Double","Boolean","String","Unit","Any"]
+  },
+  {
+    "id": "sql",
+    "exts": [".sql"],
+    "line_comment": "--",
+    "block_comment": true,
+    "keywords": ["SELECT","FROM","WHERE","JOIN","LEFT","RIGHT","INNER","OUTER","ON","GROUP","BY","ORDER","HAVING","INSERT","INTO","VALUES","UPDATE","SET","DELETE","CREATE","TABLE","ALTER","DROP","INDEX","VIEW","AND","OR","NOT","NULL","AS","DISTINCT","LIMIT","UNION","PRIMARY","KEY","FOREIGN","REFERENCES","DEFAULT"],
+    "types": ["INT","VARCHAR","TEXT","DATE","DATETIME","BOOLEAN","FLOAT","DOUBLE","DECIMAL"]
+  },
+  {
+    "id": "r",
+    "exts": [".r", ".R"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["function","if","else","for","while","repeat","break","next","return","TRUE","FALSE","NULL","NA","library","require"],
+    "types": []
+  },
+  {
+    "id": "dart",
+    "exts": [".dart"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["class","void","if","else","for","while","return","import","export","extends","implements","try","catch","finally","throw","this","super","new","null","true","false","break","continue","static","final","const","var","async","await","enum"],
+    "types": ["int","double","bool","String","dynamic","var","Object"]
+  },
+  {
+    "id": "elixir",
+    "exts": [".ex", ".exs"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["def","defmodule","defp","do","end","if","else","unless","case","cond","for","when","fn","true","false","nil","import","alias","require","use","return"],
+    "types": []
+  },
+  {
+    "id": "objective-c",
+    "exts": [".m", ".mm"],
+    "line_comment": "//",
+    "block_comment": true,
+    "keywords": ["interface","implementation","end","property","synthesize","if","else","for","while","return","self","super","nil","true","false","import","YES","NO","void","id"],
+    "types": ["NSString","NSArray","NSDictionary","NSInteger","NSUInteger","CGFloat","BOOL","int","float","double"]
+  },
+  {
+    "id": "powershell",
+    "exts": [".ps1", ".psm1"],
+    "line_comment": "#",
+    "block_comment": true,
+    "keywords": ["function","param","if","elseif","else","for","foreach","while","do","until","switch","return","break","continue","try","catch","finally","throw","true","false","null"],
+    "types": []
+  },
+  {
+    "id": "zig",
+    "exts": [".zig"],
+    "line_comment": "//",
+    "block_comment": false,
+    "keywords": ["fn","const","var","pub","if","else","for","while","return","struct","enum","union","try","catch","defer","errdefer","null","true","false","break","continue","comptime"],
+    "types": ["i8","i16","i32","i64","u8","u16","u32","u64","f32","f64","bool","void"]
+  },
+  {
+    "id": "yaml",
+    "exts": [".yaml", ".yml"],
+    "line_comment": "#",
+    "block_comment": false,
+    "keywords": ["true","false","null"],
+    "types": []
+  },
+  {
+    "id": "json",
+    "exts": [".json"],
+    "line_comment": "",
+    "block_comment": false,
+    "keywords": ["true","false","null"],
+    "types": []
+  },
+
+  {
+    "_comment": "COMODIN: se aplica a CUALQUIER extension que no tenga regla propia arriba (requiere el soporte de '*' en host_find_highlighter, ver src/ext/ext_host.c). Sin keywords/comentarios porque no conocemos la sintaxis del lenguaje -- solo strings/numeros/operadores/puntuacion, que son universales y no arriesgan colorear mal.",
+    "id": "generic-fallback",
+    "exts": ["*"],
+    "line_comment": "",
+    "block_comment": false,
+    "keywords": [],
+    "types": []
+  }
+]
